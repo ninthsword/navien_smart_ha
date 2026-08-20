@@ -89,10 +89,16 @@ SERVICE_NAMES: Final = {
 
 # MQTT 구독 토픽 접두사. 앱의 `HomeViewModel` 이 `/{접두사}/#` 로 구독한다 —
 # `smarttok`(보일러) `mate` `airone` `scada` `homeauto` 다섯 개가 전부다.
-# 매트는 실측 확인됨. 보일러는 지원하지 않으므로 넣지 않는다.
+# 매트·에어원은 상태 해석까지 한다. 보일러 ``smarttok`` 은 **관찰 구독만** 한다.
+# 토픽을 받는다고 지원 코드에 넣지 않는다 — 구조를 확인하기 전에는 엔티티도
+# 제어도 만들지 않는다. ``SUPPORTED_SERVICE_CODES`` 에 보일러가 없는 것이 안전장치다.
 #
 # 에어원 **제어**는 이 체계가 아니라 `AIRONE_TOPIC_FMT` 를 쓴다. 구독만 여기다.
-TOPIC_PREFIX: Final = {SERVICE_MATE: "mate", SERVICE_AIRONE: "airone"}
+TOPIC_PREFIX: Final = {
+    SERVICE_BOILER: "smarttok",
+    SERVICE_MATE: "mate",
+    SERVICE_AIRONE: "airone",
+}
 
 # --- 에어원 (환기청정) ----------------------------------------------------
 #

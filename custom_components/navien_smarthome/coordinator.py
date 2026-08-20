@@ -27,6 +27,7 @@ from .api import (
 from homeassistant.helpers.storage import Store
 
 from .airone import AironeDevice, _dig
+from .boiler import BOILER_OBSERVATION_KEEP
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
     AIRONE_CMD_CHANGE_MODE,
@@ -42,6 +43,7 @@ from .const import (
     REPORT_WANTED_NOTES,
     REPORT_WANTED_SERVICE_CODES,
     SERVICE_AIRONE,
+    SERVICE_BOILER,
     SERVICE_NAMES,
     SUPPORTED_SERVICE_CODES,
     TOPIC_PREFIX,
@@ -114,6 +116,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # 에어원은 매트와 상태 체계가 달라 같은 dict 에 섞지 않는다. 검증이 끝난
         # 매트 경로를 건드리지 않는 것이 우선이다.
         self.airone: dict[str, AironeDevice] = {}
+        # 보일러는 아직 지원하지 않는다. 제어 없이 받은 MQTT 구조만 개인정보를
+        # 제거한 뒤 짧게 보관해 다음 구현의 근거로 쓴다.
+        self.boiler_observations: list[dict[str, Any]] = []
         # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
         # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
         # 전원·모드·풍량이 모두 비어 보인다.
@@ -514,6 +519,13 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         }
         if self.airone and (prefix := TOPIC_PREFIX.get(SERVICE_AIRONE)):
             prefixes.add(prefix)
+        # 지원 목록에서 건너뛴 보일러도 관찰 토픽만 구독한다. 명령은 보내지 않는다.
+        if any(
+            _as_int(raw.get("serviceCode")) == SERVICE_BOILER
+            for raw in self.raw_devices
+            if isinstance(raw, dict)
+        ) and (prefix := TOPIC_PREFIX.get(SERVICE_BOILER)):
+            prefixes.add(prefix)
         if not prefixes:
             _LOGGER.debug("구독할 기기가 없어 MQTT 를 시작하지 않습니다")
             return
@@ -528,6 +540,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             on_reported=self._handle_reported,
             on_subscribed=self._async_request_initial_state,
             on_airone_reported=self._handle_airone_reported,
+            on_boiler_observation=self._handle_boiler_observation,
         )
         await self._mqtt.async_start()
 
@@ -650,6 +663,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.restored_devices.discard(device.device_id)
         self._async_remember_state()
         self._async_push_update(self.data or {})
+
+    @callback
+    def _handle_boiler_observation(self, observation: dict[str, Any]) -> None:
+        """식별값을 제거한 관찰 레코드만 최대 8개 유지한다."""
+        self.boiler_observations.append(observation)
+        del self.boiler_observations[:-BOILER_OBSERVATION_KEEP]
 
     @callback
     def _async_push_update(self, data: dict[str, NavienDevice]) -> None:

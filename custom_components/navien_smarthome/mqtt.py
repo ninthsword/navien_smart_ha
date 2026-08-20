@@ -2,10 +2,13 @@
 
 기기가 상태를 스스로 올린다 — 실측 확인. 그래서 폴링 대신 이 구독이 주 경로다.
 
-구독 토픽은 `{homeSeq}/mate/+` 이고 실제로는 `{homeSeq}/mate/{deviceId}` 로 온다.
-한 번의 변화에 shadow 이벤트가 최대 세 종류 오는데 **`/update/accepted` 중
-`state.reported` 를 가진 것만** 쓴다. 나머지(`/delta`, `/documents`, 그리고
-`reported` 없는 `/accepted`)를 반영하면 HA 가 기기보다 앞서 나간다.
+매트·에어원은 검증된 각자 파서로 상태를 반영한다. 보일러 `smarttok` 은 아직
+지원하지 않으므로 식별값을 제거한 패킷 구조만 관찰한다. 보일러 명령은 보내지 않는다.
+
+매트는 한 번의 변화에 shadow 이벤트가 최대 세 종류 오는데
+**`/update/accepted` 중 `state.reported` 를 가진 것만** 쓴다. 나머지(`/delta`,
+`/documents`, 그리고 `reported` 없는 `/accepted`)를 반영하면 HA 가 기기보다
+앞서 나간다.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util.ssl import get_default_context
 
 from .api import AwsCredentials
+from .boiler import BOILER_TOPIC_PREFIX, observe_boiler_message
 from .const import (
     IOT_ENDPOINT,
     IOT_REGION,
@@ -277,6 +281,7 @@ class NavienSmartMqtt:
         on_reported: Callable[[str, dict[str, Any]], None],
         on_subscribed: Callable[[], Awaitable[None]] | None = None,
         on_airone_reported: Callable[[str, dict[str, Any]], None] | None = None,
+        on_boiler_observation: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._hass = hass
         # 수신·폐기 집계. 개인정보는 없다 — 개수와 키 이름뿐이다.
@@ -287,6 +292,7 @@ class NavienSmartMqtt:
         self._credentials_provider = credentials_provider
         self._on_reported = on_reported
         self._on_airone_reported = on_airone_reported
+        self._on_boiler_observation = on_boiler_observation
         # 구독이 붙은 뒤에 초기 상태를 요청해야 한다. 순서가 뒤바뀌면 응답을 놓친다.
         self._on_subscribed = on_subscribed
         self._client_id = ""
@@ -437,6 +443,10 @@ class NavienSmartMqtt:
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
         # 구독 토픽으로 갈린다 — 앱도 같은 방식이다. 봉투가 완전히 달라서
         # 한 파서로 둘 다 다루면 한쪽이 조용히 버려진다.
+        if f"/{BOILER_TOPIC_PREFIX}/" in message.topic:
+            _bump(self.stats, "boiler_received")
+            self._handle_boiler_message(message)
+            return
         if f"/{AIRONE_PREFIX}/" in message.topic:
             _bump(self.stats, "airone_received")
             self._handle_airone_message(message)
@@ -458,6 +468,17 @@ class NavienSmartMqtt:
         )
         # paho 스레드에서 HA 상태를 직접 건드리면 안 된다.
         self._hass.loop.call_soon_threadsafe(self._on_reported, device_id, reported)
+
+    def _handle_boiler_message(self, message: Any) -> None:
+        """보일러 메시지의 안전한 구조만 넘긴다. 상태 해석·제어는 하지 않는다."""
+        if self._on_boiler_observation is None:
+            _bump(self.stats, "boiler_dropped_no_handler")
+            return
+        observation = observe_boiler_message(message.payload, message.topic)
+        _bump(self.stats, f"boiler_{observation['encoding']}")
+        self._hass.loop.call_soon_threadsafe(
+            self._on_boiler_observation, observation
+        )
 
     def _handle_airone_message(self, message: Any) -> None:
         if self._on_airone_reported is None:

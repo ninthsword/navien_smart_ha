@@ -125,6 +125,8 @@ async def async_get_config_entry_diagnostics(
             "report_wanted": len(report_wanted),
             "out_of_scope": len(out_of_scope),
         },
+        # 보일러 원문이 아니다. 문자열·토픽·큰 숫자·바이너리를 제거한 구조 관찰이다.
+        "boiler_observations": list(coordinator.boiler_observations),
         "entities": [_entity_view(device) for device in (coordinator.data or {}).values()],
         # 에어원은 실기기 미검증이다. 해석 결과를 그대로 담아 제보 근거로 쓴다.
         "airone_entities": [
