@@ -6,9 +6,11 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_time_change
+from homeassistant.util import dt as dt_util
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice, as_number, level_text, text_or_none
@@ -85,6 +87,7 @@ async def async_setup_entry(
         entities.append(BoilerErrorSensor(coordinator, boiler))
         if boiler.supports_feature("gasUsageUse"):
             entities.append(BoilerMonthlyGasSensor(coordinator, boiler))
+            entities.append(BoilerDailyGasSensor(coordinator, boiler))
 
     async_add_entities(entities)
 
@@ -285,6 +288,58 @@ class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
             "온수": device.gas_hot_water_month,
         }
         return {key: value for key, value in values.items() if value is not None} or None
+
+
+class BoilerDailyGasSensor(BoilerEntity, SensorEntity):
+    """Home Assistant 현지 날짜에 해당하는 오늘의 보일러 가스 사용량."""
+
+    _attr_name = "오늘 가스 사용량"
+    _attr_icon = "mdi:meter-gas-outline"
+    _attr_device_class = SensorDeviceClass.GAS
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_daily_gas_usage"
+
+    def _today_values(
+        self,
+    ) -> tuple[float | None, float | None, float | None] | None:
+        device = self.device
+        return None if device is None else device.gas_day(dt_util.now().date())
+
+    @property
+    def native_value(self) -> float | None:
+        values = self._today_values()
+        return None if values is None else values[0]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        values = self._today_values()
+        if values is None:
+            return None
+        attrs: dict[str, Any] = {"기준일": dt_util.now().date().isoformat()}
+        if values[1] is not None:
+            attrs["난방"] = values[1]
+        if values[2] is not None:
+            attrs["온수"] = values[2]
+        return attrs
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # 네트워크 조회와 별개로 자정에 날짜 선택을 바꾼다. 다음 시간별 가스
+        # 응답이 올 때까지 다른 달의 오래된 값을 오늘 값으로 표시하지 않는다.
+        self.async_on_remove(
+            async_track_time_change(
+                self.hass, self._async_midnight_update, hour=0, minute=0, second=0
+            )
+        )
+
+    @callback
+    def _async_midnight_update(self, _now: Any) -> None:
+        self.async_write_ha_state()
 
 
 class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):

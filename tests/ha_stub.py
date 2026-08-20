@@ -43,6 +43,7 @@ stub("homeassistant", pkg=True)
 stub("homeassistant.helpers", pkg=True)
 stub("homeassistant.components", pkg=True)
 stub("homeassistant.util", pkg=True)
+stub("homeassistant.util.dt", now=lambda: None)
 stub("homeassistant.core", HomeAssistant=type("H", (), {}), callback=lambda f: f)
 stub("homeassistant.util.ssl", get_default_context=lambda: None)
 stub(
@@ -107,6 +108,7 @@ stub("homeassistant.helpers.typing", ConfigType=dict)
 stub(
     "homeassistant.helpers.event",
     async_track_time_interval=lambda *a, **k: (lambda: None),
+    async_track_time_change=lambda *a, **k: (lambda: None),
     async_call_later=lambda *a, **k: (lambda: None),
 )
 stub("homeassistant.loader", async_get_integration=lambda *a, **k: None)

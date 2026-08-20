@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import date
 
 from harness import Report, source
 from navien_smarthome.boiler import (
@@ -162,7 +163,16 @@ gas_meter = {
     "thisYearMonthTotalGasUsage": 142,
     "thisYearMonthTotalHeatGasUsage": 99,
     "thisYearMonthTotalHotWaterGasUsage": 43,
-    "gasMeterThisMonth": [{"day": 1, "gasUsage": 3}],
+    "gasMeterThisMonth": [
+        {
+            "year": 2026,
+            "month": 8,
+            "day": 20,
+            "gasMeter": 3,
+            "heatGasMeter": 1,
+            "hotWaterGasMeter": 2,
+        }
+    ],
 }
 gas_envelope = {
     "payload": {
@@ -179,6 +189,9 @@ device.apply_status(gas_update[1], now=700.0)
 r.ok(device.gas_total_month == 14.2, "월 가스 원시값을 앱처럼 10으로 나눈다")
 r.ok(device.gas_heating_month == 9.9, "월 난방 가스 사용량을 푼다")
 r.ok(device.gas_hot_water_month == 4.3, "월 온수 가스 사용량을 푼다")
+r.ok(device.gas_day(date(2026, 8, 20)) == (0.3, 0.1, 0.2), "오늘 일간 가스 3종을 푼다")
+r.ok(device.gas_day(date(2026, 8, 19)) == (0.0, 0.0, 0.0), "같은 달의 빠진 날짜는 0이다")
+r.ok(device.gas_day(date(2026, 7, 31)) is None, "다른 달의 오래된 배열을 오늘 값으로 쓰지 않는다")
 r.ok(device.operation_mode == 6, "가스 응답이 기존 운전 상태를 지우지 않는다")
 
 
@@ -315,6 +328,8 @@ for kind, mode, command in (
 r.ok("async_boiler_power" in source("coordinator.py"), "전원 제어 경로를 코디네이터에 둔다")
 r.ok("async_boiler_switch" in source("coordinator.py"), "온수 기능 제어 경로를 코디네이터에 둔다")
 r.ok("BoilerMonthlyGasSensor" in source("sensor.py"), "월간 가스 센서를 만든다")
+r.ok("BoilerDailyGasSensor" in source("sensor.py"), "오늘 가스 센서를 만든다")
+r.ok("async_track_time_change" in source("sensor.py"), "자정에 날짜 기준을 바꾼다")
 r.ok("BOILER_GAS_REFRESH_SECONDS" in source("coordinator.py"), "가스 사용량은 저빈도로 갱신한다")
 
 

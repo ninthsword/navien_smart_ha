@@ -16,6 +16,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 BOILER_TOPIC_PREFIX = "smarttok"
@@ -355,6 +356,33 @@ class BoilerDevice:
     @property
     def gas_hot_water_month(self) -> float | None:
         return _tenth(self.gas_meter.get("thisYearMonthTotalHotWaterGasUsage"))
+
+    def gas_day(
+        self, wanted: date
+    ) -> tuple[float | None, float | None, float | None] | None:
+        """앱의 일별 배열에서 지정한 현지 날짜의 전체·난방·온수 사용량."""
+        rows = self.gas_meter.get("gasMeterThisMonth")
+        if not isinstance(rows, list):
+            return None
+        same_month = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if (
+                _integer(row.get("year")) != wanted.year
+                or _integer(row.get("month")) != wanted.month
+            ):
+                continue
+            same_month = True
+            if _integer(row.get("day")) == wanted.day:
+                return (
+                    _tenth(row.get("gasMeter")),
+                    _tenth(row.get("heatGasMeter")),
+                    _tenth(row.get("hotWaterGasMeter")),
+                )
+        # 앱 차트도 해당 월 배열에 빠진 날짜는 사용량 0으로 그린다. 다른 월의
+        # 오래된 응답이면 0으로 단정하지 않고 unknown을 유지한다.
+        return (0.0, 0.0, 0.0) if same_month else None
 
     def _identity_parts(self) -> tuple[str, str, str]:
         """앱의 ``deviceId.substring(0, 12/16)`` 분기를 그대로 적용한다."""
