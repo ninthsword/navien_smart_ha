@@ -101,7 +101,7 @@ class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
 
 
 class BoilerEntity(CoordinatorEntity[NavienSmartCoordinator]):
-    """읽기 전용 보일러 엔티티 베이스."""
+    """보일러 센서·설정온도 엔티티 베이스."""
 
     _attr_has_entity_name = True
 

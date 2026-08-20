@@ -5,14 +5,20 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice, as_number, level_text, text_or_none
-from .boiler import BoilerDevice
+from .boiler import (
+    BOILER_OPERATION_MODE_NAMES,
+    BOILER_STATE_HEATING,
+    BOILER_STATE_IDLE,
+    BOILER_STATE_OFF,
+    BoilerDevice,
+)
 from .const import (
     AIRONE_INFERRED_UNITS,
     AIRONE_SENSOR_KINDS,
@@ -61,6 +67,8 @@ async def async_setup_entry(
         )
 
     for boiler in coordinator.boilers.values():
+        entities.append(BoilerOperatingStateSensor(coordinator, boiler))
+        entities.append(BoilerOperatingModeSensor(coordinator, boiler))
         entities.extend(
             BoilerTemperatureSensor(coordinator, boiler, key, label, measured)
             for key, label, measured in (
@@ -75,8 +83,70 @@ async def async_setup_entry(
         entities.append(BoilerHumiditySensor(coordinator, boiler))
         entities.append(BoilerModeSensor(coordinator, boiler))
         entities.append(BoilerErrorSensor(coordinator, boiler))
+        if boiler.supports_feature("gasUsageUse"):
+            entities.append(BoilerMonthlyGasSensor(coordinator, boiler))
 
     async_add_entities(entities)
+
+
+class BoilerOperatingStateSensor(BoilerEntity, SensorEntity):
+    """앱 표시 로직으로 확인한 보일러 전원·히팅 상태."""
+
+    _attr_name = "운전 상태"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [BOILER_STATE_OFF, BOILER_STATE_IDLE, BOILER_STATE_HEATING]
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_operating_state"
+
+    @property
+    def native_value(self) -> str | None:
+        device = self.device
+        return None if device is None else device.operating_state
+
+    @property
+    def icon(self) -> str:
+        if self.native_value == BOILER_STATE_OFF:
+            return "mdi:radiator-off"
+        if self.native_value == BOILER_STATE_HEATING:
+            return "mdi:radiator"
+        return "mdi:radiator-disabled"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        if device is None:
+            return None
+        return {
+            "operation_mode": device.operation_mode,
+            "operation_busy": device.operation_busy,
+        }
+
+
+class BoilerOperatingModeSensor(BoilerEntity, SensorEntity):
+    """NR-67D 앱과 설명서에서 확인한 선택 운전 모드."""
+
+    _attr_name = "운전 모드"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(BOILER_OPERATION_MODE_NAMES.values())
+    _attr_icon = "mdi:radiator"
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_operating_mode"
+
+    @property
+    def native_value(self) -> str | None:
+        device = self.device
+        return None if device is None else device.operation_mode_name
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        if device is None:
+            return None
+        return {"operation_mode": device.operation_mode}
 
 
 class BoilerTemperatureSensor(BoilerEntity, SensorEntity):
@@ -183,6 +253,38 @@ class BoilerErrorSensor(BoilerEntity, SensorEntity):
         if device is None or device.sub_error_code is None:
             return None
         return {"sub_error_code": device.sub_error_code}
+
+
+class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
+    """앱 가스 사용량 화면의 이번 달 보일러 누적 사용량."""
+
+    _attr_name = "이번 달 가스 사용량"
+    _attr_icon = "mdi:meter-gas"
+    _attr_device_class = SensorDeviceClass.GAS
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+    # 월이 바뀌면 0으로 돌아가는 누적값이라 TOTAL_INCREASING이 아니다.
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_monthly_gas_usage"
+
+    @property
+    def native_value(self) -> float | None:
+        device = self.device
+        return None if device is None else device.gas_total_month
+
+    @property
+    def extra_state_attributes(self) -> dict[str, float] | None:
+        device = self.device
+        if device is None:
+            return None
+        values = {
+            "난방": device.gas_heating_month,
+            "온수": device.gas_hot_water_month,
+        }
+        return {key: value for key, value in values.items() if value is not None} or None
 
 
 class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):

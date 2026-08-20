@@ -452,6 +452,34 @@ class NavienSmartApi:
             raw_body=raw,
         )
 
+    # -- 보일러 -----------------------------------------------------------
+
+    async def async_boiler_request(
+        self,
+        home_seq: int,
+        device_seq: int,
+        service_code: int,
+        payload: dict[str, Any],
+    ) -> None:
+        """앱이 만든 smarttok 보일러 봉투를 서버에 중계한다."""
+        session = self._require_session()
+        body_obj = {"serviceCode": service_code, "payload": payload}
+        raw = json.dumps(body_obj, ensure_ascii=False)
+        # 앱 전송과 맞추되 식별값을 로그에는 남기지 않는다.
+        for key in ("requestTopic", "responseTopic"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                quoted = json.dumps(value)
+                raw = raw.replace(quoted, quoted.replace("/", "\\/"))
+
+        _LOGGER.debug("보일러 요청 전송 deviceSeq=%s", device_seq)
+        await self._async_authed_request(
+            "POST",
+            f"/devices/{device_seq}/control",
+            params={"homeSeq": home_seq, "userSeq": session.user_seq},
+            raw_body=raw,
+        )
+
     # -- 에어원 ------------------------------------------------------------
 
     async def async_airone_request(

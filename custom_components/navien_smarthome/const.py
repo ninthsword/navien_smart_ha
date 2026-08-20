@@ -56,9 +56,9 @@ SERVICE_AIRONE: Final = 300
 SERVICE_SCADA: Final = 400
 SERVICE_HOMEAUTO: Final = 500
 
-# 보일러(100)는 **읽기 전용 지원**이다. 실측 상태에서 확인된 센서값만 연다.
-# 제어는 컨트롤러 종류별 모델과 각방 비트마스크, 모델별 온도 인코딩을 더 확인하기
-# 전까지 닫는다. 재현을 잘못하면 엉뚱한 난방·온수 온도가 실제 기기에 전송된다.
+# 보일러(100)는 실측 상태 센서와 modelCode=20(NR-67D)의 온수·난방수 설정온도만
+# 지원한다. 나머지 전원·운전모드·예약은 닫아 둔다. 컨트롤러마다 명령과 온도
+# 인코딩이 달라 모델을 넓혀 잡으면 실제 기기에 엉뚱한 값이 전송될 수 있다.
 SUPPORTED_SERVICE_CODES: Final = (SERVICE_BOILER, SERVICE_MATE, SERVICE_AIRONE)
 
 # 제보만 받고 엔티티는 만들지 않는 종류. 현재는 없다.
@@ -83,9 +83,8 @@ SERVICE_NAMES: Final = {
 
 # MQTT 구독 토픽 접두사. 앱의 `HomeViewModel` 이 `/{접두사}/#` 로 구독한다 —
 # `smarttok`(보일러) `mate` `airone` `scada` `homeauto` 다섯 개가 전부다.
-# 세 종류 모두 상태를 해석한다. 보일러 ``smarttok`` 은 **읽기 전용**이며 제어
-# API를 만들지 않는다. 운전 모드와 플래그의 의미가 확인되기 전에는 숫자 원문만
-# 진단에 남기고, 확인된 온도·습도·오류만 엔티티로 낸다.
+# 세 종류 모두 상태를 해석한다. 보일러 ``smarttok`` 은 modelCode=20의 두 설정온도
+# 명령만 열고, 나머지 운전 모드와 플래그는 숫자 원문만 진단에 남긴다.
 #
 # 에어원 **제어**는 이 체계가 아니라 `AIRONE_TOPIC_FMT` 를 쓴다. 구독만 여기다.
 TOPIC_PREFIX: Final = {

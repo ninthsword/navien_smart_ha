@@ -73,6 +73,7 @@ stub(
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER="µg/m³",
     UnitOfTemperature=enum(CELSIUS="°C", FAHRENHEIT="°F"),
     UnitOfTime=enum(MINUTES="min", SECONDS="s"),
+    UnitOfVolume=enum(CUBIC_METERS="m³"),
 )
 stub(
     "homeassistant.exceptions",
@@ -134,6 +135,8 @@ stub(
     pkg=True,
     SensorEntity=Base,
     SensorDeviceClass=enum(
+        ENUM="enum",
+        GAS="gas",
         TEMPERATURE="temperature",
         HUMIDITY="humidity",
         CO2="carbon_dioxide",
@@ -141,14 +144,14 @@ stub(
         PM10="pm10",
         PM1="pm1",
     ),
-    SensorStateClass=enum(MEASUREMENT="measurement"),
+    SensorStateClass=enum(MEASUREMENT="measurement", TOTAL="total"),
 )
 stub(
     "homeassistant.components.number",
     pkg=True,
     NumberEntity=Base,
     NumberMode=enum(BOX="box", SLIDER="slider", AUTO="auto"),
-    NumberDeviceClass=enum(HUMIDITY="humidity"),
+    NumberDeviceClass=enum(HUMIDITY="humidity", TEMPERATURE="temperature"),
 )
 stub(
     "homeassistant.components.climate",

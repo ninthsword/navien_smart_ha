@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -27,7 +28,14 @@ from .api import (
 from homeassistant.helpers.storage import Store
 
 from .airone import AironeDevice, _dig
-from .boiler import BOILER_OBSERVATION_KEEP, BoilerDevice
+from .boiler import (
+    BOILER_GAS_METER_UPDATE,
+    BOILER_GAS_REFRESH_SECONDS,
+    BOILER_OBSERVATION_KEEP,
+    BOILER_READBACK_DELAY_SECONDS,
+    BOILER_SILENCE_REFRESH_SECONDS,
+    BoilerDevice,
+)
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
     AIRONE_CMD_CHANGE_MODE,
@@ -116,10 +124,16 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # 에어원은 매트와 상태 체계가 달라 같은 dict 에 섞지 않는다. 검증이 끝난
         # 매트 경로를 건드리지 않는 것이 우선이다.
         self.airone: dict[str, AironeDevice] = {}
-        # 보일러는 읽기 전용이다. 제어 없이 받은 MQTT 구조는 개인정보를 제거한 뒤
-        # 짧게 보관하고, 확인된 상태는 센서에도 반영한다.
+        # 보일러는 확인된 modelCode=20 명령만 제어한다. 받은 MQTT 구조는
+        # 개인정보를 제거한 뒤 짧게 보관하고, 확인된 상태는 센서에도 반영한다.
         self.boilers: dict[str, BoilerDevice] = {}
         self.boiler_observations: list[dict[str, Any]] = []
+        self._boiler_silence_unsubs: dict[str, Callable[[], None]] = {}
+        self._boiler_gas_unsubs: dict[str, Callable[[], None]] = {}
+        self.boiler_silence_requests = 0
+        self.boiler_silence_failures = 0
+        self.boiler_gas_requests = 0
+        self.boiler_gas_failures = 0
         # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
         # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
         # 전원·모드·풍량이 모두 비어 보인다.
@@ -229,6 +243,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                         boiler.status = old.status
                     if boiler.physical_device_id is None:
                         boiler.physical_device_id = old.physical_device_id
+                    boiler.status_received_at = old.status_received_at
+                    boiler.last_communication_at = old.last_communication_at
+                    boiler.gas_meter = old.gas_meter
+                    boiler.gas_received_at = old.gas_received_at
                 boilers[boiler.device_id] = boiler
                 continue
 
@@ -620,7 +638,36 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 continue
             self._schedule_airone_silence_check(airone)
 
+        # 보일러도 구독이 붙은 뒤 앱의 getDeviceStatus와 같은 읽기 요청을 보낸다.
+        # 이 요청이 없으면 재시작 직후 첫 자발 보고가 올 때까지 설정온도 number가
+        # unavailable이고 운전 상태 센서도 값을 표시할 수 없다. status/start만으로
+        # 응답하지 않는 연결도 있어 일반 status 요청을 한 번 뒤따라 보낸다.
+        for boiler in self.boilers.values():
+            if not boiler.connected:
+                _LOGGER.debug("%s 는 오프라인이라 상태를 요청하지 않습니다", boiler.nickname)
+                continue
+            try:
+                payload = boiler.build_start_payload(self._boiler_client_id())
+                await self._async_send_boiler_payload(boiler, payload)
+                self._schedule_boiler_readback(boiler)
+                _LOGGER.debug("%s 에 초기 상태를 요청했습니다", boiler.nickname)
+            except (HomeAssistantError, NavienSmartError) as err:
+                _LOGGER.warning("%s 초기 상태 요청 실패: %s", boiler.nickname, err)
+            if boiler.supports_feature("gasUsageUse"):
+                try:
+                    await self._async_request_boiler_gas(boiler)
+                except (HomeAssistantError, NavienSmartError) as err:
+                    self.boiler_gas_failures += 1
+                    _LOGGER.debug("%s 초기 가스 사용량 조회 실패: %s", boiler.nickname, err)
+                self._schedule_boiler_gas_refresh(boiler)
+
     async def async_stop_mqtt(self) -> None:
+        for unsub in self._boiler_silence_unsubs.values():
+            unsub()
+        self._boiler_silence_unsubs.clear()
+        for unsub in self._boiler_gas_unsubs.values():
+            unsub()
+        self._boiler_gas_unsubs.clear()
         if self._mqtt is not None:
             await self._mqtt.async_stop()
             self._mqtt = None
@@ -719,7 +766,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         if device is None:
             self.drop_counts["boiler_no_device"] += 1
             return
+        is_gas_update = BOILER_GAS_METER_UPDATE in status
         device.apply_status(status)
+        self._schedule_boiler_silence_check(device)
+        if is_gas_update:
+            self._schedule_boiler_gas_refresh(device)
         self.last_update_success = True
         self.async_update_listeners()
 
@@ -785,6 +836,163 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             )
 
     # -- 제어 --------------------------------------------------------------
+
+    def _boiler_client_id(self) -> str:
+        client_id = self._mqtt.client_id if self._mqtt is not None else ""
+        if not client_id:
+            raise HomeAssistantError(
+                "보일러 MQTT 연결이 준비되지 않아 명령을 보낼 수 없습니다."
+            )
+        return client_id
+
+    async def _async_send_boiler_payload(
+        self, device: BoilerDevice, payload: dict[str, Any]
+    ) -> None:
+        try:
+            await self.api.async_boiler_request(
+                self.home_seq,
+                device_seq=device.device_seq,
+                service_code=SERVICE_BOILER,
+                payload=payload,
+            )
+            device.note_communication()
+            self._schedule_boiler_silence_check(device)
+        except NavienSmartAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+
+    async def async_boiler_temperature(
+        self, device: BoilerDevice, kind: str, target: float
+    ) -> None:
+        """현재 히팅 여부와 관계없이 설정온도 하나만 바꾼다."""
+        current = self.boilers.get(device.device_id) or device
+        try:
+            payload = current.build_temperature_payload(
+                kind, target, self._boiler_client_id()
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(current, payload)
+        self._schedule_boiler_readback(current)
+
+    async def async_boiler_power(
+        self, device: BoilerDevice, turn_on: bool
+    ) -> None:
+        """NR-67D 전원을 앱과 같은 명령으로 바꾼 뒤 실제 상태를 확인한다."""
+        current = self.boilers.get(device.device_id) or device
+        try:
+            payload = current.build_power_payload(turn_on, self._boiler_client_id())
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(current, payload)
+        self._schedule_boiler_readback(current)
+
+    async def async_boiler_switch(
+        self, device: BoilerDevice, kind: str, turn_on: bool
+    ) -> None:
+        """빠른온수·스마트운전·터보온수 설정 후 실제 상태를 확인한다."""
+        current = self.boilers.get(device.device_id) or device
+        try:
+            payload = current.build_switch_payload(
+                kind, turn_on, self._boiler_client_id()
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(current, payload)
+        self._schedule_boiler_readback(current)
+
+    async def _async_request_boiler_gas(self, device: BoilerDevice) -> None:
+        """월간 누적값은 느리게 변하므로 앱과 같은 요청을 한 시간에 한 번만 보낸다."""
+        try:
+            payload = device.build_gas_payload(self._boiler_client_id())
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(device, payload)
+        self.boiler_gas_requests += 1
+
+    @callback
+    def _schedule_boiler_gas_refresh(self, device: BoilerDevice) -> None:
+        """가스 누적량을 앱 화면보다 보수적인 한 시간 주기로 갱신한다."""
+        device_id = device.device_id
+        if old := self._boiler_gas_unsubs.pop(device_id, None):
+            old()
+
+        async def _refresh(_now: Any) -> None:
+            self._boiler_gas_unsubs.pop(device_id, None)
+            target = self.boilers.get(device_id)
+            if target is None or not target.supports_feature("gasUsageUse"):
+                return
+            if target.connected and self.mqtt_connected:
+                try:
+                    await self._async_request_boiler_gas(target)
+                except (HomeAssistantError, NavienSmartError) as err:
+                    self.boiler_gas_failures += 1
+                    _LOGGER.debug("%s 가스 사용량 조회 실패: %s", target.nickname, err)
+            self._schedule_boiler_gas_refresh(target)
+
+        self._boiler_gas_unsubs[device_id] = async_call_later(
+            self.hass, BOILER_GAS_REFRESH_SECONDS, _refresh
+        )
+
+    @callback
+    def _schedule_boiler_readback(self, device: BoilerDevice) -> None:
+        """명령 뒤 실제 기기 상태를 다시 묻는다. 값을 미리 바꾸지는 않는다."""
+        device_id = device.device_id
+
+        async def _readback(_now: Any) -> None:
+            target = self.boilers.get(device_id)
+            if target is None:
+                return
+            try:
+                payload = target.build_status_payload(self._boiler_client_id())
+                await self._async_send_boiler_payload(target, payload)
+            except (HomeAssistantError, NavienSmartError) as err:
+                _LOGGER.debug("%s 보일러 상태 재확인 실패: %s", target.nickname, err)
+
+        async_call_later(self.hass, BOILER_READBACK_DELAY_SECONDS, _readback)
+
+    @callback
+    def _schedule_boiler_silence_check(
+        self, device: BoilerDevice, *, delay: float | None = None
+    ) -> None:
+        """마지막 송수신 뒤 5분이 지나면 상태를 한 번 요청한다.
+
+        상태 변화가 MQTT로 먼저 오면 이 타이머를 다시 5분 뒤로 미룬다. 따라서
+        보일러가 활발히 보고하는 동안에는 폴링하지 않는다. 요청이나 응답이 없더라도
+        실패 직후 반복하지 않고 다시 5분을 기다려 비공식 서버를 압박하지 않는다.
+        """
+        device_id = device.device_id
+        if old := self._boiler_silence_unsubs.pop(device_id, None):
+            old()
+        wait = device.silence_refresh_delay() if delay is None else max(1.0, delay)
+
+        async def _check(_now: Any) -> None:
+            self._boiler_silence_unsubs.pop(device_id, None)
+            target = self.boilers.get(device_id)
+            if target is None:
+                return
+            age = target.communication_age()
+            if age is not None and age < BOILER_SILENCE_REFRESH_SECONDS:
+                self._schedule_boiler_silence_check(target)
+                return
+            if not target.connected or not self.mqtt_connected:
+                self._schedule_boiler_silence_check(
+                    target, delay=BOILER_SILENCE_REFRESH_SECONDS
+                )
+                return
+            try:
+                payload = target.build_status_payload(self._boiler_client_id())
+                await self._async_send_boiler_payload(target, payload)
+                self.boiler_silence_requests += 1
+            except (HomeAssistantError, NavienSmartError) as err:
+                self.boiler_silence_failures += 1
+                _LOGGER.debug("%s 보일러 5분 무통신 상태 요청 실패: %s", target.nickname, err)
+                self._schedule_boiler_silence_check(
+                    target, delay=BOILER_SILENCE_REFRESH_SECONDS
+                )
+
+        self._boiler_silence_unsubs[device_id] = async_call_later(
+            self.hass, wait, _check
+        )
 
     async def _async_airone_request(
         self,

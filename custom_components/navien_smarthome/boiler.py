@@ -1,8 +1,8 @@
-"""보일러 MQTT 상태를 읽는 **수동 조작 없는 지원 단계**.
+"""보일러 MQTT 상태와 NR-67D 온도 제어 프로토콜.
 
 보일러는 매트와 상태 모델이 다르고, 컨트롤러 종류별 인코딩도 다르다. 특히
-온도값을 짐작해 제어하면 실제 난방·온수 설정을 바꿀 수 있으므로, 확인된 상태만
-센서로 내고 명령은 만들지 않는다.
+온도값을 짐작해 제어하면 실제 난방·온수 설정을 바꿀 수 있으므로, 현재 앱에서
+확인한 ``modelCode=20`` 의 온수·난방수 설정만 연다.
 
 여기서는 앱과 같은 ``smarttok`` 구독에서 들어온 메시지의 **모양만** 남긴다.
 진단 파일이 공개 이슈에 첨부될 수 있으므로 원문 문자열·토픽·큰 숫자·바이너리는
@@ -14,11 +14,52 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 BOILER_TOPIC_PREFIX = "smarttok"
 BOILER_OBSERVATION_KEEP = 8
+BOILER_MODEL_MGPP = "20"
+BOILER_OPERATION_OFF = 1
+BOILER_BUSY_IDLE = 1
+BOILER_BUSY_HEATING = 2
+BOILER_READBACK_DELAY_SECONDS = 3
+BOILER_SILENCE_REFRESH_SECONDS = 300
+BOILER_GAS_REFRESH_SECONDS = 3600
+BOILER_GAS_METER_UPDATE = "__gas_meter__"
+
+BOILER_STATE_OFF = "꺼짐"
+BOILER_STATE_IDLE = "대기"
+BOILER_STATE_HEATING = "히팅"
+
+# Navien Smart 2.10.4의 NR-67D(modelCode=20) 탭 선택 분기에서 확인했다.
+# 이 값은 현재 연소 여부가 아니라 룸콘에서 선택한 운전 모드다. 실제 가동 여부는
+# 별도 ``operationBusy`` 값으로 판단한다.
+BOILER_OPERATION_MODE_NAMES: dict[int, str] = {
+    1: "꺼짐",
+    4: "외출",
+    5: "실내 난방",
+    6: "온돌 난방",
+    7: "반복 예약",
+    8: "24시간 예약",
+    10: "온수 전용",
+}
+
+BOILER_TEMPERATURE_CONTROLS: dict[str, tuple[str, int, str]] = {
+    # Navien Smart 2.10.4 의 modelCode=20 분기. 이 세 값은 한 묶음이다.
+    "hot_water": ("hotwater-temperature", 33554443, "10000000"),
+    "ondol": ("ondol-heat", 33554438, "11111111"),
+}
+
+# Navien Smart 현재 앱의 modelCode=20 제어 호출에서 확인한 단일 값 스위치다.
+# 상태와 명령은 1=끔, 2=켬이며, 전체 룸콘(11111111)은 온수 기능을 첫 비트
+# (10000000)로 바꿔 보낸다.
+BOILER_SWITCH_CONTROLS: dict[str, tuple[str, str, int]] = {
+    "fast_dhw": ("fastDHWUse", "fastDHW", 33554444),
+    "smart_fast_dhw": ("smartFastDHW", "smartFastDHW", 33554456),
+    "dhw_boost": ("DHWBoost", "DHWBoost", 33554460),
+}
 
 _MAX_DEPTH = 8
 _MAX_DICT_ITEMS = 64
@@ -97,7 +138,7 @@ def _bump(stats: dict[str, Any] | None, key: str) -> None:
 
 @dataclass
 class BoilerDevice:
-    """REST 기기 정보와 MQTT 상태를 합친 읽기 전용 보일러."""
+    """REST 기기 정보와 MQTT 상태를 합친 보일러."""
 
     raw: dict[str, Any]
     device_id: str
@@ -109,6 +150,14 @@ class BoilerDevice:
     physical_device_id: str | None = None
     feature: dict[str, Any] = field(default_factory=dict)
     status: dict[str, Any] = field(default_factory=dict)
+    gas_meter: dict[str, Any] = field(default_factory=dict)
+    # REST 목록에 든 상태는 서버 캐시일 수 있다. 센서가 실제 MQTT 프레임을 언제
+    # 받았는지 구분할 수 있도록 그때에만 이 시각을 채운다.
+    status_received_at: float | None = None
+    # 수신 상태와 HA가 보낸 요청을 합친 마지막 통신 시각. 보일러가 변화를 스스로
+    # 올리는 동안에는 폴링하지 않고, 양방향 통신이 5분간 없을 때만 상태를 묻는다.
+    last_communication_at: float | None = None
+    gas_received_at: float | None = None
 
     @classmethod
     def parse(cls, raw: dict[str, Any]) -> BoilerDevice | None:
@@ -143,9 +192,36 @@ class BoilerDevice:
             status=status if isinstance(status, dict) else {},
         )
 
-    def apply_status(self, status: dict[str, Any]) -> None:
+    def apply_status(self, status: dict[str, Any], *, now: float | None = None) -> None:
         """부분 응답이 와도 전에 알던 필드를 잃지 않는다."""
-        self.status.update(status)
+        update = dict(status)
+        gas_meter = update.pop(BOILER_GAS_METER_UPDATE, None)
+        stamp = time.monotonic() if now is None else now
+        if isinstance(gas_meter, dict):
+            self.gas_meter = gas_meter
+            self.gas_received_at = stamp
+        if update:
+            self.status.update(update)
+            self.status_received_at = stamp
+        self.last_communication_at = stamp
+
+    def note_communication(self, *, now: float | None = None) -> None:
+        """성공적으로 서버에 보낸 보일러 요청도 마지막 통신으로 센다."""
+        self.last_communication_at = time.monotonic() if now is None else now
+
+    def communication_age(self, *, now: float | None = None) -> float | None:
+        """마지막 보일러 송수신 뒤 흐른 초."""
+        if self.last_communication_at is None:
+            return None
+        stamp = time.monotonic() if now is None else now
+        return max(0.0, stamp - self.last_communication_at)
+
+    def silence_refresh_delay(self, *, now: float | None = None) -> float:
+        """5분 무통신 상태 요청까지 남은 시간. 1초보다 짧게 재예약하지 않는다."""
+        age = self.communication_age(now=now)
+        if age is None:
+            return float(BOILER_SILENCE_REFRESH_SECONDS)
+        return max(1.0, BOILER_SILENCE_REFRESH_SECONDS - age)
 
     @property
     def available(self) -> bool:
@@ -188,6 +264,264 @@ class BoilerDevice:
         return _integer(self.status.get("operationMode"))
 
     @property
+    def operation_busy(self) -> int | None:
+        return _integer(self.status.get("operationBusy"))
+
+    @property
+    def heating_is_idle(self) -> bool:
+        """실기기에서 난방수 온도가 오르지 않은 ``operationBusy=1`` 인가."""
+        return self.operation_busy == BOILER_BUSY_IDLE
+
+    @property
+    def operation_mode_name(self) -> str | None:
+        """앱의 NR-67D 탭 이름으로 확인된 운전 모드 이름."""
+        mode = self.operation_mode
+        return None if mode is None else BOILER_OPERATION_MODE_NAMES.get(mode)
+
+    @property
+    def operating_state(self) -> str | None:
+        """앱 표시 로직으로 확인한 전원·히팅 상태를 사람이 읽는 값으로.
+
+        Navien Smart 2.10.4의 ``modelCode=20`` 화면은 ``operationMode=1``일
+        때 전원 꺼짐으로 처리한다. 실기기에서 ``operationBusy=1``일 때 난방수
+        온도가 유지됐고, ``2``로 바뀐 뒤 공급·환수 온도가 함께 상승했다. 공식
+        NR-67D 설명서도 선택 운전 모드와 실제 가동 시 켜지는 불꽃 표시를 구분한다.
+        이 둘 외 값은 히팅으로 추측하지 않고 ``None``으로 둔다.
+        """
+        mode = self.operation_mode
+        busy = self.operation_busy
+        if mode is None:
+            return None
+        if mode == BOILER_OPERATION_OFF:
+            return BOILER_STATE_OFF
+        if busy is None:
+            return None
+        if busy == BOILER_BUSY_IDLE:
+            return BOILER_STATE_IDLE
+        if busy == BOILER_BUSY_HEATING:
+            return BOILER_STATE_HEATING
+        return None
+
+    @property
+    def status_age(self) -> float | None:
+        if self.status_received_at is None:
+            return None
+        return max(0.0, time.monotonic() - self.status_received_at)
+
+    def temperature_bounds(self, kind: str) -> tuple[float, float] | None:
+        """서버가 이 기기에 허용한 설정 범위를 섭씨로 돌려준다."""
+        if kind == "hot_water":
+            use_key = "hotWaterTemperatureSettingUse"
+            low_key = "hotWaterTemperatureMin"
+            high_key = "hotWaterTemperatureMax"
+        elif kind == "ondol":
+            use_key = "ondolUse"
+            low_key = "ondolTemperatureMin"
+            high_key = "ondolTemperatureMax"
+        else:
+            return None
+        if _integer(self.feature.get(use_key)) != 2:
+            return None
+        low = _half_degree(self.feature.get(low_key))
+        high = _half_degree(self.feature.get(high_key))
+        if low is None or high is None or low >= high:
+            return None
+        return low, high
+
+    def supports_feature(self, key: str) -> bool:
+        """서버가 이 보일러에 기능 사용 가능(2)을 선언했는가."""
+        return _integer(self.feature.get(key)) == 2
+
+    def switch_state(self, kind: str) -> bool | None:
+        """앱과 같은 1=끔, 2=켬 상태를 bool로 바꾼다."""
+        if kind == "power":
+            mode = self.operation_mode
+            return None if mode is None else mode != BOILER_OPERATION_OFF
+        try:
+            status_key = BOILER_SWITCH_CONTROLS[kind][0]
+        except KeyError:
+            return None
+        value = _integer(self.status.get(status_key))
+        return None if value not in (1, 2) else value == 2
+
+    @property
+    def gas_total_month(self) -> float | None:
+        return _tenth(self.gas_meter.get("thisYearMonthTotalGasUsage"))
+
+    @property
+    def gas_heating_month(self) -> float | None:
+        return _tenth(self.gas_meter.get("thisYearMonthTotalHeatGasUsage"))
+
+    @property
+    def gas_hot_water_month(self) -> float | None:
+        return _tenth(self.gas_meter.get("thisYearMonthTotalHotWaterGasUsage"))
+
+    def _identity_parts(self) -> tuple[str, str, str]:
+        """앱의 ``deviceId.substring(0, 12/16)`` 분기를 그대로 적용한다."""
+        if self.model_code != BOILER_MODEL_MGPP:
+            raise ValueError(f"지원하지 않는 보일러 modelCode: {self.model_code}")
+        if len(self.device_id) < 16:
+            raise ValueError("보일러 deviceId가 16자보다 짧습니다")
+        mqtt_topic_key = str(self.raw.get("mqttTopicKey") or "")
+        if not mqtt_topic_key:
+            raise ValueError("보일러 mqttTopicKey가 없습니다")
+        return self.device_id[:12], self.device_id[12:16], mqtt_topic_key
+
+    def build_request_payload(
+        self,
+        request: str,
+        response: str,
+        client_id: str,
+        *,
+        now_ms: int | None = None,
+        mode: str | None = None,
+        param: list[float] | None = None,
+        command: int | None = None,
+        room_use_setting: str | None = None,
+    ) -> dict[str, Any]:
+        """Navien Smart 2.10.4 ``boilerMGPPMqttPayload`` 와 같은 봉투."""
+        if not client_id:
+            raise ValueError("MQTT clientId가 없습니다")
+        mac, additional, mqtt_topic_key = self._identity_parts()
+        stamp = int(time.time() * 1000) if now_ms is None else now_ms
+        inner: dict[str, Any] = {
+            "macAddress": mac,
+            "registerAt": str(stamp),
+            "additionalValue": additional,
+            "param": [] if param is None else param,
+            "paramStr": "",
+            "deviceType": int(self.model_code),
+        }
+        if mode is not None:
+            inner["mode"] = mode
+        if command is not None:
+            inner["command"] = command
+        if room_use_setting is not None:
+            inner["roomUseSetting"] = room_use_setting
+        return {
+            "protocolVersion": 1,
+            "sessionID": str(stamp),
+            "clientID": f"mobile-{client_id}",
+            "requestTopic": f"cmd/{self.model_code}/roomcon-{mac}/{request}",
+            "responseTopic": (
+                f"cmd/{self.model_code}/{mqtt_topic_key}/mobile-{client_id}/{response}"
+            ),
+            "request": inner,
+        }
+
+    def build_status_payload(
+        self, client_id: str, *, now_ms: int | None = None
+    ) -> dict[str, Any]:
+        """앱의 ``getDeviceStatus`` 와 같은 상태 요청."""
+        return self.build_request_payload(
+            "status", "res", client_id, now_ms=now_ms, command=16777219
+        )
+
+    def build_start_payload(
+        self, client_id: str, *, now_ms: int | None = None
+    ) -> dict[str, Any]:
+        """앱의 ``getDeviceStart`` 와 같은 최초 상태 요청."""
+        return self.build_request_payload(
+            "status/start",
+            "res/start",
+            client_id,
+            now_ms=now_ms,
+            command=16777217,
+        )
+
+    def build_gas_payload(
+        self, client_id: str, *, now_ms: int | None = None
+    ) -> dict[str, Any]:
+        """앱의 가스 사용량 화면이 보내는 읽기 요청."""
+        if not self.supports_feature("gasUsageUse"):
+            raise ValueError("가스 사용량 조회를 서버가 허용하지 않았습니다")
+        return self.build_request_payload(
+            "status/gas-meter-query",
+            "res/gas-meter",
+            client_id,
+            now_ms=now_ms,
+            command=16777224,
+        )
+
+    def build_power_payload(
+        self, turn_on: bool, client_id: str, *, now_ms: int | None = None
+    ) -> dict[str, Any]:
+        """NR-67D 전원 명령. 앱처럼 전체 룸콘 비트마스크를 쓴다."""
+        if not self.supports_feature("powerUse"):
+            raise ValueError("전원 제어를 서버가 허용하지 않았습니다")
+        return self.build_request_payload(
+            "control",
+            "res",
+            client_id,
+            now_ms=now_ms,
+            mode="power-on" if turn_on else "power-off",
+            command=33554434 if turn_on else 33554433,
+            room_use_setting="11111111",
+        )
+
+    def build_switch_payload(
+        self,
+        kind: str,
+        turn_on: bool,
+        client_id: str,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """빠른온수·스마트운전·터보온수 명령을 만든다."""
+        feature_keys = {
+            "fast_dhw": "fastDHWUse",
+            "smart_fast_dhw": "smartFastDHWUse",
+            "dhw_boost": "DHWBoostUse",
+        }
+        try:
+            feature_key = feature_keys[kind]
+            _status_key, mode, command = BOILER_SWITCH_CONTROLS[kind]
+        except KeyError as err:
+            raise ValueError(f"알 수 없는 보일러 스위치 종류: {kind}") from err
+        if not self.supports_feature(feature_key):
+            raise ValueError(f"{kind} 제어를 서버가 허용하지 않았습니다")
+        return self.build_request_payload(
+            "control",
+            "res",
+            client_id,
+            now_ms=now_ms,
+            mode=mode,
+            param=[2 if turn_on else 1],
+            command=command,
+            room_use_setting="10000000",
+        )
+
+    def build_temperature_payload(
+        self, kind: str, target: float, client_id: str, *, now_ms: int | None = None
+    ) -> dict[str, Any]:
+        """NR-67D 설정온도 명령을 만든다. 섭씨값은 0.5℃ 원시값으로 바꾼다."""
+        bounds = self.temperature_bounds(kind)
+        if bounds is None:
+            raise ValueError(f"{kind} 설정온도 제어를 서버가 허용하지 않았습니다")
+        target = float(target)
+        # modelCode=20 앱 분기는 SeekBar 원시 정수를 Float 로만 바꿔 보낸다.
+        # 상태 61이 화면의 30.5℃이므로 전송도 섭씨×2인 61.0이어야 한다.
+        raw_target = target * 2
+        if not raw_target.is_integer():
+            raise ValueError("NR-67D 설정온도는 0.5℃ 단위여야 합니다")
+        if not bounds[0] <= target <= bounds[1]:
+            raise ValueError(f"설정온도 {target:g}℃가 허용 범위를 벗어났습니다")
+        try:
+            mode, command, room_use_setting = BOILER_TEMPERATURE_CONTROLS[kind]
+        except KeyError as err:
+            raise ValueError(f"알 수 없는 설정온도 종류: {kind}") from err
+        return self.build_request_payload(
+            "control",
+            "res",
+            client_id,
+            now_ms=now_ms,
+            mode=mode,
+            param=[raw_target],
+            command=command,
+            room_use_setting=room_use_setting,
+        )
+
+    @property
     def error_code(self) -> int | None:
         return _integer(self.status.get("errorCode"))
 
@@ -212,7 +546,12 @@ def extract_boiler_status(
         return None
     response = _dig(event, "payload", "response")
     status = response.get("status") if isinstance(response, dict) else None
-    if not isinstance(status, dict):
+    gas_meter = response.get("gasMeter") if isinstance(response, dict) else None
+    if isinstance(status, dict):
+        update = status
+    elif isinstance(gas_meter, dict):
+        update = {BOILER_GAS_METER_UPDATE: gas_meter}
+    else:
         _bump(stats, "dropped_no_status")
         return None
     physical_id = response.get("macAddress")
@@ -220,7 +559,7 @@ def extract_boiler_status(
         _bump(stats, "dropped_no_device_id")
         return None
     _bump(stats, "accepted")
-    return str(physical_id), status
+    return str(physical_id), update
 
 
 def _normalized_key(key: str) -> str:

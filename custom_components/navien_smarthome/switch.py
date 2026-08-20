@@ -21,9 +21,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice
+from .boiler import BoilerDevice
 from .const import MODE_HEAT, MODE_POWER_OFF
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, NavienSmartEntity
+from .entity import AironeEntity, BoilerEntity, NavienSmartEntity
 from .models import NavienDevice
 
 
@@ -50,7 +51,84 @@ async def async_setup_entry(
     entities.extend(
         AironePowerSwitch(coordinator, device) for device in coordinator.airone.values()
     )
+    for boiler in coordinator.boilers.values():
+        if boiler.supports_feature("powerUse"):
+            entities.append(BoilerPowerSwitch(coordinator, boiler))
+        for kind, feature_key, label, icon in (
+            ("fast_dhw", "fastDHWUse", "빠른온수", "mdi:water-boiler"),
+            (
+                "smart_fast_dhw",
+                "smartFastDHWUse",
+                "빠른온수 스마트운전",
+                "mdi:auto-mode",
+            ),
+            ("dhw_boost", "DHWBoostUse", "터보온수", "mdi:fire"),
+        ):
+            if boiler.supports_feature(feature_key):
+                entities.append(
+                    BoilerFeatureSwitch(coordinator, boiler, kind, label, icon)
+                )
     async_add_entities(entities)
+
+
+class BoilerPowerSwitch(BoilerEntity, SwitchEntity):
+    """앱 상단 전원 버튼과 같은 NR-67D 전원."""
+
+    _attr_name = "전원"
+    _attr_icon = "mdi:power"
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_boiler_power"
+
+    @property
+    def is_on(self) -> bool | None:
+        device = self.device
+        return None if device is None else device.switch_state("power")
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        device = self.device
+        if device is not None:
+            await self.coordinator.async_boiler_power(device, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        device = self.device
+        if device is not None:
+            await self.coordinator.async_boiler_power(device, False)
+
+
+class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):
+    """앱에서 확인한 빠른온수 계열의 1/2 값 스위치."""
+
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: BoilerDevice,
+        kind: str,
+        label: str,
+        icon: str,
+    ) -> None:
+        super().__init__(coordinator, device)
+        self._kind = kind
+        self._attr_name = label
+        self._attr_icon = icon
+        self._attr_unique_id = f"{device.device_id}_{kind}"
+
+    @property
+    def is_on(self) -> bool | None:
+        device = self.device
+        return None if device is None else device.switch_state(self._kind)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_set(False)
+
+    async def _async_set(self, turn_on: bool) -> None:
+        device = self.device
+        if device is not None:
+            await self.coordinator.async_boiler_switch(device, self._kind, turn_on)
 
 
 class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):

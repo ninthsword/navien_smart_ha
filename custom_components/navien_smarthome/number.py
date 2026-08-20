@@ -1,4 +1,4 @@
-"""에어원 목표 습도.
+"""에어원 목표 습도와 NR-67D 보일러 설정온도.
 
 제습·환기제습에서만 쓴다. **범위를 코드에 적지 않는다** — 서버가 운전 조합마다
 `additionalData` 의 `min`/`max` 를 알려주므로 그것만 쓴다. 안 알려주면 만들지 않는다.
@@ -11,15 +11,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice
+from .boiler import BoilerDevice
 from .const import AIRONE_HUMIDITY_STEP, AIRONE_OPTION_NONE
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity
+from .entity import AironeEntity, BoilerEntity
 
 
 async def async_setup_entry(
@@ -28,12 +30,87 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities(
+    entities: list[NumberEntity] = [
         AironeHumidityNumber(coordinator, device)
         for device in coordinator.airone.values()
         # 어떤 조합에서든 서버가 습도 범위를 알려줄 때만 만든다.
         if any(mode.wants_humidity for mode in device.modes)
-    )
+    ]
+    for device in coordinator.boilers.values():
+        if device.model_code != "20":
+            continue
+        if device.temperature_bounds("hot_water") is not None:
+            entities.append(BoilerTemperatureNumber(coordinator, device, "hot_water"))
+        if device.temperature_bounds("ondol") is not None:
+            entities.append(BoilerTemperatureNumber(coordinator, device, "ondol"))
+    async_add_entities(entities)
+
+
+_BOILER_NUMBER_NAMES = {
+    "hot_water": ("온수 설정 온도", "mdi:water-thermometer"),
+    "ondol": ("난방수 설정 온도", "mdi:radiator"),
+}
+
+
+class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
+    """NR-67D 설정온도. 히팅 여부와 관계없이 서버 허용 범위 안에서 제어한다."""
+
+    _attr_device_class = NumberDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_native_step = 0.5
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: BoilerDevice,
+        kind: str,
+    ) -> None:
+        super().__init__(coordinator, device)
+        self._kind = kind
+        self._attr_unique_id = f"{device.device_id}_{kind}_temperature_setting"
+        self._attr_name, self._attr_icon = _BOILER_NUMBER_NAMES[kind]
+        bounds = device.temperature_bounds(kind)
+        if bounds is None:
+            raise ValueError(f"{kind} 설정온도 범위가 없습니다")
+        self._attr_native_min_value, self._attr_native_max_value = bounds
+
+    @property
+    def available(self) -> bool:
+        device = self.device
+        return (
+            super().available
+            and device is not None
+            and device.temperature_bounds(self._kind) is not None
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        device = self.device
+        if device is None:
+            return None
+        if self._kind == "hot_water":
+            return device.hot_water_target_temperature
+        return device.ondol_target_temperature
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        if device is None:
+            return None
+        return {
+            "operation_busy": device.operation_busy,
+            "heating_idle": device.heating_is_idle,
+            "status_age_seconds": (
+                None if device.status_age is None else round(device.status_age, 1)
+            ),
+        }
+
+    async def async_set_native_value(self, value: float) -> None:
+        device = self.device
+        if device is None:
+            return
+        await self.coordinator.async_boiler_temperature(device, self._kind, value)
 
 
 class AironeHumidityNumber(AironeEntity, NumberEntity):

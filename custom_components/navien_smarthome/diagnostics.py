@@ -18,6 +18,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
 from . import NavienSmartConfigEntry
+from .boiler import BOILER_GAS_REFRESH_SECONDS, BOILER_SILENCE_REFRESH_SECONDS
 from .const import (
     AIRONE_INFERRED_UNITS,
     AIRONE_SENSOR_KINDS,
@@ -123,6 +124,14 @@ async def async_get_config_entry_diagnostics(
             # 것이다. 후자면 `airone_last_unknown_shape_keys` 가 어느 모양인지
             # 알려준다. 개수와 키 이름뿐이라 개인정보는 없다.
             "mqtt_messages": coordinator.mqtt_stats,
+            "boiler_silence_refresh_seconds": BOILER_SILENCE_REFRESH_SECONDS,
+            "boiler_silence_timers": len(coordinator._boiler_silence_unsubs),
+            "boiler_silence_requests": coordinator.boiler_silence_requests,
+            "boiler_silence_failures": coordinator.boiler_silence_failures,
+            "boiler_gas_refresh_seconds": BOILER_GAS_REFRESH_SECONDS,
+            "boiler_gas_timers": len(coordinator._boiler_gas_unsubs),
+            "boiler_gas_requests": coordinator.boiler_gas_requests,
+            "boiler_gas_failures": coordinator.boiler_gas_failures,
         },
         "counts": {
             "total": len(coordinator.raw_devices),
@@ -275,11 +284,15 @@ def _numbers_only(raw: Any) -> dict[str, Any]:
 
 def _boiler_view(device: Any) -> dict[str, Any]:
     """보일러의 해석 결과. 식별값 없이 배율과 상태 수신 여부를 검증한다."""
+    communication_age = device.communication_age()
     return {
         "model_code": device.model_code,
         "model_name": device.model_name,
         "available": device.available,
         "status_received": bool(device.status),
+        "last_communication_seconds_ago": (
+            None if communication_age is None else round(communication_age, 1)
+        ),
         "status_keys": sorted(device.status),
         "operation_mode": device.operation_mode,
         "error_code": device.error_code,
@@ -291,6 +304,10 @@ def _boiler_view(device: Any) -> dict[str, Any]:
         "ondol_target_temperature": device.ondol_target_temperature,
         "hot_water_target_temperature": device.hot_water_target_temperature,
         "indoor_humidity": device.indoor_humidity,
+        "gas_received": bool(device.gas_meter),
+        "gas_total_month": device.gas_total_month,
+        "gas_heating_month": device.gas_heating_month,
+        "gas_hot_water_month": device.gas_hot_water_month,
         # 의미가 아직 확정되지 않은 플래그는 숫자 원문만 남긴다.
         "status_numbers": _numbers_only(device.status),
         "feature_numbers": _numbers_only(device.feature),
