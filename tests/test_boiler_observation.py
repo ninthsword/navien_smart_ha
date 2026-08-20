@@ -1,4 +1,4 @@
-"""보일러 1단계는 지원이 아니라 개인정보 없는 수동 조작 없는 관찰이다."""
+"""보일러는 제어 없이 확인된 MQTT 상태만 읽는다."""
 
 from __future__ import annotations
 
@@ -6,21 +6,136 @@ import json
 import sys
 
 from harness import Report, source
-from navien_smarthome.boiler import observe_boiler_message, sanitize_boiler_value
+from navien_smarthome.boiler import (
+    BoilerDevice,
+    extract_boiler_status,
+    observe_boiler_message,
+    sanitize_boiler_value,
+)
 from navien_smarthome.const import (
     SERVICE_BOILER,
     SUPPORTED_SERVICE_CODES,
     TOPIC_PREFIX,
 )
+from navien_smarthome.diagnostics import TO_REDACT, _identifiers, _scrub
 
 r = Report()
 
 
-r.section("지원으로 열지 않는다")
+r.section("읽기 전용 지원")
 
 r.ok(TOPIC_PREFIX[SERVICE_BOILER] == "smarttok", "앱과 같은 관찰 토픽을 구독한다")
-r.ok(SERVICE_BOILER not in SUPPORTED_SERVICE_CODES, "지원 기기 목록에는 넣지 않는다")
+r.ok(SERVICE_BOILER in SUPPORTED_SERVICE_CODES, "보일러를 지원 기기로 분류한다")
 r.ok("async_boiler" not in source("api.py"), "보일러 제어 API 를 만들지 않았다")
+r.ok("읽기 전용 센서가 됩니다" in source("../../README.md"), "README 에 지원 범위를 적었다")
+r.ok("보일러 제어는 만들지 않았습니다" in source("../../README.md"), "README 에 제어 제외를 적었다")
+
+
+r.section("실측 상태 봉투")
+
+status = {
+    "operationMode": 6,
+    "errorCode": 0,
+    "subErrorCode": 0,
+    "insideTemperature": 60,
+    "actualInsideTemperature": 303,
+    "supplyTemperature": 67,
+    "returnTemperature": 64,
+    "ondolTemperatureSetting": 60,
+    "hotWaterTemperature": 62,
+    "hotWaterTemperatureSetting": 86,
+    "insideHumidity": 585,
+}
+envelope = {
+    "topic": "private-response-topic",
+    "payload": {
+        "response": {
+            "macAddress": "001122334455",
+            "status": status,
+        }
+    },
+}
+stats = {}
+parsed = extract_boiler_status(json.dumps(envelope).encode(), stats)
+r.ok(parsed == ("001122334455", status), "status 봉투와 물리 기기 ID를 꺼낸다")
+r.ok(stats == {"accepted": 1}, "받은 상태를 집계한다")
+
+ignored_stats = {}
+r.ok(
+    extract_boiler_status(b'{"payload":{"response":{"feature":{}}}}', ignored_stats)
+    is None,
+    "DID 응답은 상태로 쓰지 않는다",
+)
+r.ok(ignored_stats == {"dropped_no_status": 1}, "상태 아닌 응답을 집계한다")
+
+raw_device = {
+    "deviceId": "cloud-device-id",
+    "deviceSeq": 14,
+    "modelCode": "20",
+    "modelName": "NR-67D",
+    "connected": 1,
+    "Properties": {
+        "nickName": "보일러",
+        "did": {
+            "response": {
+                "macAddress": "001122334455",
+                "feature": {
+                    "ondolTemperatureMin": 60,
+                    "ondolTemperatureMax": 130,
+                },
+            }
+        },
+    },
+}
+device = BoilerDevice.parse(raw_device)
+r.ok(device is not None, "REST 메타데이터로 보일러를 만든다")
+assert device is not None
+r.ok(device.nickname == "보일러", "문자열 별칭을 기기명으로 쓴다")
+dict_nick_device = BoilerDevice.parse(
+    {
+        **raw_device,
+        "Properties": {
+            **raw_device["Properties"],
+            "nickName": {"mainItem": "보일러"},
+        },
+    }
+)
+r.ok(
+    dict_nick_device is not None and dict_nick_device.nickname == "보일러",
+    "mainItem 형태 별칭을 기기명으로 쓴다",
+)
+device.apply_status(status)
+r.ok(device.indoor_temperature == 30.3, "정밀 실내온도는 0.1℃ 단위다")
+r.ok(device.supply_temperature == 33.5, "난방수 온도는 0.5℃ 단위다")
+r.ok(device.return_temperature == 32.0, "환수 온도는 0.5℃ 단위다")
+r.ok(device.ondol_target_temperature == 30.0, "온돌 설정은 0.5℃ 단위다")
+r.ok(device.hot_water_temperature == 31.0, "온수 현재값은 0.5℃ 단위다")
+r.ok(device.hot_water_target_temperature == 43.0, "온수 설정값은 0.5℃ 단위다")
+r.ok(device.indoor_humidity == 58.5, "실내 습도는 0.1% 단위다")
+r.ok(device.operation_mode == 6, "뜻을 추측하지 않고 모드 코드를 보존한다")
+r.ok(device.error_code == 0 and device.available, "상태를 받은 연결 기기는 사용 가능하다")
+
+
+r.section("보일러 진단 식별정보")
+
+for key in (
+    "clientID",
+    "sessionID",
+    "macAddress",
+    "requestTopic",
+    "responseTopic",
+    "boilerControllerSerialNumber",
+):
+    r.ok(key in TO_REDACT, f"{key} 키를 가린다")
+
+sensitive = {
+    "clientID": "client-secret-123",
+    "macAddress": "001122334455",
+    "requestTopic": "cmd/20/roomcon-001122334455/status/start",
+}
+scrubbed = repr(_scrub(sensitive, _identifiers([sensitive])))
+r.ok("client-secret" not in scrubbed, "clientID 값이 진단 어디에도 남지 않는다")
+r.ok("001122334455" not in scrubbed, "MAC 값이 토픽 안에도 남지 않는다")
 
 
 r.section("JSON 구조만 남기고 식별값은 지운다")
@@ -78,8 +193,8 @@ r.section("근거를 코드에 남겼다")
 
 boiler_source = source("boiler.py")
 r.ok(
-    "엔티티도 명령도 만들지 않는다" in boiler_source,
-    "관찰 단계의 안전 경계를 적었다",
+    "확인된 상태만" in boiler_source and "명령은 만들지 않는다" in boiler_source,
+    "읽기 전용 안전 경계를 적었다",
 )
 r.ok("바이너리 원문" in boiler_source, "바이너리를 보관하지 않는 이유를 적었다")
 

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice, as_number, level_text, text_or_none
+from .boiler import BoilerDevice
 from .const import (
     AIRONE_INFERRED_UNITS,
     AIRONE_SENSOR_KINDS,
@@ -18,7 +20,7 @@ from .const import (
     LEGACY_VALUE_TABLES,
 )
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, AironeMonitorEntity, NavienSmartEntity
+from .entity import AironeEntity, AironeMonitorEntity, BoilerEntity, NavienSmartEntity
 from .models import NavienDevice
 
 
@@ -58,7 +60,129 @@ async def async_setup_entry(
             for index in range(len(airone.filter_types))
         )
 
+    for boiler in coordinator.boilers.values():
+        entities.extend(
+            BoilerTemperatureSensor(coordinator, boiler, key, label, measured)
+            for key, label, measured in (
+                ("indoor_temperature", "실내 온도", True),
+                ("supply_temperature", "난방수 공급 온도", True),
+                ("return_temperature", "난방수 환수 온도", True),
+                ("hot_water_temperature", "온수 온도", True),
+                ("ondol_target_temperature", "온돌 설정 온도", False),
+                ("hot_water_target_temperature", "온수 설정 온도", False),
+            )
+        )
+        entities.append(BoilerHumiditySensor(coordinator, boiler))
+        entities.append(BoilerModeSensor(coordinator, boiler))
+        entities.append(BoilerErrorSensor(coordinator, boiler))
+
     async_add_entities(entities)
+
+
+class BoilerTemperatureSensor(BoilerEntity, SensorEntity):
+    """실측으로 배율이 확인된 보일러 온도 하나."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: BoilerDevice,
+        key: str,
+        label: str,
+        measured: bool,
+    ) -> None:
+        super().__init__(coordinator, device)
+        self._key = key
+        self._attr_name = label
+        self._attr_unique_id = f"{device.device_id}_{key}"
+        if measured:
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> float | None:
+        device = self.device
+        return None if device is None else getattr(device, self._key)
+
+
+class BoilerHumiditySensor(BoilerEntity, SensorEntity):
+    """룸콘이 보고한 실내 습도."""
+
+    _attr_name = "실내 습도"
+    _attr_device_class = SensorDeviceClass.HUMIDITY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_indoor_humidity"
+
+    @property
+    def native_value(self) -> float | None:
+        device = self.device
+        return None if device is None else device.indoor_humidity
+
+
+class BoilerModeSensor(BoilerEntity, SensorEntity):
+    """뜻을 추측하지 않은 운전 모드 코드."""
+
+    _attr_name = "운전 모드 코드"
+    _attr_icon = "mdi:radiator"
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_operation_mode"
+
+    @property
+    def native_value(self) -> int | None:
+        device = self.device
+        return None if device is None else device.operation_mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        if device is None:
+            return None
+        # 의미가 검증되지 않은 값은 자동화하기 쉬운 별도 엔티티로 만들지 않는다.
+        return {
+            key: device.status.get(key)
+            for key in (
+                "operationBusy",
+                "DHWUse",
+                "DHWUseSustained",
+                "fastDHWUse",
+                "DHWBoost",
+            )
+            if key in device.status
+        }
+
+
+class BoilerErrorSensor(BoilerEntity, SensorEntity):
+    """보일러 주 오류 코드. 0이면 장치가 정상으로 보고한 것이다."""
+
+    _attr_name = "오류 코드"
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_error_code"
+
+    @property
+    def native_value(self) -> int | None:
+        device = self.device
+        return None if device is None else device.error_code
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        if device is None or device.sub_error_code is None:
+            return None
+        return {"sub_error_code": device.sub_error_code}
 
 
 class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):

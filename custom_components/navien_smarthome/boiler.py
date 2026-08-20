@@ -1,8 +1,8 @@
-"""보일러 MQTT 를 해석하기 전의 **수동 조작 없는 관찰 단계**.
+"""보일러 MQTT 상태를 읽는 **수동 조작 없는 지원 단계**.
 
 보일러는 매트와 상태 모델이 다르고, 컨트롤러 종류별 인코딩도 다르다. 특히
-온도값을 짐작해 제어하면 실제 난방·온수 설정을 바꿀 수 있으므로 패킷 구조가
-확인되기 전에는 엔티티도 명령도 만들지 않는다.
+온도값을 짐작해 제어하면 실제 난방·온수 설정을 바꿀 수 있으므로, 확인된 상태만
+센서로 내고 명령은 만들지 않는다.
 
 여기서는 앱과 같은 ``smarttok`` 구독에서 들어온 메시지의 **모양만** 남긴다.
 진단 파일이 공개 이슈에 첨부될 수 있으므로 원문 문자열·토픽·큰 숫자·바이너리는
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 BOILER_TOPIC_PREFIX = "smarttok"
@@ -49,6 +50,177 @@ _SENSITIVE_KEYS = {
     "token",
     "userid",
 }
+
+
+def _dig(value: Any, *path: str) -> Any:
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _integer(value: Any) -> int | None:
+    number = _number(value)
+    return None if number is None else int(number)
+
+
+def _half_degree(value: Any) -> float | None:
+    """보일러의 0.5℃ 단위 값을 섭씨로 바꾼다.
+
+    서버가 알려준 범위가 온돌 60~130 → 30~65℃, 온수 60~120 → 30~60℃로
+    정확히 맞고, 실측 설정값 86이 앱의 43℃와 맞는다.
+    """
+    number = _number(value)
+    return None if number is None else number / 2
+
+
+def _tenth(value: Any) -> float | None:
+    """실측 정밀 센서의 0.1 단위 값을 사람이 읽는 값으로 바꾼다."""
+    number = _number(value)
+    return None if number is None else number / 10
+
+
+def _bump(stats: dict[str, Any] | None, key: str) -> None:
+    if stats is not None:
+        stats[key] = int(stats.get(key) or 0) + 1
+
+
+@dataclass
+class BoilerDevice:
+    """REST 기기 정보와 MQTT 상태를 합친 읽기 전용 보일러."""
+
+    raw: dict[str, Any]
+    device_id: str
+    device_seq: int
+    model_code: str
+    model_name: str
+    nickname: str
+    connected: bool
+    physical_device_id: str | None = None
+    feature: dict[str, Any] = field(default_factory=dict)
+    status: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def parse(cls, raw: dict[str, Any]) -> BoilerDevice | None:
+        device_id = str(raw.get("deviceId") or "")
+        device_seq = _integer(raw.get("deviceSeq"))
+        if not device_id or device_seq is None:
+            return None
+
+        response = _dig(raw, "Properties", "did", "response")
+        response = response if isinstance(response, dict) else {}
+        feature = response.get("feature")
+        status = response.get("status")
+        model_name = str(raw.get("modelName") or "보일러")
+        # 앱 응답은 보통 ``{"mainItem": "보일러"}`` 이지만 계정/세대에 따라
+        # 문자열 하나로 올 수도 있다. dict 자체를 문자열로 바꾸면 HA 기기명이
+        # ``{'mainItem': '보일러'}`` 로 노출되므로 두 형태를 명시적으로 가른다.
+        raw_nick = _dig(raw, "Properties", "nickName")
+        nick = raw_nick if isinstance(raw_nick, dict) else {}
+        nick_text = raw_nick.strip() if isinstance(raw_nick, str) else ""
+        nickname = str(nick.get("mainItem") or nick_text or model_name)
+        physical_id = response.get("macAddress")
+        return cls(
+            raw=raw,
+            device_id=device_id,
+            device_seq=device_seq,
+            model_code=str(raw.get("modelCode") or ""),
+            model_name=model_name,
+            nickname=nickname,
+            connected=bool(_integer(raw.get("connected"))),
+            physical_device_id=(str(physical_id) if physical_id else None),
+            feature=feature if isinstance(feature, dict) else {},
+            status=status if isinstance(status, dict) else {},
+        )
+
+    def apply_status(self, status: dict[str, Any]) -> None:
+        """부분 응답이 와도 전에 알던 필드를 잃지 않는다."""
+        self.status.update(status)
+
+    @property
+    def available(self) -> bool:
+        return self.connected and bool(self.status)
+
+    @property
+    def indoor_temperature(self) -> float | None:
+        # actualInsideTemperature 는 0.1℃ 정밀값이다. 없는 모델만 0.5℃ 값을 쓴다.
+        precise = _tenth(self.status.get("actualInsideTemperature"))
+        return precise if precise is not None else _half_degree(
+            self.status.get("insideTemperature")
+        )
+
+    @property
+    def supply_temperature(self) -> float | None:
+        return _half_degree(self.status.get("supplyTemperature"))
+
+    @property
+    def return_temperature(self) -> float | None:
+        return _half_degree(self.status.get("returnTemperature"))
+
+    @property
+    def hot_water_temperature(self) -> float | None:
+        return _half_degree(self.status.get("hotWaterTemperature"))
+
+    @property
+    def ondol_target_temperature(self) -> float | None:
+        return _half_degree(self.status.get("ondolTemperatureSetting"))
+
+    @property
+    def hot_water_target_temperature(self) -> float | None:
+        return _half_degree(self.status.get("hotWaterTemperatureSetting"))
+
+    @property
+    def indoor_humidity(self) -> float | None:
+        return _tenth(self.status.get("insideHumidity"))
+
+    @property
+    def operation_mode(self) -> int | None:
+        return _integer(self.status.get("operationMode"))
+
+    @property
+    def error_code(self) -> int | None:
+        return _integer(self.status.get("errorCode"))
+
+    @property
+    def sub_error_code(self) -> int | None:
+        return _integer(self.status.get("subErrorCode"))
+
+
+def extract_boiler_status(
+    payload: bytes, stats: dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any]] | None:
+    """보일러 봉투에서 물리 기기 ID와 상태만 꺼낸다.
+
+    실측 봉투는 ``payload.response.status`` 이고 기기 목록의
+    ``Properties.did.response.macAddress`` 와 같은 값으로 기기를 찾는다. 명령 응답과
+    DID/펌웨어 응답은 ``status`` 가 없으므로 상태로 쓰지 않는다.
+    """
+    try:
+        event = json.loads(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        _bump(stats, "dropped_not_json")
+        return None
+    response = _dig(event, "payload", "response")
+    status = response.get("status") if isinstance(response, dict) else None
+    if not isinstance(status, dict):
+        _bump(stats, "dropped_no_status")
+        return None
+    physical_id = response.get("macAddress")
+    if not physical_id:
+        _bump(stats, "dropped_no_device_id")
+        return None
+    _bump(stats, "accepted")
+    return str(physical_id), status
 
 
 def _normalized_key(key: str) -> str:

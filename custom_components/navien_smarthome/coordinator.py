@@ -27,7 +27,7 @@ from .api import (
 from homeassistant.helpers.storage import Store
 
 from .airone import AironeDevice, _dig
-from .boiler import BOILER_OBSERVATION_KEEP
+from .boiler import BOILER_OBSERVATION_KEEP, BoilerDevice
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
     AIRONE_CMD_CHANGE_MODE,
@@ -116,8 +116,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # 에어원은 매트와 상태 체계가 달라 같은 dict 에 섞지 않는다. 검증이 끝난
         # 매트 경로를 건드리지 않는 것이 우선이다.
         self.airone: dict[str, AironeDevice] = {}
-        # 보일러는 아직 지원하지 않는다. 제어 없이 받은 MQTT 구조만 개인정보를
-        # 제거한 뒤 짧게 보관해 다음 구현의 근거로 쓴다.
+        # 보일러는 읽기 전용이다. 제어 없이 받은 MQTT 구조는 개인정보를 제거한 뒤
+        # 짧게 보관하고, 확인된 상태는 센서에도 반영한다.
+        self.boilers: dict[str, BoilerDevice] = {}
         self.boiler_observations: list[dict[str, Any]] = []
         # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
         # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
@@ -128,7 +129,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.restored_devices: set[str] = set()
         # 「상태가 안 온다」와 「와도 못 붙인다」를 진단만으로 가리기 위한 집계.
         # 개인정보는 없다 — 개수와 키 이름뿐이다.
-        self.drop_counts: dict[str, int] = {"mate_no_device": 0, "airone_no_device": 0}
+        self.drop_counts: dict[str, int] = {
+            "mate_no_device": 0,
+            "airone_no_device": 0,
+            "boiler_no_device": 0,
+        }
         self._mqtt: NavienSmartMqtt | None = None
         self._skipped_logged: set[str] = set()
         # **폴링이 돌기는 하는지**를 남긴다.
@@ -193,6 +198,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
         previous_airone = self.airone
         airone: dict[str, AironeDevice] = {}
+        previous_boilers = self.boilers
+        boilers: dict[str, BoilerDevice] = {}
 
         for raw in raw_devices:
             # **항목이 dict 가 아닐 수 있다.** 그때 `.get` 을 부르면
@@ -206,6 +213,25 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             # 매트는 정수로 오는 것을 확인했다. 에어원도 그럴 거라 단정하지 않는다 —
             # 문자열로 오면 비교가 조용히 실패해 기기가 통째로 사라진다.
             service_code = _as_int(raw.get("serviceCode"))
+
+            if service_code == SERVICE_BOILER:
+                boiler = BoilerDevice.parse(raw)
+                if boiler is None:
+                    self._log_skip(
+                        raw,
+                        "응답에 deviceId·deviceSeq 가 없어 보일러를 만들지 못했습니다",
+                    )
+                    self.unsupported.append(raw)
+                    continue
+                if (old := previous_boilers.get(boiler.device_id)) is not None:
+                    # REST 응답이 feature 만 줄 때 MQTT 로 받은 상태를 잃지 않는다.
+                    if not boiler.status:
+                        boiler.status = old.status
+                    if boiler.physical_device_id is None:
+                        boiler.physical_device_id = old.physical_device_id
+                boilers[boiler.device_id] = boiler
+                continue
+
             if service_code not in SUPPORTED_SERVICE_CODES:
                 self.unsupported.append(raw)
                 self._log_unsupported(raw)
@@ -253,6 +279,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             devices[device.device_id] = device
 
         self.airone = airone
+        self.boilers = boilers
         self._tune_interval()
         await self._async_update_air_sensors()
         self.poll_stamp = time.monotonic()
@@ -519,7 +546,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         }
         if self.airone and (prefix := TOPIC_PREFIX.get(SERVICE_AIRONE)):
             prefixes.add(prefix)
-        # 지원 목록에서 건너뛴 보일러도 관찰 토픽만 구독한다. 명령은 보내지 않는다.
+        # 보일러는 매트 `data` 와 별도 dict 에 있으므로 원본 목록을 보고 구독한다.
+        # 읽기 전용이며 명령은 보내지 않는다.
         if any(
             _as_int(raw.get("serviceCode")) == SERVICE_BOILER
             for raw in self.raw_devices
@@ -540,6 +568,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             on_reported=self._handle_reported,
             on_subscribed=self._async_request_initial_state,
             on_airone_reported=self._handle_airone_reported,
+            on_boiler_reported=self._handle_boiler_reported,
             on_boiler_observation=self._handle_boiler_observation,
         )
         await self._mqtt.async_start()
@@ -669,6 +698,30 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         """식별값을 제거한 관찰 레코드만 최대 8개 유지한다."""
         self.boiler_observations.append(observation)
         del self.boiler_observations[:-BOILER_OBSERVATION_KEEP]
+
+    @callback
+    def _handle_boiler_reported(
+        self, physical_id: str, status: dict[str, Any]
+    ) -> None:
+        """MQTT 보일러 상태를 REST 기기와 결합한다."""
+        device = next(
+            (
+                boiler
+                for boiler in self.boilers.values()
+                if boiler.physical_device_id == physical_id
+            ),
+            None,
+        )
+        # 한 대뿐이고 REST 응답에 macAddress 가 빠진 모델이면 안전하게 붙일 수 있다.
+        if device is None and len(self.boilers) == 1:
+            device = next(iter(self.boilers.values()))
+            device.physical_device_id = physical_id
+        if device is None:
+            self.drop_counts["boiler_no_device"] += 1
+            return
+        device.apply_status(status)
+        self.last_update_success = True
+        self.async_update_listeners()
 
     @callback
     def _async_push_update(self, data: dict[str, NavienDevice]) -> None:

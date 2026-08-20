@@ -2,8 +2,9 @@
 
 기기가 상태를 스스로 올린다 — 실측 확인. 그래서 폴링 대신 이 구독이 주 경로다.
 
-매트·에어원은 검증된 각자 파서로 상태를 반영한다. 보일러 `smarttok` 은 아직
-지원하지 않으므로 식별값을 제거한 패킷 구조만 관찰한다. 보일러 명령은 보내지 않는다.
+매트·에어원·보일러는 검증된 각자 파서로 상태를 반영한다. 보일러 `smarttok` 은
+확인된 상태만 읽고, 공개 진단에는 식별값을 제거한 패킷 구조만 남긴다. 보일러
+명령은 보내지 않는다.
 
 매트는 한 번의 변화에 shadow 이벤트가 최대 세 종류 오는데
 **`/update/accepted` 중 `state.reported` 를 가진 것만** 쓴다. 나머지(`/delta`,
@@ -29,7 +30,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util.ssl import get_default_context
 
 from .api import AwsCredentials
-from .boiler import BOILER_TOPIC_PREFIX, observe_boiler_message
+from .boiler import BOILER_TOPIC_PREFIX, extract_boiler_status, observe_boiler_message
 from .const import (
     IOT_ENDPOINT,
     IOT_REGION,
@@ -281,6 +282,7 @@ class NavienSmartMqtt:
         on_reported: Callable[[str, dict[str, Any]], None],
         on_subscribed: Callable[[], Awaitable[None]] | None = None,
         on_airone_reported: Callable[[str, dict[str, Any]], None] | None = None,
+        on_boiler_reported: Callable[[str, dict[str, Any]], None] | None = None,
         on_boiler_observation: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._hass = hass
@@ -292,6 +294,7 @@ class NavienSmartMqtt:
         self._credentials_provider = credentials_provider
         self._on_reported = on_reported
         self._on_airone_reported = on_airone_reported
+        self._on_boiler_reported = on_boiler_reported
         self._on_boiler_observation = on_boiler_observation
         # 구독이 붙은 뒤에 초기 상태를 요청해야 한다. 순서가 뒤바뀌면 응답을 놓친다.
         self._on_subscribed = on_subscribed
@@ -470,14 +473,26 @@ class NavienSmartMqtt:
         self._hass.loop.call_soon_threadsafe(self._on_reported, device_id, reported)
 
     def _handle_boiler_message(self, message: Any) -> None:
-        """보일러 메시지의 안전한 구조만 넘긴다. 상태 해석·제어는 하지 않는다."""
-        if self._on_boiler_observation is None:
-            _bump(self.stats, "boiler_dropped_no_handler")
-            return
+        """상태는 기기에 반영하고, 공개 진단에는 안전한 구조만 넘긴다."""
         observation = observe_boiler_message(message.payload, message.topic)
         _bump(self.stats, f"boiler_{observation['encoding']}")
+        if self._on_boiler_observation is not None:
+            self._hass.loop.call_soon_threadsafe(
+                self._on_boiler_observation, observation
+            )
+
+        boiler_stats: dict[str, Any] = {}
+        result = extract_boiler_status(message.payload, boiler_stats)
+        for key in boiler_stats:
+            _bump(self.stats, f"boiler_{key}")
+        if result is None:
+            return
+        if self._on_boiler_reported is None:
+            _bump(self.stats, "boiler_dropped_no_handler")
+            return
+        physical_id, status = result
         self._hass.loop.call_soon_threadsafe(
-            self._on_boiler_observation, observation
+            self._on_boiler_reported, physical_id, status
         )
 
     def _handle_airone_message(self, message: Any) -> None:

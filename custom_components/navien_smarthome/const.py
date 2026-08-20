@@ -56,14 +56,13 @@ SERVICE_AIRONE: Final = 300
 SERVICE_SCADA: Final = 400
 SERVICE_HOMEAUTO: Final = 500
 
-# 보일러(100)는 매트와 체계가 다르다 — 상태 모델이 컨트롤러 종류별로 갈리고
-# (`GetStatusData` 3,500줄 + 1st/2nd/NRM35), 각방 제어가 비트마스크이며 온도값이
-# 모델별로 인코딩된다(`decodeTempValueForModel`). 재현을 잘못하면 엉뚱한 온도가 간다.
-SUPPORTED_SERVICE_CODES: Final = (SERVICE_MATE, SERVICE_AIRONE)
+# 보일러(100)는 **읽기 전용 지원**이다. 실측 상태에서 확인된 센서값만 연다.
+# 제어는 컨트롤러 종류별 모델과 각방 비트마스크, 모델별 온도 인코딩을 더 확인하기
+# 전까지 닫는다. 재현을 잘못하면 엉뚱한 난방·온수 온도가 실제 기기에 전송된다.
+SUPPORTED_SERVICE_CODES: Final = (SERVICE_BOILER, SERVICE_MATE, SERVICE_AIRONE)
 
-# 제보를 받아 지원을 넓힐 대상. 진단 내보내기에 **원본을 전부** 담고 제보를 요청한다.
-# 지원을 약속하는 목록이 아니다 — 데이터를 모아야 판단이 되는 목록이다.
-REPORT_WANTED_SERVICE_CODES: Final = (SERVICE_BOILER,)
+# 제보만 받고 엔티티는 만들지 않는 종류. 현재는 없다.
+REPORT_WANTED_SERVICE_CODES: Final = ()
 
 # 범위 밖. 제보를 요청하지 않고, 진단에도 요약만 남긴다.
 OUT_OF_SCOPE_REASONS: Final = {
@@ -71,13 +70,8 @@ OUT_OF_SCOPE_REASONS: Final = {
     SERVICE_HOMEAUTO: "월패드·로비폰은 서버 체계가 완전히 달라 범위가 아닙니다",
 }
 
-# 제보를 요청할 때 함께 알릴 현황. 낙관도 비관도 하지 않는다.
-REPORT_WANTED_NOTES: Final = {
-    SERVICE_BOILER: (
-        "상태 모델이 컨트롤러 종류별로 갈리고 각방 제어가 비트마스크로 인코딩되어 "
-        "있어 매트보다 오래 걸립니다. 다만 자료를 모으는 중입니다"
-    ),
-}
+# 제보를 요청할 때 함께 알릴 현황.
+REPORT_WANTED_NOTES: Final = {}
 
 SERVICE_NAMES: Final = {
     SERVICE_BOILER: "보일러",
@@ -89,9 +83,9 @@ SERVICE_NAMES: Final = {
 
 # MQTT 구독 토픽 접두사. 앱의 `HomeViewModel` 이 `/{접두사}/#` 로 구독한다 —
 # `smarttok`(보일러) `mate` `airone` `scada` `homeauto` 다섯 개가 전부다.
-# 매트·에어원은 상태 해석까지 한다. 보일러 ``smarttok`` 은 **관찰 구독만** 한다.
-# 토픽을 받는다고 지원 코드에 넣지 않는다 — 구조를 확인하기 전에는 엔티티도
-# 제어도 만들지 않는다. ``SUPPORTED_SERVICE_CODES`` 에 보일러가 없는 것이 안전장치다.
+# 세 종류 모두 상태를 해석한다. 보일러 ``smarttok`` 은 **읽기 전용**이며 제어
+# API를 만들지 않는다. 운전 모드와 플래그의 의미가 확인되기 전에는 숫자 원문만
+# 진단에 남기고, 확인된 온도·습도·오류만 엔티티로 낸다.
 #
 # 에어원 **제어**는 이 체계가 아니라 `AIRONE_TOPIC_FMT` 를 쓴다. 구독만 여기다.
 TOPIC_PREFIX: Final = {

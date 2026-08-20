@@ -3,9 +3,8 @@
 설정 → 기기 및 서비스 → 나비엔 스마트 → ⋮ → `통계정보 다운로드` 로 받는다 (한국어 번역이 「통계」다. 원문 Download diagnostics).
 사용자가 무엇을 붙여야 할지 몰라도 되게 하는 것이 목적이다.
 
-**환기청정은 원본을 전부 담는다** — 지원을 넓히려면 그게 유일한 근거다.
-범위 밖 기기(보일러·상업용·월패드)는 요약만 남긴다. 쓰지 않을 데이터를
-내보낼 이유가 없다.
+**환기청정·보일러는 원본을 전부 담는다** — 지원을 넓히려면 그게 유일한 근거다.
+범위 밖 기기(상업용·월패드)는 요약만 남긴다. 쓰지 않을 데이터를 내보낼 이유가 없다.
 
 식별자는 전부 가린다. 별칭도 가린다 — 사람 이름이 들어가는 경우가 많다.
 """
@@ -38,16 +37,22 @@ TO_REDACT = {
     "refreshToken",
     "accountId",
     "clientId",
+    "clientID",
     "defaultClientId",
     "deviceId",
     "eventId",
     "localIp",
     "mac",
+    "macAddress",
     "mqttTopicKey",
     "nickName",
     "regionCode",
     "sessionId",
+    "sessionID",
     "ssid",
+    "requestTopic",
+    "responseTopic",
+    "boilerControllerSerialNumber",
     "thingArn",
     "thingId",
     "thingName",
@@ -132,6 +137,9 @@ async def async_get_config_entry_diagnostics(
         "airone_entities": [
             _airone_view(device, device.device_id in coordinator.restored_devices)
             for device in coordinator.airone.values()
+        ],
+        "boiler_entities": [
+            _boiler_view(device) for device in coordinator.boilers.values()
         ],
         "supported_devices": supported,
         # 이 항목이 비어 있지 않으면 이슈에 그대로 붙여 주세요.
@@ -262,6 +270,30 @@ def _numbers_only(raw: Any) -> dict[str, Any]:
         key: value
         for key, value in raw.items()
         if isinstance(value, (int, float, bool)) and key not in TO_REDACT
+    }
+
+
+def _boiler_view(device: Any) -> dict[str, Any]:
+    """보일러의 해석 결과. 식별값 없이 배율과 상태 수신 여부를 검증한다."""
+    return {
+        "model_code": device.model_code,
+        "model_name": device.model_name,
+        "available": device.available,
+        "status_received": bool(device.status),
+        "status_keys": sorted(device.status),
+        "operation_mode": device.operation_mode,
+        "error_code": device.error_code,
+        "sub_error_code": device.sub_error_code,
+        "indoor_temperature": device.indoor_temperature,
+        "supply_temperature": device.supply_temperature,
+        "return_temperature": device.return_temperature,
+        "hot_water_temperature": device.hot_water_temperature,
+        "ondol_target_temperature": device.ondol_target_temperature,
+        "hot_water_target_temperature": device.hot_water_target_temperature,
+        "indoor_humidity": device.indoor_humidity,
+        # 의미가 아직 확정되지 않은 플래그는 숫자 원문만 남긴다.
+        "status_numbers": _numbers_only(device.status),
+        "feature_numbers": _numbers_only(device.feature),
     }
 
 

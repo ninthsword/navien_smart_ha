@@ -54,7 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) 
     # 구세대는 상태 요청에 답하지 않는다. 마지막으로 알던 값을 먼저 채운다.
     await coordinator.async_restore_state()
 
-    if not coordinator.data and not coordinator.airone:
+    if not coordinator.data and not coordinator.airone and not coordinator.boilers:
         _LOGGER.warning(
             "home %s 에서 지원 가능한 기기를 찾지 못했습니다. "
             "건너뛴 기기가 있으면 위 경고를 확인해 주세요.",
