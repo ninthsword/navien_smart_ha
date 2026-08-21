@@ -334,6 +334,20 @@ def _boiler_view(device: Any) -> dict[str, Any]:
         "gas_arrays": sorted(
             key for key in device.gas_meter if key.startswith("gasMeter")
         ),
+        "outside_temperature": device.outside_temperature,
+        "hot_water_flow_rate": device.hot_water_flow_rate,
+        "heating_flow_rate": device.heating_flow_rate,
+        "hot_water_running": device.hot_water_running,
+        "fault_status": device.fault_status,
+        "heating_intensity": device.heating_intensity,
+        "repeat_reservation_interval": device.repeat_reservation_interval,
+        "day_cycle_reservation_length": (
+            None if device.day_cycle_reservation is None
+            else len(device.day_cycle_reservation)
+        ),
+        # 뜻을 아직 모르는 명령 코드를 알아내는 실마리. 앱에서 운전모드를 바꾸면
+        # 룸콘이 그 명령 코드를 상태로 되돌려준다 — 추측 없이 확인하는 길이다.
+        "observed_commands": dict(sorted(device.observed_commands.items())),
         "gas_total_month": device.gas_total_month,
         "gas_heating_month": device.gas_heating_month,
         "gas_hot_water_month": device.gas_hot_water_month,

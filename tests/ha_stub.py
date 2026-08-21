@@ -129,7 +129,9 @@ stub(
     "homeassistant.components.binary_sensor",
     pkg=True,
     BinarySensorEntity=Base,
-    BinarySensorDeviceClass=enum(HEAT="heat", PROBLEM="problem", LOCK="lock"),
+    BinarySensorDeviceClass=enum(
+        HEAT="heat", PROBLEM="problem", LOCK="lock", RUNNING="running"
+    ),
 )
 stub("homeassistant.components.select", pkg=True, SelectEntity=Base)
 stub(

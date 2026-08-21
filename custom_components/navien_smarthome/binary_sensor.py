@@ -7,12 +7,14 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice
+from .boiler import BoilerDevice
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, NavienSmartEntity
+from .entity import AironeEntity, BoilerEntity, NavienSmartEntity
 from .models import NavienDevice
 
 
@@ -32,6 +34,11 @@ async def async_setup_entry(
     entities.extend(
         AironeErrorProblem(coordinator, airone) for airone in coordinator.airone.values()
     )
+
+    for boiler in coordinator.boilers.values():
+        entities.append(BoilerHotWaterRunning(coordinator, boiler))
+        entities.append(BoilerFaultProblem(coordinator, boiler))
+
     async_add_entities(entities)
 
 
@@ -77,6 +84,63 @@ class NavienSmartErrorProblem(NavienSmartEntity, BinarySensorEntity):
         if device is None or device.error_code is None:
             return None
         return device.error_code != 0
+
+
+class BoilerHotWaterRunning(BoilerEntity, BinarySensorEntity):
+    """지금 온수를 쓰고 있는지.
+
+    ``DHWUse`` 는 앱이 온수 기능 스위치에 쓰는 것과 같은 1=끔·2=켬 값이다.
+    수도를 열면 켜지므로 샤워·설거지 감지에 쓸 수 있다.
+    """
+
+    _attr_name = "온수 사용 중"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_icon = "mdi:shower-head"
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_hot_water_running"
+
+    @property
+    def is_on(self) -> bool | None:
+        device = self.device
+        return None if device is None else device.hot_water_running
+
+    @property
+    def extra_state_attributes(self) -> dict[str, bool] | None:
+        device = self.device
+        if device is None or (sustained := device.hot_water_sustained) is None:
+            return None
+        return {"연속 사용": sustained}
+
+
+class BoilerFaultProblem(BoilerEntity, BinarySensorEntity):
+    """``faultStatus1`` · ``faultStatus2`` 중 하나라도 0 이 아니면 문제.
+
+    각 비트의 뜻은 모른다. 원시값은 속성으로 남겨 제보 때 대조할 수 있게 한다.
+    """
+
+    _attr_name = "고장 상태"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_fault_status"
+
+    @property
+    def is_on(self) -> bool | None:
+        device = self.device
+        if device is None or (status := device.fault_status) is None:
+            return None
+        return any(status)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int] | None:
+        device = self.device
+        if device is None or (status := device.fault_status) is None:
+            return None
+        return {"faultStatus1": status[0], "faultStatus2": status[1]}
 
 
 class AironeErrorProblem(AironeEntity, BinarySensorEntity):

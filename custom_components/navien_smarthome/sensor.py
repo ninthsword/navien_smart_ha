@@ -81,8 +81,19 @@ async def async_setup_entry(
                 ("hot_water_temperature", "온수 온도", True),
                 ("ondol_target_temperature", "온돌 설정 온도", False),
                 ("hot_water_target_temperature", "온수 설정 온도", False),
+                ("outside_temperature", "외기 온도", True),
             )
         )
+        entities.extend(
+            BoilerFlowRateSensor(coordinator, boiler, key, label)
+            for key, label in (
+                ("hot_water_flow_rate", "온수 유량"),
+                ("heating_flow_rate", "난방 유량"),
+            )
+        )
+        entities.append(BoilerWifiSignalSensor(coordinator, boiler))
+        entities.append(BoilerHeatingIntensitySensor(coordinator, boiler))
+        entities.append(BoilerReservationSensor(coordinator, boiler))
         entities.append(BoilerHumiditySensor(coordinator, boiler))
         entities.append(BoilerModeSensor(coordinator, boiler))
         entities.append(BoilerErrorSensor(coordinator, boiler))
@@ -179,6 +190,117 @@ class BoilerTemperatureSensor(BoilerEntity, SensorEntity):
     def native_value(self) -> float | None:
         device = self.device
         return None if device is None else getattr(device, self._key)
+
+
+class BoilerFlowRateSensor(BoilerEntity, SensorEntity):
+    """난방·온수 유량. 단위는 확인하지 못해 분당 리터로만 표시한다."""
+
+    _attr_native_unit_of_measurement = "L/min"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:waves-arrow-right"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: BoilerDevice,
+        key: str,
+        label: str,
+    ) -> None:
+        super().__init__(coordinator, device)
+        self._key = key
+        self._attr_name = label
+        self._attr_unique_id = f"{device.device_id}_{key}"
+
+    @property
+    def native_value(self) -> float | None:
+        device = self.device
+        return None if device is None else getattr(device, self._key)
+
+
+class BoilerWifiSignalSensor(BoilerEntity, SensorEntity):
+    """룸콘 Wi-Fi 신호. **단위를 확인하지 못해 숫자만 남긴다.**"""
+
+    _attr_name = "Wi-Fi 신호"
+    _attr_icon = "mdi:wifi"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_wifi_rssi"
+
+    @property
+    def native_value(self) -> int | None:
+        device = self.device
+        return None if device is None else device.wifi_rssi
+
+
+class BoilerHeatingIntensitySensor(BoilerEntity, SensorEntity):
+    """난방 강도 설정. 원시 단계 값만 보여주고 이름을 붙이지 않는다.
+
+    앱과 설명서에서 단계 이름을 확인하지 못했고, 서버가 준 범위도 최소가 최대보다
+    커서(min 3 · max 1) 방향을 정할 수 없다. 뜻이 확인되면 그때 이름을 붙인다.
+    """
+
+    _attr_name = "난방 강도"
+    _attr_icon = "mdi:fire"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_heating_intensity"
+
+    @property
+    def native_value(self) -> int | None:
+        device = self.device
+        return None if device is None else device.heating_intensity
+
+
+class BoilerReservationSensor(BoilerEntity, SensorEntity):
+    """예약 설정을 읽기만 한다.
+
+    **바꾸지 않는다.** 예약은 시간표 전체를 한 번에 덮는 별도 프로토콜이라,
+    잘못 보내면 실제 예약을 지운다. 지금 무엇이 잡혀 있는지 보는 것까지가
+    안전하게 할 수 있는 일이다.
+    """
+
+    _attr_name = "예약"
+    _attr_icon = "mdi:calendar-clock"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_reservation"
+
+    @property
+    def native_value(self) -> str | None:
+        device = self.device
+        if device is None:
+            return None
+        enabled = [
+            label
+            for label, key in (
+                ("주간", "programReservationUse"),
+                ("빠른온수", "fastDHWReservationUse"),
+            )
+            if device.reservation_enabled(key)
+        ]
+        return ", ".join(enabled) if enabled else "없음"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        if device is None:
+            return None
+        attrs: dict[str, Any] = {}
+        if (interval := device.repeat_reservation_interval) is not None:
+            attrs["반복 주기"] = f"{interval[0]}시간 {interval[1]}분"
+        if (table := device.day_cycle_reservation) is not None:
+            # 각 자리의 뜻을 모르므로 해석하지 않고 원문 그대로 남긴다.
+            attrs["24시간 예약 원문"] = table
+        return attrs or None
 
 
 class BoilerHumiditySensor(BoilerEntity, SensorEntity):

@@ -205,6 +205,10 @@ class BoilerDevice:
     # 올리는 동안에는 폴링하지 않고, 양방향 통신이 5분간 없을 때만 상태를 묻는다.
     last_communication_at: float | None = None
     gas_received_at: float | None = None
+    # 룸콘이 마지막으로 처리한 명령 코드를 상태가 되돌려준다. 아직 뜻을 모르는
+    # 명령(운전모드 변경 등)을 추측 없이 알아내는 유일한 길이라, 본 적 있는
+    # 코드를 모아 진단에 남긴다. 값은 프로토콜 상수이지 식별정보가 아니다.
+    observed_commands: dict[int, int] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, raw: dict[str, Any]) -> BoilerDevice | None:
@@ -250,6 +254,9 @@ class BoilerDevice:
         if update:
             self.status.update(update)
             self.status_received_at = stamp
+            if (command := _integer(update.get("command"))) is not None:
+                seen = self.observed_commands
+                seen[command] = seen.get(command, 0) + 1
         self.last_communication_at = stamp
 
     def note_communication(self, *, now: float | None = None) -> None:
@@ -389,6 +396,103 @@ class BoilerDevice:
         except KeyError:
             return None
         value = _integer(self.status.get(status_key))
+        return None if value not in (1, 2) else value == 2
+
+    @property
+    def outside_temperature(self) -> float | None:
+        """외기 온도.
+
+        **feature 의 ``outsideTemperatureDisplayUse`` 를 조건으로 쓰지 않는다.**
+        status 의 ``*Use`` 는 1=끔·2=켬이지만 feature 쪽 같은 이름의 값은 뜻이
+        다르다 — 이 기기는 온수를 분명히 쓰는데도 ``hotWaterUse`` 가 1 이다.
+        근거 없는 플래그로 엔티티를 막았다가 실제로 쓰는 기기에서 사라지는 일이
+        `powerCtrl` 에서 이미 있었다(v0.17.0). 값이 오면 만든다.
+
+        실측: 응답이 260 → 270 으로 오전 내내 올랐고, 같은 시각 동네 기상 관측이
+        25.4℃ 였다. 0.1℃ 단위로 읽으면 26.0 → 27.0 이다.
+        """
+        return _tenth(self.status.get("outsideTemperature"))
+
+    @property
+    def hot_water_flow_rate(self) -> float | None:
+        """온수 유량(L/분). 다른 0.1 단위 값과 같은 배율로 읽는다."""
+        return _tenth(self.status.get("DHWInternalFlowRate"))
+
+    @property
+    def heating_flow_rate(self) -> float | None:
+        """난방 유량(L/분)."""
+        return _tenth(self.status.get("heatFlowRate"))
+
+    @property
+    def wifi_rssi(self) -> int | None:
+        """룸콘 Wi-Fi 신호 세기. 서버가 알려주는 원시값 그대로다.
+
+        단위를 확인하지 못했다 — dBm 의 절댓값인지 백분율인지 모른다. 그래서
+        단위를 붙이지 않고 숫자만 진단으로 남긴다.
+        """
+        return _integer(self.status.get("wifiRssi"))
+
+    @property
+    def hot_water_running(self) -> bool | None:
+        """지금 온수를 쓰고 있는지.
+
+        ``fastDHWUse`` · ``smartFastDHW`` · ``DHWBoost`` 와 같은 1=끔·2=켬 값이다.
+        """
+        value = _integer(self.status.get("DHWUse"))
+        return None if value not in (1, 2) else value == 2
+
+    @property
+    def hot_water_sustained(self) -> bool | None:
+        """온수 사용이 이어지고 있는지. ``DHWUse`` 와 같은 인코딩이다."""
+        value = _integer(self.status.get("DHWUseSustained"))
+        return None if value not in (1, 2) else value == 2
+
+    @property
+    def fault_status(self) -> tuple[int, int] | None:
+        """``faultStatus1`` · ``faultStatus2`` 비트묶음.
+
+        각 비트의 뜻은 모른다. 0 이 아니면 무언가 걸렸다는 것만 알린다 —
+        ``errorCode`` 와는 별개 필드다.
+        """
+        first = _integer(self.status.get("faultStatus1"))
+        second = _integer(self.status.get("faultStatus2"))
+        if first is None and second is None:
+            return None
+        return (first or 0, second or 0)
+
+    @property
+    def heating_intensity(self) -> int | None:
+        """난방 강도 설정. **원시값 그대로 읽기만 한다.**
+
+        NCB753 계열 설명서에서 단계 이름과 순서를 확인하지 못했고, 서버가 주는
+        범위도 ``heatingIntensityMin: 3`` · ``heatingIntensityMax: 1`` 로 최소가
+        최대보다 커서 방향조차 확정할 수 없다. 이름을 붙이거나 제어를 열지
+        않는다.
+        """
+        return _integer(self.status.get("heatingIntensityModeSetting"))
+
+    @property
+    def repeat_reservation_interval(self) -> tuple[int, int] | None:
+        """반복 예약 주기 (시, 분)."""
+        hour = _integer(self.status.get("timeCycleReservationSettingHour"))
+        minute = _integer(self.status.get("timeCycleReservationSettingMinute"))
+        if hour is None and minute is None:
+            return None
+        return (hour or 0, minute or 0)
+
+    @property
+    def day_cycle_reservation(self) -> str | None:
+        """24시간 예약 시간표 원문.
+
+        실기기에서 24자 문자열로 온다 — 한 시간에 한 자리로 보이지만 각 자리의
+        뜻은 확인하지 못했다. 해석하지 않고 원문만 남긴다.
+        """
+        value = self.status.get("dayCycleReservationSetting")
+        return value if isinstance(value, str) and value else None
+
+    def reservation_enabled(self, key: str) -> bool | None:
+        """예약 사용 여부. ``programReservationUse`` 계열의 1=끔·2=켬."""
+        value = _integer(self.status.get(key))
         return None if value not in (1, 2) else value == 2
 
     @property
