@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
@@ -279,6 +280,20 @@ class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
         return None if device is None else device.gas_total_month
 
     @property
+    def last_reset(self) -> datetime | None:
+        """이번 주기가 시작한 시각 — 이 달 1일 자정.
+
+        ``TOTAL`` 은 **``last_reset`` 이 바뀔 때만** 주기가 끝난 것으로 본다
+        (HA `sensor/recorder.py`). 이 값을 내보내지 않으면 월말에 값이 0 으로
+        돌아갈 때 리셋이 아니라 감소로 읽혀 장기 통계 누적에서 그 달치가 통째로
+        빠진다.
+        """
+        device = self.device
+        if device is None or (start := device.gas_month_start) is None:
+            return None
+        return dt_util.start_of_local_day(start)
+
+    @property
     def extra_state_attributes(self) -> dict[str, float] | None:
         device = self.device
         if device is None:
@@ -314,6 +329,11 @@ class BoilerDailyGasSensor(BoilerEntity, SensorEntity):
     def native_value(self) -> float | None:
         values = self._today_values()
         return None if values is None else values[0]
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """오늘 자정. 월간 센서와 같은 이유로 반드시 내보내야 한다."""
+        return dt_util.start_of_local_day()
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:

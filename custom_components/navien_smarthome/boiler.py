@@ -137,6 +137,52 @@ def _bump(stats: dict[str, Any] | None, key: str) -> None:
         stats[key] = int(stats.get(key) or 0) + 1
 
 
+@dataclass(frozen=True)
+class GasUsageBucket:
+    """가스 사용량 한 칸. ``start`` 는 그 칸이 시작하는 현지 날짜다."""
+
+    start: date
+    monthly: bool
+    total: float
+    heating: float
+    hot_water: float
+
+
+def _gas_bucket(row: dict[str, Any], *, monthly: bool) -> GasUsageBucket | None:
+    """가스 배열의 행 하나를 사용량 칸으로 바꾼다.
+
+    아직 오지 않은 날·달은 세 값이 모두 ``null`` 로 온다(실기기 응답에서 확인).
+    그런 행은 사용량 0 이 아니라 **자료 없음**이라 통계로 만들지 않는다.
+    """
+    year = _integer(row.get("year"))
+    month = _integer(row.get("month"))
+    if year is None or month is None or not 1 <= month <= 12:
+        return None
+    day = _integer(row.get("day"))
+    if monthly:
+        # 월별 배열은 모든 행이 day=0 이다. 일별 행이 섞여 오면 뜻을 모르므로 버린다.
+        if day not in (0, None):
+            return None
+        start = date(year, month, 1)
+    else:
+        if day is None or not 1 <= day <= 31:
+            return None
+        try:
+            start = date(year, month, day)
+        except ValueError:
+            return None
+    total = _tenth(row.get("gasMeter"))
+    if total is None:
+        return None
+    return GasUsageBucket(
+        start=start,
+        monthly=monthly,
+        total=total,
+        heating=_tenth(row.get("heatGasMeter")) or 0.0,
+        hot_water=_tenth(row.get("hotWaterGasMeter")) or 0.0,
+    )
+
+
 @dataclass
 class BoilerDevice:
     """REST 기기 정보와 MQTT 상태를 합친 보일러."""
@@ -346,6 +392,21 @@ class BoilerDevice:
         return None if value not in (1, 2) else value == 2
 
     @property
+    def gas_month_start(self) -> date | None:
+        """이번 달 누적값이 0으로 돌아간 시점 — 서버가 말한 달의 1일.
+
+        벽시계로 계산하지 않는다. 달이 바뀌어도 다음 가스 응답이 오기 전까지는
+        아직 지난달 누적값을 들고 있어서, 그 값의 주기 시작을 잘못 옮기면 장기
+        통계가 한 달치를 통째로 잃는다.
+        """
+        for row in self._gas_rows("gasMeterThisMonth"):
+            year = _integer(row.get("year"))
+            month = _integer(row.get("month"))
+            if year is not None and month is not None:
+                return date(year, month, 1)
+        return None
+
+    @property
     def gas_total_month(self) -> float | None:
         return _tenth(self.gas_meter.get("thisYearMonthTotalGasUsage"))
 
@@ -383,6 +444,42 @@ class BoilerDevice:
         # 앱 차트도 해당 월 배열에 빠진 날짜는 사용량 0으로 그린다. 다른 월의
         # 오래된 응답이면 0으로 단정하지 않고 unknown을 유지한다.
         return (0.0, 0.0, 0.0) if same_month else None
+
+    def _gas_rows(self, key: str) -> list[dict[str, Any]]:
+        rows = self.gas_meter.get(key)
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
+    def gas_history(self) -> list[GasUsageBucket]:
+        """가스 응답의 네 배열을 하나의 시간순 사용량 목록으로 합친다.
+
+        앱의 가스 사용량 화면이 그리는 것과 같은 자료다. 한 번의 조회 응답에
+        **일별 두 달치**(``gasMeterLastMonth`` · ``gasMeterThisMonth``)와
+        **월별 두 해치**(``gasMeterLastYear`` · ``gasMeterThisYear``)가 함께 온다.
+
+        일별과 월별이 겹치는 달은 **일별만 남긴다.** 같은 사용량을 두 번 세지
+        않기 위해서다. ``day`` 가 0 인 행이 그 달 전체의 합계라는 것은 실기기
+        응답에서 확인했다 — 월별 배열은 12 개 행 모두 ``day: 0`` 이다.
+        """
+        daily: dict[date, GasUsageBucket] = {}
+        for key in ("gasMeterLastMonth", "gasMeterThisMonth"):
+            for row in self._gas_rows(key):
+                if (bucket := _gas_bucket(row, monthly=False)) is not None:
+                    daily[bucket.start] = bucket
+
+        covered = {(bucket.start.year, bucket.start.month) for bucket in daily.values()}
+        monthly: dict[date, GasUsageBucket] = {}
+        for key in ("gasMeterLastYear", "gasMeterThisYear"):
+            for row in self._gas_rows(key):
+                bucket = _gas_bucket(row, monthly=True)
+                if bucket is None:
+                    continue
+                if (bucket.start.year, bucket.start.month) in covered:
+                    continue
+                monthly[bucket.start] = bucket
+
+        return sorted((monthly | daily).values(), key=lambda bucket: bucket.start)
 
     def _identity_parts(self) -> tuple[str, str, str]:
         """앱의 ``deviceId.substring(0, 12/16)`` 분기를 그대로 적용한다."""

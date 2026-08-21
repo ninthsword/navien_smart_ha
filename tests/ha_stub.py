@@ -148,6 +148,17 @@ stub(
     ),
     SensorStateClass=enum(MEASUREMENT="measurement", TOTAL="total"),
 )
+stub("homeassistant.components.recorder", pkg=True, get_instance=lambda hass: None)
+stub("homeassistant.components.recorder.models", pkg=True, StatisticData=dict, StatisticMetaData=dict)
+stub(
+    "homeassistant.components.recorder.models.statistics",
+    StatisticMeanType=enum(NONE=0, ARITHMETIC=1, CIRCULAR=2),
+)
+stub(
+    "homeassistant.components.recorder.statistics",
+    async_add_external_statistics=lambda *a, **kw: None,
+    statistics_during_period=lambda *a, **kw: {},
+)
 stub(
     "homeassistant.components.number",
     pkg=True,

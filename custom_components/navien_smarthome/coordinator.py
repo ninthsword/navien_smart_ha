@@ -36,6 +36,7 @@ from .boiler import (
     BOILER_SILENCE_REFRESH_SECONDS,
     BoilerDevice,
 )
+from .gas_statistics import async_import_gas_statistics
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
     AIRONE_CMD_CHANGE_MODE,
@@ -134,6 +135,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.boiler_silence_failures = 0
         self.boiler_gas_requests = 0
         self.boiler_gas_failures = 0
+        self.boiler_gas_statistics_failures = 0
         # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
         # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
         # 전원·모드·풍량이 모두 비어 보인다.
@@ -771,6 +773,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self._schedule_boiler_silence_check(device)
         if is_gas_update:
             self._schedule_boiler_gas_refresh(device)
+            self.config_entry.async_create_background_task(
+                self.hass,
+                self._async_import_gas_statistics(device),
+                f"navien gas statistics {device.device_seq}",
+            )
         self.last_update_success = True
         self.async_update_listeners()
 
@@ -908,6 +915,14 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             raise HomeAssistantError(str(err)) from err
         await self._async_send_boiler_payload(device, payload)
         self.boiler_gas_requests += 1
+
+    async def _async_import_gas_statistics(self, device: BoilerDevice) -> None:
+        """가스 이력을 장기 통계에 반영한다. 실패해도 상태 갱신을 막지 않는다."""
+        try:
+            await async_import_gas_statistics(self.hass, device)
+        except Exception:  # noqa: BLE001 - 통계 실패로 통합이 멈추면 안 된다
+            self.boiler_gas_statistics_failures += 1
+            _LOGGER.exception("가스 장기 통계를 반영하지 못했습니다")
 
     @callback
     def _schedule_boiler_gas_refresh(self, device: BoilerDevice) -> None:

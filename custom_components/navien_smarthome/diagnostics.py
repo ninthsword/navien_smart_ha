@@ -132,6 +132,9 @@ async def async_get_config_entry_diagnostics(
             "boiler_gas_timers": len(coordinator._boiler_gas_unsubs),
             "boiler_gas_requests": coordinator.boiler_gas_requests,
             "boiler_gas_failures": coordinator.boiler_gas_failures,
+            "boiler_gas_statistics_failures": (
+                coordinator.boiler_gas_statistics_failures
+            ),
         },
         "counts": {
             "total": len(coordinator.raw_devices),
@@ -305,6 +308,8 @@ def _boiler_view(device: Any) -> dict[str, Any]:
         "hot_water_target_temperature": device.hot_water_target_temperature,
         "indoor_humidity": device.indoor_humidity,
         "gas_received": bool(device.gas_meter),
+        # 통계로 넣은 칸 수. 날짜는 식별정보가 아니지만 값 자체는 남기지 않는다.
+        "gas_history_buckets": len(device.gas_history()),
         "gas_total_month": device.gas_total_month,
         "gas_heating_month": device.gas_heating_month,
         "gas_hot_water_month": device.gas_hot_water_month,
