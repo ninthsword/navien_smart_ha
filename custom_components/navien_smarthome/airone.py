@@ -366,6 +366,18 @@ class AironeDevice:
     air_sensor_empty: int = field(repr=False, default=0)
     air_sensor_errors: int = field(repr=False, default=0)
     air_sensor_unchanged: int = field(repr=False, default=0)
+    # **한 번이라도 값이 온 공기질 종류.** 엔티티를 만들 때 쓴다.
+    #
+    # 값이 아니라 종류만 기억하는 이유가 있다. 세션 안에서는 빈 응답이 앞서 받은
+    # 값을 지우지 않게 겹쳐 쓰지만(`set_air_sensors`), 재시작하면 그 보호가
+    # 사라진다 — 엔티티는 시작할 때 딱 한 번 만들어지므로, 그 순간 서버가
+    # 온도·습도만 주면 **나머지 공기질 센서가 통째로 사라진다.** 에어모니터가
+    # 잠깐 빠진 채로 HA 를 재시작하면 CO₂ 이력이 거기서 끊긴다.
+    #
+    # 그래서 종류만 저장해 두고 다음 시작 때 되살린다. **값은 되살리지
+    # 않는다** — 며칠 지난 수치를 현재값처럼 보여주는 것이 「알 수 없음」보다
+    # 나쁘다. 엔티티만 있으면 값이 다시 올 때 그대로 이어진다.
+    known_sensor_kinds: tuple[str, ...] = field(repr=False, default=())
     humidity_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
 
     # -- 생성 --------------------------------------------------------------
@@ -1005,6 +1017,7 @@ class AironeDevice:
         changed = merged != self.air_sensors
         self.air_sensors = merged
         self.sensor_kinds = tuple(k for k in AIRONE_SENSOR_KINDS if k in merged)
+        self.remember_sensor_kinds(merged)
         if changed:
             self.air_sensor_stamp = time.monotonic()
             self.air_sensor_unchanged = 0
@@ -1013,6 +1026,21 @@ class AironeDevice:
             # 서버가 옛 값을 계속 주는 것일 수도 있다 — 세어서 판단에 넘긴다.
             self.air_sensor_unchanged += 1
         return unknown
+
+    def remember_sensor_kinds(self, kinds: Any) -> None:
+        """본 적 있는 공기질 종류에 더한다. 아는 종류만, 표 순서대로 둔다."""
+        seen = set(self.known_sensor_kinds)
+        seen.update(k for k in kinds if k in AIRONE_SENSOR_KINDS)
+        self.known_sensor_kinds = tuple(k for k in AIRONE_SENSOR_KINDS if k in seen)
+
+    @property
+    def entity_sensor_kinds(self) -> tuple[str, ...]:
+        """공기질 엔티티를 만들 종류.
+
+        지금 값이 오는 종류가 아니라 **본 적 있는 종류**를 쓴다. 서버가 이번에
+        일부만 주더라도 엔티티는 남아 있어야 값이 돌아왔을 때 이력이 이어진다.
+        """
+        return self.known_sensor_kinds or self.sensor_kinds
 
     @property
     def wants_air_sensors(self) -> bool:

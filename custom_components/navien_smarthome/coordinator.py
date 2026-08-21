@@ -809,12 +809,22 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.async_update_listeners()
 
     def _async_remember_state(self) -> None:
-        """마지막 상태를 남긴다. 실패해도 동작을 막지 않는다."""
-        snapshot = {
-            device_id: device.reported
-            for device_id, device in self.airone.items()
-            if device.reported
-        }
+        """마지막 상태를 남긴다. 실패해도 동작을 막지 않는다.
+
+        저장 모양이 두 가지다. 처음에는 `{기기: reported}` 였고, 지금은 공기질
+        종류를 함께 남기려고 `{기기: {"reported": ..., "air_kinds": [...]}}` 로
+        쓴다. **읽을 때 둘 다 받는다** — 저장 버전을 올려 migration 을 붙이는
+        것보다, 모양만 보고 가리는 쪽이 되돌리기 쉽다.
+        """
+        snapshot: dict[str, Any] = {}
+        for device_id, device in self.airone.items():
+            entry: dict[str, Any] = {}
+            if device.reported:
+                entry["reported"] = device.reported
+            if device.known_sensor_kinds:
+                entry["air_kinds"] = list(device.known_sensor_kinds)
+            if entry:
+                snapshot[device_id] = entry
         if snapshot:
             self._store.async_delay_save(lambda: snapshot, 5)
 
@@ -831,9 +841,19 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return
         if not isinstance(stored, dict):
             return
-        for device_id, reported in stored.items():
+        for device_id, entry in stored.items():
             device = self.airone.get(device_id)
-            if device is not None and isinstance(reported, dict) and not device.reported:
+            if device is None or not isinstance(entry, dict):
+                continue
+            # 옛 모양은 `reported` 가 통째로 들어 있었다. 새 모양은 한 겹 더 있다.
+            if "reported" in entry or "air_kinds" in entry:
+                reported = entry.get("reported")
+                kinds = entry.get("air_kinds")
+            else:
+                reported, kinds = entry, None
+            if isinstance(kinds, list):
+                device.remember_sensor_kinds(kinds)
+            if isinstance(reported, dict) and reported and not device.reported:
                 device.apply_reported(reported)
                 self.restored_devices.add(device_id)
         if self.restored_devices:

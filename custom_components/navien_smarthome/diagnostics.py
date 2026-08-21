@@ -425,6 +425,12 @@ def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
         "error_code": device.error_code,
         "filters": list(device.filters),
         "air_sensor_kinds": list(device.sensor_kinds),
+        # 지금 값이 오는 종류와 **본 적 있는 종류**가 다르면 서버가 이번 조회에서
+        # 일부를 빼고 준 것이다. 에어모니터가 빠졌을 때 그렇게 온다.
+        "air_sensor_kinds_known": list(device.known_sensor_kinds),
+        "air_sensor_kinds_missing": [
+            kind for kind in device.known_sensor_kinds if kind not in device.sensor_kinds
+        ],
         # **「앱과 값이 다르다」를 가리는 값들.** 공기질은 5분마다 REST 로 다시
         # 읽는데, 빈 응답으로 지우지 않기로 한 뒤로는 갱신이 멈춰도 화면에 옛 값이
         # 그대로 남는다. 아래 셋으로 「방이 조용한 것」과 「우리가 못 읽는 것」을

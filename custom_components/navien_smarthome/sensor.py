@@ -57,7 +57,7 @@ async def async_setup_entry(
         # 에어모니터가 등록돼 있으면 **그 기기 카드에** 붙인다. 앱에서도 별도
         # 부속이고, 본체 카드에 다 몰아넣으면 목록이 길어져 읽기 어렵다.
         monitor = airone.air_monitors[0] if airone.air_monitors else None
-        for kind in airone.sensor_kinds:
+        for kind in airone.entity_sensor_kinds:
             if monitor is not None:
                 entities.append(AironeMonitorSensor(coordinator, airone, monitor, kind))
             else:
@@ -643,9 +643,15 @@ class _AirSensorMixin:
         # tvoc·radon·종합을 등급으로 표시하길래 값이 없다고 봤는데, 실사용
         # 제보로 숫자가 온다는 것이 확인됐다.
         #
-        # 엔티티가 만들어질 땐 첫 조회가 끝나 있어서 값이 이미 있다.
-        raw = device.air_sensors.get(kind) or {}
-        self._numeric = as_number(raw.get("value")) is not None
+        # **값이 아직 없을 수도 있다.** 서버가 이번 조회에서 그 종류를 빼고 준
+        # 경우다(에어모니터가 잠깐 빠지면 그렇게 온다). 그때는 종류를 기억해
+        # 엔티티만 만들어 두는데, 여기서 문자열로 정해 버리면 값이 돌아왔을 때
+        # 단위도 device_class 도 없는 채로 굳는다 — 이력이 끊기는 것보다 나쁘다.
+        # 실기기에서 확인된 아홉 종류가 모두 숫자로 왔으므로 숫자로 본다.
+        raw = device.air_sensors.get(kind)
+        self._numeric = (
+            as_number((raw or {}).get("value")) is not None if raw else True
+        )
         if self._numeric:
             self._attr_state_class = "measurement"
             if unit is not None:
