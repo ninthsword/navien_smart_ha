@@ -47,6 +47,26 @@ BOILER_OPERATION_MODE_NAMES: dict[int, str] = {
     10: "온수 전용",
 }
 
+# 실기기에서 확인한 운전모드 명령. **추측이 아니라 관측이다** — 룸콘은 마지막으로
+# 처리한 명령 코드를 상태의 ``command`` 로 되돌려주므로, 앱에서 그 버튼을 누르면
+# 코드가 드러난다.
+#
+#   0x2000001 = 33554433  전원 끄기      (mode 1 꺼짐)
+#   0x2000004 = 33554436  외출           (mode 4 외출)
+#   0x2000006 = 33554438  온돌 난방 온도  (mode 6 온돌 난방)
+#
+# 하위 자리가 운전모드 값과 맞는다. 다만 **아직 명령을 열지 않는다.** 이 기기에서
+# 외출 명령은 룸콘이 7번 되돌려줬는데도 ``operationMode`` 가 6 에서 바뀌지 않았다.
+# 기기가 받기만 하고 실행하지 않는 명령을 통합이 보내면, 사용자는 눌렀는데 아무
+# 일도 안 일어나는 스위치를 갖게 된다. 어떤 기기가 실제로 실행하는지 확인한 뒤에
+# 연다 — `feature` 의 지원 플래그와 함께 봐야 한다(아래).
+#
+# **동작이 확인된 기능은 예외 없이 `feature` 값이 2 다.** powerUse · ondolUse ·
+# gasUsageUse · fastDHWUse · smartFastDHWUse · DHWBoostUse ·
+# hotWaterTemperatureSettingUse 가 모두 2 이고 전부 실기기에서 동작한다. 반대로
+# 이 기기에서 듣지 않는 외출은 ``gooutUse`` 가 1 이다. 앱의 「온수전용·외출」
+# 버튼이 통째로 안 먹는 것도 ``hotWaterUse`` 가 1 인 것과 맞는다 — 그 값은
+# 「온수 기능」이 아니라 **온수 전용 운전모드** 지원 여부로 읽어야 앞뒤가 맞는다.
 BOILER_TEMPERATURE_CONTROLS: dict[str, tuple[str, int, str]] = {
     # Navien Smart 2.10.4 의 modelCode=20 분기. 이 세 값은 한 묶음이다.
     "hot_water": ("hotwater-temperature", 33554443, "10000000"),

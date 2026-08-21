@@ -162,6 +162,15 @@ r.ok(
     "진단에 남겨 앱 조작으로 코드를 알아낼 수 있게 한다",
 )
 
+boiler_source = source("boiler.py")
+r.ok("0x2000004 = 33554436" in boiler_source, "관측한 외출 명령 코드를 적었다")
+r.ok("추측이 아니라 관측이다" in boiler_source, "어떻게 알아냈는지 적었다")
+r.ok(
+    "33554436" not in source("select.py") and "33554436" not in source("switch.py"),
+    "기기가 실행하지 않는 명령을 제어 엔티티로 열지 않는다",
+)
+r.ok("gooutUse" in boiler_source, "지원 플래그와 함께 봐야 한다는 근거를 적었다")
+
 
 r.section("새 엔티티가 실제로 만들어진다")
 
