@@ -32,7 +32,9 @@ BOILER_GAS_METER_UPDATE = "__gas_meter__"
 
 BOILER_STATE_OFF = "꺼짐"
 BOILER_STATE_IDLE = "대기"
-BOILER_STATE_HEATING = "히팅"
+# 공식 NCB753 설명서가 이 상태를 「연소」로 부른다. 처음에 쓰던 「히팅」은
+# 설명서에도 앱에도 없는 말이었다.
+BOILER_STATE_HEATING = "연소"
 
 # Navien Smart 2.10.4의 NR-67D(modelCode=20) 탭 선택 분기에서 확인했다.
 # 이 값은 현재 연소 여부가 아니라 룸콘에서 선택한 운전 모드다. 실제 가동 여부는
@@ -67,6 +69,47 @@ BOILER_OPERATION_MODE_NAMES: dict[int, str] = {
 # 이 기기에서 듣지 않는 외출은 ``gooutUse`` 가 1 이다. 앱의 「온수전용·외출」
 # 버튼이 통째로 안 먹는 것도 ``hotWaterUse`` 가 1 인 것과 맞는다 — 그 값은
 # 「온수 기능」이 아니라 **온수 전용 운전모드** 지원 여부로 읽어야 앞뒤가 맞는다.
+# 공식 `NCB753` 사용설명서(2025-01-08판) 「12. 자가 진단 조치 방법」 표를 그대로
+# 옮겼다. 추가하거나 짐작한 항목은 없다.
+#
+# **번호를 어떻게 맞췄는지 밝혀 둔다.** 설명서는 `E001` 처럼 적고 서버는 정수로
+# 준다. 이 표는 그 정수를 설명서의 세 자리 번호로 읽는다 — 실기기에서 오류를
+# 재현해 확인한 것이 아니라 두 표기를 맞춘 것이다. 그래서 **이름을 못 찾으면
+# 비워 두고 숫자만 보여준다.** 틀린 이름을 붙이는 것보다 낫다.
+BOILER_ERROR_NAMES: dict[int, str] = {
+    1: "열교환기 과열",
+    3: "불착화",
+    4: "의사 화염",
+    12: "실화",
+    14: "가스 알람",
+    16: "열교환기 과열",
+    26: "버너 이상",
+    30: "배기가스 온도 이상",
+    46: "열교환기 과열 감지기 이상",
+    47: "배기가스 온도 센서 이상",
+    60: "듀얼벤추리 이상",
+    109: "송풍기 회전 수 감지 이상",
+    110: "배기폐쇄",
+    205: "난방 공급 온도 센서 이상",
+    218: "난방 환수 온도 센서 이상",
+    228: "배관 누수",
+    250: "동결 상태",
+    302: "저수위 이상",
+    311: "수위 이상",
+    324: "난방 공급 라인 이상",
+    325: "난방 순환 라인 이상",
+    351: "물 보충 이상",
+    407: "온수 출구 온도 센서 이상",
+    421: "직수 온도 센서 이상",
+    441: "온수 출구 온도 센서 이상",
+    445: "믹싱밸브 이상",
+    515: "컨트롤러 이상",
+    517: "Dip 스위치 설정 이상",
+    594: "EEPROM 이상",
+    615: "입력 및 메모리 이상",
+    792: "환탕 라인 순환 이상",
+}
+
 BOILER_TEMPERATURE_CONTROLS: dict[str, tuple[str, int, str]] = {
     # Navien Smart 2.10.4 의 modelCode=20 분기. 이 세 값은 한 묶음이다.
     "hot_water": ("hotwater-temperature", 33554443, "10000000"),
@@ -513,6 +556,20 @@ class BoilerDevice:
         """
         value = self.status.get("dayCycleReservationSetting")
         return value if isinstance(value, str) and value else None
+
+    @property
+    def error_name(self) -> str | None:
+        """설명서에 적힌 이상 발생 내용. 표에 없는 번호면 아무 이름도 주지 않는다."""
+        code = self.error_code
+        if not code:
+            return None
+        return BOILER_ERROR_NAMES.get(code)
+
+    @property
+    def error_label(self) -> str | None:
+        """설명서 표기와 같은 ``E001`` 형태의 오류 번호."""
+        code = self.error_code
+        return None if not code else f"E{code:03d}"
 
     def reservation_enabled(self, key: str) -> bool | None:
         """예약 사용 여부. ``programReservationUse`` 계열의 1=끔·2=켬."""

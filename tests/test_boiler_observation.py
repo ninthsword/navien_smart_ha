@@ -37,7 +37,7 @@ r.ok(
     "전원·빠른온수·터보온수·설정온도 제어" in source("../../README.md"),
     "README 에 지원 범위를 적었다",
 )
-r.ok("`대기`, `히팅`" in source("../../README.md"), "README 에 상태 센서를 적었다")
+r.ok("`대기`, `연소`" in source("../../README.md"), "README 에 상태 센서를 적었다")
 r.ok("히팅 여부와 관계없이" in source("../../README.md"), "README 에 제어 조건을 적었다")
 
 
@@ -140,12 +140,12 @@ r.ok(device.indoor_humidity == 58.5, "실내 습도는 0.1% 단위다")
 r.ok(device.operation_mode == 6, "원시 모드 코드를 보존한다")
 r.ok(device.operation_mode_name == "온돌 난방", "operationMode=6은 온돌 난방 모드다")
 r.ok(device.operation_busy == 2 and not device.heating_is_idle, "실측 히팅 값 2를 보존한다")
-r.ok(device.operating_state == "히팅", "전원이 켜지고 operationBusy=2면 히팅이다")
+r.ok(device.operating_state == "연소", "전원이 켜지고 operationBusy=2면 연소다")
 device.apply_status({"operationBusy": 1})
 r.ok(device.heating_is_idle, "실측 대기 값 1을 보존한다")
 r.ok(device.operating_state == "대기", "전원이 켜지고 operationBusy=1이면 대기다")
 device.apply_status({"operationBusy": 3})
-r.ok(device.operating_state is None, "모르는 operationBusy 값은 히팅으로 추측하지 않는다")
+r.ok(device.operating_state is None, "모르는 operationBusy 값은 연소로 추측하지 않는다")
 device.apply_status({"operationMode": 1})
 r.ok(device.operating_state == "꺼짐", "operationMode=1이면 꺼짐이다")
 r.ok(device.operation_mode_name == "꺼짐", "operationMode=1의 모드 이름도 꺼짐이다")

@@ -376,9 +376,17 @@ class BoilerErrorSensor(BoilerEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         device = self.device
-        if device is None or device.sub_error_code is None:
+        if device is None:
             return None
-        return {"sub_error_code": device.sub_error_code}
+        attrs: dict[str, Any] = {}
+        if device.sub_error_code is not None:
+            attrs["sub_error_code"] = device.sub_error_code
+        # 설명서와 같은 표기와 이름. 표에 없는 번호면 넣지 않는다.
+        if (label := device.error_label) is not None:
+            attrs["에러코드"] = label
+        if (name := device.error_name) is not None:
+            attrs["이상 발생 내용"] = name
+        return attrs or None
 
 
 class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):

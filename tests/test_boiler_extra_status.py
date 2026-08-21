@@ -176,6 +176,31 @@ r.ok(
 r.ok("gooutUse" in boiler_source, "지원 플래그와 함께 봐야 한다는 근거를 적었다")
 
 
+r.section("설명서에서 옮긴 오류 코드")
+
+from navien_smarthome.boiler import BOILER_ERROR_NAMES, BOILER_STATE_HEATING  # noqa: E402
+
+r.ok(BOILER_STATE_HEATING == "연소", "설명서가 쓰는 말로 운전 상태를 표시한다")
+r.ok(BOILER_ERROR_NAMES[1] == "열교환기 과열", "E001 을 옮겼다")
+r.ok(BOILER_ERROR_NAMES[110] == "배기폐쇄", "세 자리 번호도 옮겼다")
+r.ok(BOILER_ERROR_NAMES[792] == "환탕 라인 순환 이상", "표의 마지막 항목까지 옮겼다")
+r.ok(len(BOILER_ERROR_NAMES) == 31, "설명서 표의 항목 수와 같다")
+
+coded = make_boiler()
+coded.apply_status({"errorCode": 110}, now=300.0)
+r.ok(coded.error_label == "E110", "설명서와 같은 표기를 만든다")
+r.ok(coded.error_name == "배기폐쇄", "이상 발생 내용을 붙인다")
+coded.apply_status({"errorCode": 999}, now=310.0)
+r.ok(coded.error_label == "E999", "모르는 번호도 표기는 만든다")
+r.ok(coded.error_name is None, "표에 없는 번호는 이름을 지어내지 않는다")
+coded.apply_status({"errorCode": 0}, now=320.0)
+r.ok(coded.error_label is None and coded.error_name is None, "정상이면 오류가 없다")
+r.ok(
+    "실기기에서 오류를\n# 재현해 확인한 것이 아니라" in boiler_source,
+    "번호를 어떻게 맞췄는지 밝혔다",
+)
+
+
 r.section("새 엔티티가 실제로 만들어진다")
 
 sensor_setup = source("sensor.py").split("async_add_entities(entities)")[0]
