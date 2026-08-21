@@ -207,6 +207,16 @@ r.ok(
 )
 r.ok('"recorder"' in source("manifest.json"), "recorder 의존을 선언한다")
 
+diagnostics_source = source("diagnostics.py")
+r.ok("gas_history_span" in diagnostics_source, "진단에 이력 구간을 남긴다")
+r.ok("gas_history_daily" in diagnostics_source, "일별·월별 칸 수를 나눠 남긴다")
+r.ok("gas_arrays" in diagnostics_source, "서버가 준 배열 이름을 남긴다")
+r.ok(
+    "「이력」 화면에는 안 나옵니다" in source("../../README.md"),
+    "README 에 이력 화면이 아니라 통계라는 것을 적었다",
+)
+r.ok("statistic-graph" in source("../../README.md"), "README 에 볼 수 있는 카드를 적었다")
+
 
 r.section("근거를 코드에 남겼다")
 

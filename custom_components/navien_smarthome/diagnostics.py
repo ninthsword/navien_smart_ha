@@ -285,6 +285,26 @@ def _numbers_only(raw: Any) -> dict[str, Any]:
     }
 
 
+def _gas_history_view(device: Any) -> dict[str, Any]:
+    """통계로 넣은 이력이 어디부터 어디까지인지.
+
+    「이력이 안 나온다」는 제보에서 제일 먼저 봐야 하는 것이 이 두 줄이다.
+    칸이 0 이면 서버가 배열을 안 준 것이고, 월별만 있고 일별이 0 이면 최근 두
+    달치가 빠진 것이다. 어느 쪽인지에 따라 볼 곳이 다르다.
+    """
+    buckets = device.gas_history()
+    if not buckets:
+        return {"gas_history_buckets": 0}
+    return {
+        "gas_history_buckets": len(buckets),
+        "gas_history_daily": sum(1 for bucket in buckets if not bucket.monthly),
+        "gas_history_monthly": sum(1 for bucket in buckets if bucket.monthly),
+        "gas_history_span": (
+            f"{buckets[0].start.isoformat()}..{buckets[-1].start.isoformat()}"
+        ),
+    }
+
+
 def _boiler_view(device: Any) -> dict[str, Any]:
     """보일러의 해석 결과. 식별값 없이 배율과 상태 수신 여부를 검증한다."""
     communication_age = device.communication_age()
@@ -308,8 +328,12 @@ def _boiler_view(device: Any) -> dict[str, Any]:
         "hot_water_target_temperature": device.hot_water_target_temperature,
         "indoor_humidity": device.indoor_humidity,
         "gas_received": bool(device.gas_meter),
-        # 통계로 넣은 칸 수. 날짜는 식별정보가 아니지만 값 자체는 남기지 않는다.
-        "gas_history_buckets": len(device.gas_history()),
+        # 이력이 통계로 들어갔는지는 「몇 칸이 어느 구간에 걸쳐 있나」로 판단한다.
+        # 날짜 자체는 식별정보가 아니고, 사용량 값은 남기지 않는다.
+        **_gas_history_view(device),
+        "gas_arrays": sorted(
+            key for key in device.gas_meter if key.startswith("gasMeter")
+        ),
         "gas_total_month": device.gas_total_month,
         "gas_heating_month": device.gas_heating_month,
         "gas_hot_water_month": device.gas_hot_water_month,
