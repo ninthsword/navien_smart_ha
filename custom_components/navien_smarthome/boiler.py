@@ -420,16 +420,20 @@ class BoilerDevice:
 
     @property
     def outside_temperature(self) -> float | None:
-        """외기 온도.
+        """외기 온도. **보일러가 잰 값이 아니라 지역 기상 관측값이다.**
 
-        **feature 의 ``outsideTemperatureDisplayUse`` 를 조건으로 쓰지 않는다.**
-        status 의 ``*Use`` 는 1=끔·2=켬이지만 feature 쪽 같은 이름의 값은 뜻이
-        다르다 — 이 기기는 온수를 분명히 쓰는데도 ``hotWaterUse`` 가 1 이다.
-        근거 없는 플래그로 엔티티를 막았다가 실제로 쓰는 기기에서 사라지는 일이
-        `powerCtrl` 에서 이미 있었다(v0.17.0). 값이 오면 만든다.
+        실측 대조로 확인했다. 어느 시점에 이 값이 27.0℃ 였을 때 같은 시각
+        기상청 서울(종로구 송월동) 관측이 **27.0℃ 로 정확히 같았고**, 동네
+        추정치(응암2동)는 25.8℃ 로 달랐다. 지금까지 본 값이 260 · 270 처럼 늘
+        정수 ℃ 인 것도 관측소 값을 그대로 받는 것과 맞는다.
 
-        실측: 응답이 260 → 270 으로 오전 내내 올랐고, 같은 시각 동네 기상 관측이
-        25.4℃ 였다. 0.1℃ 단위로 읽으면 26.0 → 27.0 이다.
+        그래서 **집 마당 기온이 아니다.** 보일러에 외기 센서가 달려 있지 않아도
+        값이 온다. 외기보상 제어(``outsideTemperatureControlUse`` ·
+        ``outsideTemperatureStopUse``)와는 별개다.
+
+        **``outsideTemperatureDisplayUse`` 를 조건으로 쓰지 않는다.** 그 값은
+        룸콘 화면에 외기온도를 띄울지에 대한 것이지 자료가 오는지가 아니다 —
+        이 기기는 그 값이 1 인데도 온도가 정상으로 온다.
         """
         return _tenth(self.status.get("outsideTemperature"))
 

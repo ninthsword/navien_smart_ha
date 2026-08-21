@@ -75,8 +75,12 @@ r.ok(
     "feature 플래그가 꺼져 있어도 값이 오면 읽는다",
 )
 r.ok(
-    "powerCtrl" in source("boiler.py"),
-    "근거 없는 플래그로 엔티티를 막았던 전례를 근거로 적었다",
+    "지역 기상 관측값" in source("boiler.py"),
+    "보일러가 잰 값이 아니라는 것을 적었다",
+)
+r.ok(
+    "집 마당 기온으로 쓰지" in source("../../README.md"),
+    "README 에 집 기온이 아니라고 경고했다",
 )
 device.apply_status({"outsideTemperature": None}, now=110.0)
 r.ok(device.outside_temperature is None, "값이 없으면 추측하지 않는다")
