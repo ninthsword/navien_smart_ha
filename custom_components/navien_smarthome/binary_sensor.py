@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -13,6 +15,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice
 from .boiler import BoilerDevice
+from .const import AIRONE_SENSOR_KINDS
 from .coordinator import NavienSmartCoordinator
 from .entity import AironeEntity, BoilerEntity, NavienSmartEntity
 from .models import NavienDevice
@@ -31,9 +34,10 @@ async def async_setup_entry(
             entities.append(NavienSmartHighTempWarning(coordinator, device))
         entities.append(NavienSmartErrorProblem(coordinator, device))
 
-    entities.extend(
-        AironeErrorProblem(coordinator, airone) for airone in coordinator.airone.values()
-    )
+    for airone in coordinator.airone.values():
+        entities.append(AironeErrorProblem(coordinator, airone))
+        if airone.wants_air_sensors:
+            entities.append(AironeAirDataMissing(coordinator, airone))
 
     for boiler in coordinator.boilers.values():
         entities.append(BoilerHotWaterRunning(coordinator, boiler))
@@ -84,6 +88,58 @@ class NavienSmartErrorProblem(NavienSmartEntity, BinarySensorEntity):
         if device is None or device.error_code is None:
             return None
         return device.error_code != 0
+
+
+class AironeAirDataMissing(AironeEntity, BinarySensorEntity):
+    """전에 오던 공기질 값이 지금 안 오는지.
+
+    **아무 신호가 없던 것이 문제였다.** 에어모니터와 룸콘 사이 통신이 끊기면
+    서버는 온도·습도만 주기 시작하고, 나머지 센서는 값이 멈춘 채 남거나
+    재시작 뒤 `사용할 수 없음` 이 된다. 오류 코드도 안 오고 조회도 성공하므로
+    어디에도 티가 나지 않는다.
+
+    기기가 「센서가 없다」고 말한 적은 없다 — **우리가 전에 받아봤는데 지금은
+    안 온다**는 관찰뿐이다. 그래서 기기 고장이라고 하지 않고 자료가 빠졌다고만
+    알린다.
+    """
+
+    _attr_name = "공기질 자료 끊김"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:air-filter"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: AironeDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_air_data_missing"
+
+    def _missing(self) -> list[str] | None:
+        device = self.device
+        if device is None or not device.known_sensor_kinds:
+            return None
+        return [
+            kind for kind in device.known_sensor_kinds if kind not in device.sensor_kinds
+        ]
+
+    @property
+    def is_on(self) -> bool | None:
+        missing = self._missing()
+        return None if missing is None else bool(missing)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        device = self.device
+        missing = self._missing()
+        if device is None or missing is None:
+            return None
+        attrs: dict[str, Any] = {
+            "빠진 항목": [AIRONE_SENSOR_KINDS[k][0] for k in missing],
+            "받고 있는 항목": [AIRONE_SENSOR_KINDS[k][0] for k in device.sensor_kinds],
+        }
+        # 값이 멈춘 것과 아예 안 오는 것은 다르다. 둘 다 보여준다.
+        if (age := device.air_sensor_age) is not None:
+            attrs["마지막으로 값이 바뀐 뒤(초)"] = age
+        attrs["같은 값 반복 조회"] = device.air_sensor_unchanged
+        return attrs
 
 
 class BoilerHotWaterRunning(BoilerEntity, BinarySensorEntity):

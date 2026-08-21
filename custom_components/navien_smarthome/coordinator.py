@@ -43,6 +43,7 @@ from .const import (
     AIRONE_CMD_POWER,
     AIRONE_CMD_STATUS,
     AIRONE_READBACK_DELAY_SECONDS,
+    AIRONE_SENSOR_KINDS,
     AIRONE_SILENCE_CHECK_SECONDS,
     AIRONE_TOPIC_FMT,
     AIRONE_UPDATE_INTERVAL_SECONDS,
@@ -446,12 +447,41 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 continue
             device.air_sensor_errors = 0
             unknown = device.set_air_sensors(airs)
+            # 전에 오던 항목이 빠졌으면 알린다. 오류 코드도 안 오고 조회도
+            # 성공하므로, 이 줄이 없으면 에어모니터가 끊긴 것을 알 길이 없다.
+            missing = [
+                kind for kind in device.known_sensor_kinds
+                if kind not in device.sensor_kinds
+            ]
+            if missing:
+                self._log_air_sensors_missing(device, missing)
             if unknown:
                 self._log_skip(
                     device.raw,
                     "확인되지 않은 공기질 항목은 만들지 않습니다: "
                     + ", ".join(sorted(set(unknown))),
                 )
+
+    def _log_air_sensors_missing(
+        self, device: AironeDevice, missing: list[str]
+    ) -> None:
+        """전에 오던 공기질 항목이 빠진 것을 **빠진 조합마다 한 번만** 알린다.
+
+        에어모니터와 룸콘 사이 통신이 끊기면 서버가 온도·습도만 준다. 오류
+        코드도 없고 조회도 성공하므로 로그가 없으면 알아챌 방법이 없다.
+        조합이 달라지면 다시 알려서 더 빠지거나 돌아온 것을 볼 수 있게 한다.
+        """
+        key = f"{device.device_id}:air-missing:{','.join(missing)}"
+        if key in self._skipped_logged:
+            return
+        self._skipped_logged.add(key)
+        _LOGGER.warning(
+            "%s 에서 전에 받던 공기질 항목이 오지 않습니다: %s. "
+            "에어모니터와 룸콘 사이 통신을 확인해 주세요 — 값이 돌아오면 "
+            "센서도 함께 돌아옵니다",
+            device.nickname,
+            ", ".join(AIRONE_SENSOR_KINDS[k][0] for k in missing),
+        )
 
     def _log_no_air_sensors(self, device: AironeDevice) -> None:
         """공기질을 안 묻기로 한 것을 **한 번만** 알린다.

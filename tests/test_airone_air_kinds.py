@@ -120,4 +120,29 @@ r.ok("air_sensor_kinds_known" in diagnostics_source, "본 적 있는 종류를 �
 r.ok("air_sensor_kinds_missing" in diagnostics_source, "이번에 빠진 종류를 남긴다")
 
 
+r.section("끊긴 것을 사용자에게 알린다")
+
+binary_source = source("binary_sensor.py")
+r.ok("AironeAirDataMissing" in binary_source, "공기질 자료 끊김 센서를 만든다")
+r.ok("공기질 자료 끊김" in binary_source, "이름을 붙였다")
+r.ok(
+    "기기 고장이라고 하지 않고" in binary_source,
+    "관찰일 뿐 고장 판정이 아니라고 적었다",
+)
+r.ok(
+    "AironeAirDataMissing(coordinator, airone)" in binary_source
+    and "wants_air_sensors" in binary_source,
+    "공기질을 묻는 기기에만 만든다",
+)
+
+r.ok(
+    "_log_air_sensors_missing" in coordinator_source,
+    "세션 중에 빠지면 로그로도 남긴다",
+)
+r.ok(
+    "AIRONE_SENSOR_KINDS," in coordinator_source,
+    "로그에 쓰는 이름표를 import 한다",
+)
+
+
 sys.exit(r.finish())
