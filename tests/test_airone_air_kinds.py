@@ -145,4 +145,42 @@ r.ok(
 )
 
 
+r.section("돌아온 종류가 디스크에 남는다")
+
+# 실기기에서 자료가 돌아왔는데도 센서 여섯 개가 `사용할 수 없음` 으로 남았다.
+# 종류는 공기질 조회로만 갱신되는데 저장은 MQTT 보고 때만 일어나서, 늘어난
+# 종류가 디스크에 닿지 않았다. 재시작하면 다시 옛 종류만 되살아난다.
+body = coordinator_source.split("async def _async_update_air_sensors")[1]
+body = body.split("\n    def ")[0]
+r.ok("set_air_sensors" in body, "공기질 조회가 종류를 갱신한다")
+r.ok(
+    "_async_remember_state()" in body,
+    "같은 자리에서 저장까지 한다",
+)
+r.ok(
+    body.index("set_air_sensors") < body.index("_async_remember_state()"),
+    "갱신한 뒤에 저장한다",
+)
+r.ok(
+    "!= before" in body,
+    "늘지 않았으면 저장하지 않는다",
+)
+
+grown = make_airone(filters=[])
+grown.remember_sensor_kinds(["temperature", "humidity"])
+was = grown.known_sensor_kinds
+grown.set_air_sensors([
+    {"type": "temperature", "value": "25"},
+    {"type": "humidity", "value": "59"},
+    {"type": "co2", "value": "605"},
+])
+r.ok(grown.known_sensor_kinds != was, "종류가 돌아오면 달라진다 — 저장이 걸린다")
+
+same = make_airone(filters=[])
+same.set_air_sensors([{"type": "temperature", "value": "25"}])
+was = same.known_sensor_kinds
+same.set_air_sensors([{"type": "temperature", "value": "26"}])
+r.ok(same.known_sensor_kinds == was, "값만 바뀐 조회는 저장을 부르지 않는다")
+
+
 sys.exit(r.finish())

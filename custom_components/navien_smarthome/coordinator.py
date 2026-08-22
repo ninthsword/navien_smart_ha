@@ -446,7 +446,14 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     _LOGGER.debug("%s 공기질 조회 실패: %s", device.nickname, err)
                 continue
             device.air_sensor_errors = 0
+            before = device.known_sensor_kinds
             unknown = device.set_air_sensors(airs)
+            # 아는 종류가 늘었으면 그 자리에서 남긴다. 종류는 이 조회로만
+            # 갱신되는데 저장은 MQTT 보고 때만 일어나서, 늘어난 종류가 디스크에
+            # 닿지 않았다. 그러면 재시작 때 옛 종류만 되살아나 돌아온 항목이
+            # 계속 엔티티 없이 남는다 — 실기기에서 그렇게 됐다.
+            if device.known_sensor_kinds != before:
+                self._async_remember_state()
             # 전에 오던 항목이 빠졌으면 알린다. 오류 코드도 안 오고 조회도
             # 성공하므로, 이 줄이 없으면 에어모니터가 끊긴 것을 알 길이 없다.
             missing = [
