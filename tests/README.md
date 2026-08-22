@@ -28,6 +28,9 @@ HA 가 실제로 어떻게 도는지 알아야 하는 시험은 HA 원본을 직
 | `test_zone_onoff.py` | 구역 하나를 끄고 켜는 길 (이슈 #16) |
 | `test_filter.py` | 필터 센서가 잔량이라는 것 (PR #18) |
 | `test_boiler_observation.py` | 보일러는 제어 없이 실측 MQTT 상태를 읽고 공개 진단은 식별정보 제거 |
+| `test_boiler_extra_status.py` | 읽고 버리던 status 필드에서 만든 센서들 · 오류 코드 이름 |
+| `test_gas_statistics.py` | 가스 이력을 장기 통계로 넣는 길 · 겹치는 달 처리 |
+| `test_airone_air_kinds.py` | 공기질 종류가 줄어도 엔티티가 사라지지 않는다 · 저장 순서 |
 
 ## 새로 쓸 때
 
