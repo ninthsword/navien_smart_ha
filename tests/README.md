@@ -31,6 +31,7 @@ HA 가 실제로 어떻게 도는지 알아야 하는 시험은 HA 원본을 직
 | `test_boiler_extra_status.py` | 읽고 버리던 status 필드에서 만든 센서들 · 오류 코드 이름 |
 | `test_gas_statistics.py` | 가스 이력을 장기 통계로 넣는 길 · 겹치는 달 처리 |
 | `test_airone_air_kinds.py` | 공기질 종류가 줄어도 엔티티가 사라지지 않는다 · 저장 순서 |
+| `test_review_fixes.py` | 전체 검토에서 나온 수정들이 되돌아가지 않게 |
 
 ## 새로 쓸 때
 
