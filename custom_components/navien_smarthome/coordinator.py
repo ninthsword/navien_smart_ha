@@ -27,7 +27,7 @@ from .api import (
 )
 from homeassistant.helpers.storage import Store
 
-from .airone import AironeDevice, _dig
+from .airone import AironeDevice
 from .boiler import (
     BOILER_GAS_METER_UPDATE,
     BOILER_GAS_REFRESH_SECONDS,
