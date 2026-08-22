@@ -160,8 +160,17 @@ class NavienSmartApi:
     # -- 인증 --------------------------------------------------------------
 
     async def async_login(self) -> NavienSmartSession:
-        """1·2단계를 모두 수행하고 세션을 갈아끼운다."""
+        """1·2단계를 모두 수행하고 세션을 갈아끼운다.
+
+        **먼저 들어온 로그인이 끝났으면 그것을 쓴다.** 계정당 세션이 하나뿐인
+        서버라, 동시에 실패한 요청들이 각자 로그인하면 서로를 무효화한다.
+        락에 들어온 뒤 세션이 이미 바뀌어 있으면 그것으로 충분하다.
+        """
+        seen = self._session
         async with self._lock:
+            if self._session is not None and self._session is not seen:
+                # 기다리는 동안 다른 요청이 새로 받아 왔다.
+                return self._session
             login = await self._async_form_login()
             data = await self._async_secured_sign_in(
                 login["accessToken"], login["loginId"], login["userSeq"]

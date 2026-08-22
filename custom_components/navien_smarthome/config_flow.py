@@ -7,6 +7,7 @@ home 이 여러 개면 어느 home 을 쓸지 고르게 한다.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -90,6 +91,20 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="home",
             data_schema=vol.Schema({vol.Required(CONF_HOME_SEQ): vol.In(options)}),
         )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """재인증의 입구.
+
+        `ConfigEntryAuthFailed` 를 올리면 HA 는 `SOURCE_REAUTH` 로 흐름을 열고
+        **`async_step_reauth` 를 찾는다.** 확인 화면만 있고 이 입구가 없으면
+        흐름이 열리지 않아, 비밀번호를 바꾼 사용자가 통합을 지웠다 다시 까는
+        수밖에 없다 — 엔티티 ID 와 장기 통계가 통째로 끊긴다.
+
+        `entry_data` 는 쓰지 않는다. 아이디는 아래에서 기존 entry 로 읽는다.
+        """
+        return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None

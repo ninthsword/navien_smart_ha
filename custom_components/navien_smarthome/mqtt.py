@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 import urllib.parse
 import uuid
 from collections.abc import Awaitable, Callable
@@ -52,6 +53,10 @@ _LOGGER = logging.getLogger(__name__)
 # 이게 없으면 기기가 스스로 뭔가 보낼 때까지 상태가 비어 있다.
 _ACCEPTED_SUFFIXES = ("/update/accepted", "/get/accepted")
 _RECONNECT_DELAYS = (5, 15, 30, 60, 120, 300)
+# 이만큼 붙어 있었으면 「제대로 붙었다」로 보고 백오프를 처음으로 되돌린다.
+# CONNACK 만으로 되돌리면 안 된다 — 붙자마자 끊기는 상황에서 영원히 첫 칸(5초)에
+# 머문다. 계정당 세션이 하나뿐이라 사용자가 앱을 열어두면 실제로 그렇게 된다.
+_STABLE_CONNECTION_SECONDS = 60.0
 
 # 에어원 메시지를 매트 메시지와 가르는 기준. 앱도 구독 토픽 문자열로 판별한다
 # (`HomeViewModel` 의 `/airone/#` / `/mate/#` 분기).
@@ -355,7 +360,7 @@ class NavienSmartMqtt:
                 # 아래 감시 루프가 `connected=False` 를 보고 즉시 빠져나가
                 # 방금 만든 연결을 스스로 끊고 재접속을 반복한다.
                 await self._async_wait_connected()
-                self._attempt = 0
+                connected_at = time.monotonic()
 
                 # 구독이 붙은 뒤 초기 상태를 요청한다. shadow 이벤트는 변화가
                 # 있을 때만 오므로, 이걸 안 하면 아무 조작이 없는 동안 상태가
@@ -366,6 +371,9 @@ class NavienSmartMqtt:
                 # 접속이 살아 있는 동안은 paho 스레드가 일한다. 끊김만 감시한다.
                 while not self._stopping and self.connected:
                     await asyncio.sleep(5)
+                    if time.monotonic() - connected_at >= _STABLE_CONNECTION_SECONDS:
+                        # 여기까지 버텼으면 다음 끊김은 새 사건으로 센다.
+                        self._attempt = 0
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001 - 어떤 실패든 재시도로 흡수한다

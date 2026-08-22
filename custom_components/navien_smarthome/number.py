@@ -73,7 +73,29 @@ class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
         bounds = device.temperature_bounds(kind)
         if bounds is None:
             raise ValueError(f"{kind} 설정온도 범위가 없습니다")
-        self._attr_native_min_value, self._attr_native_max_value = bounds
+        # 시작할 때 본 범위. 기기가 사라진 순간에도 슬라이더가 모양을 잃지
+        # 않도록 남겨 두고, 평소에는 아래 속성이 지금 값을 쓴다.
+        self._fallback_bounds = bounds
+
+    def _bounds(self) -> tuple[float, float]:
+        """**지금** 서버가 말하는 범위.
+
+        시작할 때 한 번 읽어 고정하면, 서버가 범위를 바꿨을 때 슬라이더는
+        옛 범위를 그대로 보여준다. 사용자는 움직이는데 명령은 거부되는
+        상태가 된다 — `build_temperature_payload` 가 다시 검증하기 때문이다.
+        """
+        device = self.device
+        if device is None:
+            return self._fallback_bounds
+        return device.temperature_bounds(self._kind) or self._fallback_bounds
+
+    @property
+    def native_min_value(self) -> float:
+        return self._bounds()[0]
+
+    @property
+    def native_max_value(self) -> float:
+        return self._bounds()[1]
 
     @property
     def available(self) -> bool:

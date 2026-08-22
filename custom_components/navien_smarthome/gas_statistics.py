@@ -36,6 +36,10 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# 앞 누적을 찾을 때 되짚어 볼 구간. 가까운 곳부터 본다 — 대개 바로 앞 달에
+# 있으므로 첫 번째에서 끝난다. 마지막 칸은 「그보다 앞은 없다」로 본다.
+_BASELINE_LOOKBACK_DAYS: tuple[int, ...] = (40, 400, 1200)
+
 # 앱의 가스 사용량 화면이 나누는 것과 같은 세 갈래다.
 GAS_STATISTIC_KINDS: dict[str, str] = {
     "total": "가스 사용량",
@@ -84,11 +88,20 @@ async def _async_baseline(
     """이번에 다시 쓸 구간 **직전까지의 누적값**.
 
     통계의 ``sum`` 은 시리즈 전체에 걸친 누적이라 앞을 잘라내면 뒤가 전부
-    어긋난다. 서버가 주는 범위는 해가 바뀌면 앞쪽이 빠지므로, 이미 저장된 첫
-    행에서 그때까지의 누적을 되찾아 이어 붙인다.
+    어긋난다. 서버가 주는 범위는 해가 바뀌면 앞쪽이 빠지므로, 이미 저장된
+    값에서 그때까지의 누적을 되찾아 이어 붙인다.
 
-    ``sum`` 은 그 칸까지 **포함한** 누적이므로 그 칸의 사용량을 빼야 직전까지의
-    누적이 된다.
+    **두 가지를 순서대로 본다.**
+
+    1. `first_start` 자리에 이미 행이 있으면 그것을 쓴다. ``sum`` 은 그 칸까지
+       **포함한** 누적이므로 그 칸의 사용량을 빼야 직전까지의 누적이 된다.
+    2. 없으면 **그보다 앞의 마지막 행**의 ``sum`` 을 쓴다. 그 자리에 행이
+       없는 경우가 실제로 있다 — 그 달에 사용량이 아예 없었으면 서버가 행을
+       주지 않는다. 예전에는 이때 0 을 돌려줬는데, 그러면 2년치 시리즈가
+       통째로 0 부터 다시 쌓여 **경계에 거대한 음수 사용량**이 그려진다.
+       HA 는 ``sum`` 의 차분으로 사용량을 계산하기 때문이다.
+
+    둘 다 없으면 처음 넣는 것이므로 0 이 맞다.
     """
     rows = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
@@ -106,6 +119,34 @@ async def _async_baseline(
         if total is None or state is None:
             continue
         return float(total) - float(state)
+
+    # 그 자리에 행이 없다. 앞쪽에서 마지막으로 저장된 누적을 이어받는다.
+    return await _async_last_sum_before(hass, stat_id, first_start)
+
+
+async def _async_last_sum_before(
+    hass: HomeAssistant, stat_id: str, start: datetime
+) -> float:
+    """``start`` **직전까지** 저장된 마지막 누적값. 없으면 0.
+
+    범위 전체를 훑지 않는다 — `statistics_during_period` 에 시작을 주지 않으면
+    저장된 처음부터 읽는데, 우리는 마지막 한 줄만 필요하다. 그래서 뒤에서부터
+    구간을 넓혀 가며 찾고, 못 찾으면 처음 넣는 것으로 본다.
+    """
+    for days in _BASELINE_LOOKBACK_DAYS:
+        rows = await get_instance(hass).async_add_executor_job(
+            statistics_during_period,
+            hass,
+            start - timedelta(days=days),
+            start,
+            {stat_id},
+            "hour",
+            None,
+            {"sum"},
+        )
+        found = [row for row in rows.get(stat_id) or () if row.get("sum") is not None]
+        if found:
+            return float(found[-1]["sum"])
     return 0.0
 
 

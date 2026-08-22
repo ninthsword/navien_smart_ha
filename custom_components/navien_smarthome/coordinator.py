@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -132,11 +133,20 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.boiler_observations: list[dict[str, Any]] = []
         self._boiler_silence_unsubs: dict[str, Callable[[], None]] = {}
         self._boiler_gas_unsubs: dict[str, Callable[[], None]] = {}
+        # **한 번만 도는 타이머도 붙잡아 둔다.** 언로드·리로드 뒤에 깨어나면
+        # 이미 없어진 통합이 서버로 요청을 보낸다. 예외는 잡히지만 비공식
+        # 서버에 헛된 요청이 나가고, 관리되는 다른 타이머와 앞뒤가 안 맞는다.
+        self._oneshot_unsubs: set[Callable[[], None]] = set()
         self.boiler_silence_requests = 0
         self.boiler_silence_failures = 0
         self.boiler_gas_requests = 0
         self.boiler_gas_failures = 0
         self.boiler_gas_statistics_failures = 0
+        # **같은 기기의 통계 반영이 겹치면 누적이 어긋난다.** 반영은
+        # 「직전 누적 읽기 → 더하기 → 쓰기」인데, 두 번째가 첫 번째의 쓰기 전에
+        # 읽으면 같은 값에서 출발해 둘 다 잘못 쓴다. 초기 요청과 시간별 갱신이
+        # 겹치거나 서버가 같은 응답을 두 번 줄 때 실제로 일어날 수 있다.
+        self._gas_statistics_locks: dict[str, asyncio.Lock] = {}
         # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
         # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
         # 전원·모드·풍량이 모두 비어 보인다.
@@ -375,6 +385,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             device.reported = old.reported
             device.air_sensors = old.air_sensors
             device.sensor_kinds = old.sensor_kinds
+            # **되살린 종류는 여기서만 살아남는다.** 저장소에서 읽은 값은 그때
+            # 있던 객체에만 들어가는데, 폴링은 5분마다 객체를 새로 만든다.
+            # 이 줄이 없으면 다음 폴링에서 종류가 「지금 오는 것」만으로 다시
+            # 좁혀지고, 그 좁혀진 값이 디스크까지 덮어써 재시작 때 센서가
+            # 또 사라진다 — 되살리기를 넣은 의미가 5분 만에 없어진다.
+            device.known_sensor_kinds = old.known_sensor_kinds
             device.last_humidity = old.last_humidity
             device.command_log = old.command_log
             device.humidity_log = old.humidity_log
@@ -702,6 +718,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     _LOGGER.debug("%s 초기 가스 사용량 조회 실패: %s", boiler.nickname, err)
                 self._schedule_boiler_gas_refresh(boiler)
 
+    @callback
+    def _track_oneshot(self, unsub: Callable[[], None]) -> Callable[[], None]:
+        """한 번 도는 타이머를 붙잡아 두고, 자기가 돌면 스스로 놓게 한다."""
+        self._oneshot_unsubs.add(unsub)
+        return unsub
+
     async def async_stop_mqtt(self) -> None:
         for unsub in self._boiler_silence_unsubs.values():
             unsub()
@@ -709,6 +731,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         for unsub in self._boiler_gas_unsubs.values():
             unsub()
         self._boiler_gas_unsubs.clear()
+        for unsub in tuple(self._oneshot_unsubs):
+            unsub()
+        self._oneshot_unsubs.clear()
         if self._mqtt is not None:
             await self._mqtt.async_stop()
             self._mqtt = None
@@ -988,12 +1013,20 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.boiler_gas_requests += 1
 
     async def _async_import_gas_statistics(self, device: BoilerDevice) -> None:
-        """가스 이력을 장기 통계에 반영한다. 실패해도 상태 갱신을 막지 않는다."""
-        try:
-            await async_import_gas_statistics(self.hass, device)
-        except Exception:  # noqa: BLE001 - 통계 실패로 통합이 멈추면 안 된다
-            self.boiler_gas_statistics_failures += 1
-            _LOGGER.exception("가스 장기 통계를 반영하지 못했습니다")
+        """가스 이력을 장기 통계에 반영한다. 실패해도 상태 갱신을 막지 않는다.
+
+        **기기마다 한 번에 하나만 돈다.** 겹치면 누적이 어긋나기 때문이다
+        (`_gas_statistics_locks` 주석). 기다렸다 도는 쪽을 택한다 — 버리면
+        마지막 응답이 반영되지 않을 수 있고, 이 작업은 같은 자료를 다시
+        써넣는 것이라 한 번 더 도는 비용이 싸다.
+        """
+        lock = self._gas_statistics_locks.setdefault(device.device_id, asyncio.Lock())
+        async with lock:
+            try:
+                await async_import_gas_statistics(self.hass, device)
+            except Exception:
+                self.boiler_gas_statistics_failures += 1
+                _LOGGER.exception("가스 장기 통계를 반영하지 못했습니다")
 
     @callback
     def _schedule_boiler_gas_refresh(self, device: BoilerDevice) -> None:
@@ -1024,7 +1057,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         """명령 뒤 실제 기기 상태를 다시 묻는다. 값을 미리 바꾸지는 않는다."""
         device_id = device.device_id
 
+        holder: list[Callable[[], None]] = []
+
         async def _readback(_now: Any) -> None:
+            if holder:
+                self._oneshot_unsubs.discard(holder[0])
             target = self.boilers.get(device_id)
             if target is None:
                 return
@@ -1034,7 +1071,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             except (HomeAssistantError, NavienSmartError) as err:
                 _LOGGER.debug("%s 보일러 상태 재확인 실패: %s", target.nickname, err)
 
-        async_call_later(self.hass, BOILER_READBACK_DELAY_SECONDS, _readback)
+        holder.append(
+            self._track_oneshot(
+                async_call_later(self.hass, BOILER_READBACK_DELAY_SECONDS, _readback)
+            )
+        )
 
     @callback
     def _schedule_boiler_silence_check(
@@ -1150,8 +1191,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         고장난 줄 안다. 어디까지 갔는지 로그에 남겨야 제보로 가릴 수 있다.
         """
         device_id = device.device_id
+        holder: list[Callable[[], None]] = []
 
         async def _check(_now: Any) -> None:
+            if holder:
+                self._oneshot_unsubs.discard(holder[0])
             target = self.airone.get(device_id)
             if target is None or target.reported:
                 return
@@ -1160,23 +1204,30 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 return
             self._skipped_logged.add(key)
             prefix = TOPIC_PREFIX.get(SERVICE_AIRONE)
+            # **식별자를 빼고 찍는다.** 이 줄은 「이슈에 붙여 달라」고 안내하는
+            # 경고인데, 토픽에는 기기의 물리 ID(MAC 유래)와 homeSeq 가 들어
+            # 있었다. 진단 내보내기는 같은 값을 가리고 있으므로 앞뒤가 맞지
+            # 않았다. 토픽 **모양**만 있으면 원인을 좁히는 데 충분하다.
             _LOGGER.warning(
                 "%s 에 상태를 요청했지만 %d초 안에 응답이 오지 않았습니다. "
-                "요청은 정상 전송됐습니다 — 보낸 곳: %s, 듣는 곳: %s/%s/#. "
+                "요청은 정상 전송됐습니다 — 보낸 곳: %s, 듣는 곳: **REDACTED**/%s/#. "
                 "엔티티가 「알 수 없음」으로 남습니다. 이 로그와 통계정보를 "
                 "이슈에 붙여 주시면 원인을 좁힐 수 있습니다.",
                 target.nickname,
                 AIRONE_SILENCE_CHECK_SECONDS,
                 AIRONE_TOPIC_FMT.format(
                     model_code=target.model_code,
-                    device_id=target.physical_device_id,
+                    device_id="**REDACTED**",
                     command=AIRONE_CMD_STATUS,
                 ),
-                self.home_seq,
                 prefix,
             )
 
-        async_call_later(self.hass, AIRONE_SILENCE_CHECK_SECONDS, _check)
+        holder.append(
+            self._track_oneshot(
+                async_call_later(self.hass, AIRONE_SILENCE_CHECK_SECONDS, _check)
+            )
+        )
 
     @callback
     def _schedule_airone_readback(self, device: AironeDevice) -> None:
@@ -1190,8 +1241,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         안 올려도 이 한 번으로 따라잡는다.
         """
         device_id = device.device_id
+        holder: list[Callable[[], None]] = []
 
         async def _readback(_now: Any) -> None:
+            if holder:
+                self._oneshot_unsubs.discard(holder[0])
             target = self.airone.get(device_id)
             if target is None or not target.available:
                 return
@@ -1200,7 +1254,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             except NavienSmartError as err:
                 _LOGGER.debug("%s 상태 재확인 실패: %s", target.nickname, err)
 
-        async_call_later(self.hass, AIRONE_READBACK_DELAY_SECONDS, _readback)
+        holder.append(
+            self._track_oneshot(
+                async_call_later(self.hass, AIRONE_READBACK_DELAY_SECONDS, _readback)
+            )
+        )
 
     async def async_send(self, device: NavienDevice, desired: dict[str, Any]) -> None:
         """명령을 보낸 뒤 낙관적 갱신은 하지 않는다.

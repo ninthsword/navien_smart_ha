@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 
 from harness import Report, make_airone, source
@@ -215,6 +216,74 @@ r.ok(
     restore.rindex("self._state_restored = True")
     < restore.index("self._async_remember_state()"),
     "플래그를 켠 다음에 부른다",
+)
+
+
+r.section("폴링이 되살린 종류를 버리지 않는다")
+
+# **여기가 앞 절을 무력화하고 있었다.** 기기 객체는 폴링마다 새로 만들고
+# 이어받을 필드를 손으로 나열하는데, `known_sensor_kinds` 가 그 목록에서
+# 빠져 있었다. 되살린 종류가 5분 뒤 「지금 오는 것」만으로 다시 좁혀지고,
+# 그 좁혀진 값이 디스크까지 덮어써 재시작 때 센서가 또 사라졌다.
+carry = coordinator_source.split("def _parse_airone")[1].split("\n    def ")[0]
+r.ok(
+    "device.known_sensor_kinds = old.known_sensor_kinds" in carry,
+    "본 적 있는 종류를 이어받는다",
+)
+
+FULL = ("pm2Dot5", "co2", "temperature", "humidity")
+
+
+# **목록을 손으로 적지 않는다.** 여기에 이름을 나열하면 시험이 구현과 같은
+# 가정을 공유하게 된다 — 코드가 이어받지 않는 필드를 시험만 이어받으면,
+# 버그가 있어도 통과한다. 실제로 그렇게 써 봤더니 이 절이 전부 통과했다.
+# 그래서 `_parse_airone` 이 쓰는 대입문을 소스에서 뽑아 그대로 흉내 낸다.
+CARRIED = re.findall(r"device\.(\w+) = old\.\1", carry)
+assert CARRIED, "_parse_airone 에서 이어받는 필드를 찾지 못했다"
+
+
+def _carry_over(old_device):
+    """`_parse_airone` 이 실제로 이어받는 필드만 옮긴 새 객체."""
+    fresh = make_airone(filters=[])
+    for name in CARRIED:
+        setattr(fresh, name, getattr(old_device, name))
+    return fresh
+
+
+def _airs(kinds):
+    return [{"type": k, "value": "1"} for k in kinds]
+
+
+# 재시작 직후: 첫 조회는 온도·습도만 받고, 그 뒤 되살리기가 네 종류를 채운다.
+poll1 = make_airone(filters=[])
+poll1.set_air_sensors(_airs(["temperature", "humidity"]))
+poll1.remember_sensor_kinds(FULL)
+r.ok(len(poll1.known_sensor_kinds) == 4, "되살린 직후 네 종류")
+
+# 5분 뒤 폴링. 서버는 여전히 온도·습도만 준다.
+poll2 = _carry_over(poll1)
+before = poll2.known_sensor_kinds
+poll2.set_air_sensors(_airs(["temperature", "humidity"]))
+r.ok(
+    len(poll2.known_sensor_kinds) == 4,
+    "다음 폴링에서도 네 종류가 남는다",
+)
+r.ok(
+    poll2.entity_sensor_kinds == FULL,
+    "만들 엔티티도 그대로 넷이다",
+)
+r.ok(
+    poll2.known_sensor_kinds == before,
+    "달라진 것이 없으니 저장을 부르지 않는다 — 디스크를 좁히지 않는다",
+)
+
+# 값이 돌아오면 늘어나고, 그때는 저장이 걸려야 한다.
+poll3 = _carry_over(poll2)
+before = poll3.known_sensor_kinds
+poll3.set_air_sensors(_airs(["temperature", "humidity", "pm10"]))
+r.ok(
+    "pm10" in poll3.known_sensor_kinds and poll3.known_sensor_kinds != before,
+    "새 종류가 오면 늘어나고 저장이 걸린다",
 )
 
 
