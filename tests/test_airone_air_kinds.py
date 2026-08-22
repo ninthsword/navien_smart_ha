@@ -183,4 +183,39 @@ same.set_air_sensors([{"type": "temperature", "value": "26"}])
 r.ok(same.known_sensor_kinds == was, "값만 바뀐 조회는 저장을 부르지 않는다")
 
 
+r.section("되살리기 전에는 저장하지 않는다")
+
+# 위 저장을 넣자마자 룸콘 상태 17개가 「알 수 없음」이 됐다. 첫 조회가
+# 되살리기보다 먼저 도는데, 그때 쓴 스냅숏에는 아직 안 읽은 `reported` 가
+# 없었다. 통째로 갈아끼우는 저장이라 디스크의 `reported` 가 날아갔고,
+# 뒤이은 되살리기는 우리가 지운 것을 읽었다.
+save = coordinator_source.split("def _async_remember_state")[1]
+save = save.split("\n    async def ")[0]
+r.ok("_state_restored" in save, "되살렸는지 먼저 본다")
+r.ok(
+    save.index("_state_restored") < save.index("snapshot: dict"),
+    "스냅숏을 만들기 전에 막는다",
+)
+r.ok(
+    "async_delay_save" in save and save.index("_state_restored") < save.index("async_delay_save"),
+    "쓰기보다 먼저 막는다",
+)
+
+restore = coordinator_source.split("async def async_restore_state")[1]
+restore = restore.split("\n    # -- ")[0]
+r.ok(
+    restore.count("self._state_restored = True") == 3,
+    "읽기에 실패해도 플래그를 켠다 — 안 켜면 영영 못 쓴다",
+)
+r.ok(
+    "_async_remember_state()" in restore,
+    "되살린 뒤 한 번 남긴다 — 첫 조회에서 안 남긴 종류가 여기서 남는다",
+)
+r.ok(
+    restore.rindex("self._state_restored = True")
+    < restore.index("self._async_remember_state()"),
+    "플래그를 켠 다음에 부른다",
+)
+
+
 sys.exit(r.finish())

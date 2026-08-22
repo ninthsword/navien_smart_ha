@@ -144,6 +144,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # 되살린 기기. 진단에서 「지금 값이 복원된 것인지」를 가릴 수 있어야 한다 —
         # 전원이 「켜짐」으로 보이는데 실제로 꺼져 있을 수 있다.
         self.restored_devices: set[str] = set()
+        # 저장해 둔 것을 아직 안 읽었으면 쓰지도 않는다 (`_async_remember_state`).
+        self._state_restored = False
         # 「상태가 안 온다」와 「와도 못 붙인다」를 진단만으로 가리기 위한 집계.
         # 개인정보는 없다 — 개수와 키 이름뿐이다.
         self.drop_counts: dict[str, int] = {
@@ -853,6 +855,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         쓴다. **읽을 때 둘 다 받는다** — 저장 버전을 올려 migration 을 붙이는
         것보다, 모양만 보고 가리는 쪽이 되돌리기 쉽다.
         """
+        if not self._state_restored:
+            # **되살리기 전에는 쓰지 않는다.** 스냅숏은 지금 메모리에 있는 것만
+            # 담는데, 첫 조회는 되살리기보다 먼저 돈다. 그때 쓰면 아직 안 읽은
+            # `reported` 가 통째로 날아가고, 뒤이은 되살리기는 우리가 지운 것을
+            # 읽게 된다 — 실기기에서 룸콘 상태 17개가 「알 수 없음」이 됐다.
+            return
         snapshot: dict[str, Any] = {}
         for device_id, device in self.airone.items():
             entry: dict[str, Any] = {}
@@ -875,8 +883,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             stored = await self._store.async_load()
         except Exception as err:  # noqa: BLE001 - 저장소 문제로 통합을 막지 않는다
             _LOGGER.debug("에어원 상태 복원 실패: %s", err)
+            self._state_restored = True
             return
         if not isinstance(stored, dict):
+            self._state_restored = True
             return
         for device_id, entry in stored.items():
             device = self.airone.get(device_id)
@@ -898,6 +908,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 "에어원 %s대의 마지막 상태를 되살렸습니다. 기기가 새로 올리기 전까지는 "
                 "잠정값입니다", len(self.restored_devices)
             )
+        self._state_restored = True
+        # 첫 조회에서 알게 된 공기질 종류는 위 금지 때문에 아직 안 남았다.
+        # 여기서 한 번 남겨야 재시작을 넘어간다.
+        self._async_remember_state()
 
     # -- 제어 --------------------------------------------------------------
 
