@@ -1,12 +1,14 @@
-"""진단 정보 내보내기.
+"""Diagnostics export.
 
-설정 → 기기 및 서비스 → 나비엔 스마트 → ⋮ → `통계정보 다운로드` 로 받는다 (한국어 번역이 「통계」다. 원문 Download diagnostics).
-사용자가 무엇을 붙여야 할지 몰라도 되게 하는 것이 목적이다.
+Downloaded from Settings -> Devices & services -> Navien Smart -> menu -> Download
+diagnostics (the Korean translation reads 통계정보 다운로드). The point is that a user
+reporting a problem should not have to know what to attach.
 
-**환기청정·보일러는 원본을 전부 담는다** — 지원을 넓히려면 그게 유일한 근거다.
-범위 밖 기기(상업용·월패드)는 요약만 남긴다. 쓰지 않을 데이터를 내보낼 이유가 없다.
+**Airone and boiler payloads go in whole** — that is the only evidence there is for
+widening support. Devices outside the scope (commercial units, wall pads) are summarised
+only; there is no reason to export data nobody will use.
 
-식별자는 전부 가린다. 별칭도 가린다 — 사람 이름이 들어가는 경우가 많다.
+Every identifier is redacted, nicknames included — those often carry a person's name.
 """
 
 from __future__ import annotations
@@ -29,8 +31,8 @@ from .const import (
     SUPPORTED_SERVICE_CODES,
 )
 
-# 키 이름으로 지운다. `heater.left` / `right` 는 구조라서 건드리면 안 되므로
-# 별칭은 상위 키(`nickName`, `userInfo`)를 통째로 가린다.
+# Redaction is keyed by name. `heater.left` and `right` are structure and must not be
+# touched, so nicknames are redacted through their parent key (`nickName`, `userInfo`).
 TO_REDACT = {
     CONF_USERNAME,
     CONF_PASSWORD,
@@ -76,7 +78,8 @@ async def async_get_config_entry_diagnostics(
         if service_code in SUPPORTED_SERVICE_CODES:
             supported.append(async_redact_data(raw, TO_REDACT))
         elif service_code in REPORT_WANTED_SERVICE_CODES:
-            # 지원을 넓힐 대상. 구조를 봐야 하므로 원본을 담는다.
+            # Candidates for widening support. The structure has to be visible, so the raw
+            # payload goes in.
             report_wanted.append(async_redact_data(raw, TO_REDACT))
         else:
             out_of_scope.append(
@@ -97,32 +100,32 @@ async def async_get_config_entry_diagnostics(
                 if coordinator.update_interval
                 else None
             ),
-            # **폴링이 도는지 먼저 본다.** 이 값이 주기보다 훨씬 크면 값이 옛것인
-            # 이유는 기기도 서버도 아니고 우리다.
-            # **`poll_attempts` 를 먼저 본다.** 성공 시각만으로는 「우리가
-            # 실패하는 것」과 「HA 가 안 부르는 것」이 같은 모양으로 보인다.
+            # **Check first whether polling is running at all.** If this is far larger than
+            # the interval, the reason the values are stale is us, not the device or server.
+            # **Read `poll_attempts` first**: from the last success time alone, "we keep
+            # failing" and "HA never calls us" look identical.
             "poll_attempts": coordinator.poll_attempts,
             "last_poll_seconds_ago": coordinator.poll_age,
             "poll_failures": coordinator.poll_failures,
-            # 마지막 실패가 무엇이었나. 예외 이름과 메시지뿐이다.
+            # What the last failure was — the exception name and message, nothing more.
             "poll_last_error": coordinator.poll_last_error,
-            # **HA 쪽에서 폴링을 꺼둘 수 있다.**
+            # **Polling can be switched off on the HA side.**
             #
-            #   설정 → 기기 및 서비스 → 나비엔 스마트 → ⋮ → 시스템 옵션
-            #   → 「변경 사항에 대한 폴링 활성화」
+            #   Settings -> Devices & services -> Navien Smart -> menu -> System options
+            #   -> "Enable polling for updates"
             #
-            # 끄면 HA 가 주기 갱신을 통째로 멈춘다. 그런데 MQTT 는 우리가 직접
-            # 붙으므로 계속 살아 있다 — **모드·전원은 멀쩡한데 공기질만 멈춘다.**
-            # 그때 `last_poll_seconds_ago` 만 커지고 `poll_failures` 는 0 이라,
-            # 이 값이 없으면 「왜 안 도는지」를 물어봐야만 알 수 있다.
+            # Switched off, HA stops periodic refresh entirely. MQTT stays alive because we
+            # connect to it ourselves — so **mode and power look fine while air quality
+            # freezes**. In that state only `last_poll_seconds_ago` grows while
+            # `poll_failures` stays 0, and without this field the reason has to be asked for.
             "polling_disabled_in_ha": bool(
                 getattr(entry, "pref_disable_polling", False)
             ),
             "known_control_units": list(KNOWN_UNITS),
-            # **「상태가 안 온다」의 원인을 로그 없이 가리는 값.**
-            # 받은 개수가 0 이면 안 오는 것이고, 버린 개수가 있으면 와도 못 쓰는
-            # 것이다. 후자면 `airone_last_unknown_shape_keys` 가 어느 모양인지
-            # 알려준다. 개수와 키 이름뿐이라 개인정보는 없다.
+            # **Tells apart the causes of "no state arrives" without any logging.**
+            # A received count of 0 means nothing arrives; a non-zero discarded count means it
+            # arrives and cannot be used, and then `airone_last_unknown_shape_keys` says what
+            # shape it had. Counts and key names only, so nothing personal.
             "mqtt_messages": coordinator.mqtt_stats,
             "boiler_silence_refresh_seconds": BOILER_SILENCE_REFRESH_SECONDS,
             "boiler_silence_timers": len(coordinator._boiler_silence_unsubs),
@@ -142,10 +145,12 @@ async def async_get_config_entry_diagnostics(
             "report_wanted": len(report_wanted),
             "out_of_scope": len(out_of_scope),
         },
-        # 보일러 원문이 아니다. 문자열·토픽·큰 숫자·바이너리를 제거한 구조 관찰이다.
+        # Not the raw boiler payload: a structural observation with strings, topics, large
+        # numbers and binary stripped out.
         "boiler_observations": list(coordinator.boiler_observations),
         "entities": [_entity_view(device) for device in (coordinator.data or {}).values()],
-        # 에어원은 실기기 미검증이다. 해석 결과를 그대로 담아 제보 근거로 쓴다.
+        # Airone is unverified on a real device. The parsed result goes in as-is, to serve as
+        # evidence in a report.
         "airone_entities": [
             _airone_view(device, device.device_id in coordinator.restored_devices)
             for device in coordinator.airone.values()
@@ -154,25 +159,27 @@ async def async_get_config_entry_diagnostics(
             _boiler_view(device) for device in coordinator.boilers.values()
         ],
         "supported_devices": supported,
-        # 이 항목이 비어 있지 않으면 이슈에 그대로 붙여 주세요.
+        # If this entry is not empty, attach it to the issue as it stands.
         "report_wanted_devices": report_wanted,
         "out_of_scope_devices": out_of_scope,
     }
-    # **키 이름으로 가리는 것만으로는 부족하다.** 값 안에 식별자가 박혀 있는
-    # 경우가 있다 — `requestTopic: "dt/rc/7/1097BD3F5CACB84E/did"` 가 그것이다.
-    # `requestTopic` 은 가릴 키 목록에 없었고, 제보자가 이 줄을 공개로 올렸다.
+    # **Redacting by key name is not enough.** An identifier can sit inside a value, as in
+    # `requestTopic: "dt/rc/7/1097BD3F5CACB84E/did"`. `requestTopic` was not on the redaction
+    # list, and a reporter posted that line publicly.
     #
-    # 그 키를 목록에 더하는 것으로 끝내지 않는다. **다음에 또 새는 것을 막는다.**
-    # 식별자 값을 먼저 모아 두고, 결과 전체에서 그 문자열을 지운다.
-    # 토픽 모양(`dt/rc/7/**REDACTED**/did`)은 남으므로 지원을 넓힐 근거는 잃지 않는다.
+    # Adding that key to the list is not the end of it — **the next leak has to be stopped
+    # too.** The identifier values are collected first, then those strings are scrubbed from
+    # the whole result. The topic shape (`dt/rc/7/**REDACTED**/did`) survives, so no evidence
+    # for widening support is lost.
     return _scrub(payload, _identifiers(coordinator.raw_devices))
 
 
 def _identifiers(raw_devices: list[dict[str, Any]]) -> list[str]:
-    """가려야 할 식별자 **값**을 모은다.
+    """Collect the identifier **values** that have to be redacted.
 
-    `TO_REDACT` 의 키에 실린 문자열이 대상이다. 8자 미만은 버린다 — 짧은 값은
-    다른 문자열에 우연히 들어 있을 수 있고, 그걸 지우면 멀쩡한 값이 망가진다.
+    The targets are the strings carried by the keys in `TO_REDACT`. Anything shorter than 8
+    characters is dropped: a short value can occur by chance inside another string, and
+    scrubbing it would corrupt a perfectly good value.
     """
     found: set[str] = set()
 
@@ -189,12 +196,13 @@ def _identifiers(raw_devices: list[dict[str, Any]]) -> list[str]:
                 found.add(text)
 
     walk(raw_devices, None)
-    # 긴 것부터 지운다. 짧은 값이 긴 값의 일부일 때 순서가 뒤바뀌면 조각이 남는다.
+    # Longest first. When a short value is part of a longer one, the reverse order leaves a
+    # fragment behind.
     return sorted(found, key=len, reverse=True)
 
 
 def _scrub(value: Any, secrets: list[str]) -> Any:
-    """결과 전체를 훑어 식별자 문자열을 지운다."""
+    """Walk the whole result and scrub the identifier strings."""
     if not secrets:
         return value
     if isinstance(value, dict):
@@ -210,7 +218,7 @@ def _scrub(value: Any, secrets: list[str]) -> Any:
 
 
 def _entity_view(device: Any) -> dict[str, Any]:
-    """통합이 기기를 어떻게 해석했는지. 오해가 어디서 생겼는지 찾을 때 쓴다."""
+    """How the integration parsed a device — used to find where a misreading started."""
     heat = device.heat_control
     cool = device.cool_control
     return {
@@ -225,19 +233,20 @@ def _entity_view(device: Any) -> dict[str, Any]:
         "season": device.season,
         "is_cooling": device.is_cooling,
         "has_unknown_season": device.has_unknown_season,
-        # 앱이 기기 설정 화면에 두는 값들. 잠금은 읽기만 되고 음량은 쓸 수 있다.
+        # The values the app keeps on its device settings screen. The lock is read-only; the
+        # volume can be written.
         "child_lock": device.child_lock,
         "volume": device.volume,
-        # 상태가 어느 묶음까지 왔는지. 사계절 모델이 부분 응답을 보내서
-        # `season`·`operationMode` 가 빠지는 일이 있었다 (v0.9.0).
+        # Which groups of state have arrived. A four-season model once sent a partial response
+        # that omitted `season` and `operationMode` (v0.9.0).
         "reported_keys": sorted(device.reported or {}),
         "reported_heater_zones": sorted((device.reported or {}).get("heater") or {}),
-        # **냉방을 닫으려면 순서를 봐야 한다.** 「26.0 을 보냈는데 기기가 26.0 을
-        # 돌려주는가」, 「한쪽만 보냈는데 양쪽이 따라오는가」, 「`season` 이 실제로
-        # 무엇으로 바뀌는가」는 그 순간의 값만으로 알 수 없다.
-        # `at` 은 절대 시각이 아니라 **간격을 보기 위한 초 단위 눈금**이다
-        # (기기 부팅 이후 흐른 초). 값 자체는 뜻이 없고 줄 사이의 차이만 쓴다.
-        # 온도·단계 값뿐이라 개인정보는 없다.
+        # **Settling cooling requires seeing the sequence.** Whether the device returns 26.0
+        # after 26.0 was sent, whether both sides follow when only one was sent, and what
+        # `season` actually changes to cannot be told from a single moment's values.
+        # `at` is not an absolute time but **a seconds-scale ruler for reading intervals**
+        # (seconds since the device booted). The value itself means nothing; only the
+        # differences between rows are used. Temperatures and steps only, so nothing personal.
         "command_log": list(device.command_log),
         "state_log": list(device.state_log),
         "available": device.available,
@@ -267,14 +276,14 @@ def _entity_view(device: Any) -> dict[str, Any]:
 
 
 def _numbers_only(raw: Any) -> dict[str, Any]:
-    """딕셔너리에서 **숫자와 참·거짓만** 남긴다.
+    """Keep **only numbers and booleans** from a dictionary.
 
-    이름을 몰라도 값을 볼 수 있게 하는 그물이다. 목표 습도가 어느 키로 오는지
-    모르는 상태라 키를 지정할 수 없다.
+    This is the net that lets values be seen without knowing their names. Which key carries
+    the target humidity is still unknown, so no key can be named.
 
-    문자열을 통째로 빼는 것이 가림 장치다 — 기기ID·SSID·별칭·MAC 은 모두
-    문자열이므로 여기 걸리지 않는다. **가릴 키를 나열하는 방식은 새 키가
-    생기면 새는데**, 이 방식은 새 문자열 키가 생겨도 안 나간다.
+    Dropping strings wholesale is what does the redacting: device ids, SSIDs, nicknames and
+    MACs are all strings and none of them get through. **Listing keys to redact leaks the
+    moment a new key appears**, whereas this approach keeps a new string key out by default.
     """
     if not isinstance(raw, dict):
         return {}
@@ -286,11 +295,11 @@ def _numbers_only(raw: Any) -> dict[str, Any]:
 
 
 def _gas_history_view(device: Any) -> dict[str, Any]:
-    """통계로 넣은 이력이 어디부터 어디까지인지.
+    """The span the history written into statistics covers.
 
-    「이력이 안 나온다」는 제보에서 제일 먼저 봐야 하는 것이 이 두 줄이다.
-    칸이 0 이면 서버가 배열을 안 준 것이고, 월별만 있고 일별이 0 이면 최근 두
-    달치가 빠진 것이다. 어느 쪽인지에 따라 볼 곳이 다르다.
+    These two lines are the first thing to read in a "no history appears" report. A bucket
+    count of 0 means the server sent no array; monthly present with daily at 0 means the last
+    two months are missing. The two cases point at different places to look.
     """
     buckets = device.gas_history()
     if not buckets:
@@ -306,7 +315,7 @@ def _gas_history_view(device: Any) -> dict[str, Any]:
 
 
 def _boiler_view(device: Any) -> dict[str, Any]:
-    """보일러의 해석 결과. 식별값 없이 배율과 상태 수신 여부를 검증한다."""
+    """The parsed boiler result — scale factors and whether state arrived, with no identifiers."""
     communication_age = device.communication_age()
     return {
         "model_code": device.model_code,
@@ -328,8 +337,8 @@ def _boiler_view(device: Any) -> dict[str, Any]:
         "hot_water_target_temperature": device.hot_water_target_temperature,
         "indoor_humidity": device.indoor_humidity,
         "gas_received": bool(device.gas_meter),
-        # 이력이 통계로 들어갔는지는 「몇 칸이 어느 구간에 걸쳐 있나」로 판단한다.
-        # 날짜 자체는 식별정보가 아니고, 사용량 값은 남기지 않는다.
+        # Whether the history reached statistics is judged from how many buckets span which
+        # range. Dates alone are not identifying, and no usage figures are kept.
         **_gas_history_view(device),
         "gas_arrays": sorted(
             key for key in device.gas_meter if key.startswith("gasMeter")
@@ -345,23 +354,25 @@ def _boiler_view(device: Any) -> dict[str, Any]:
             None if device.day_cycle_reservation is None
             else len(device.day_cycle_reservation)
         ),
-        # 뜻을 아직 모르는 명령 코드를 알아내는 실마리. 앱에서 운전모드를 바꾸면
-        # 룸콘이 그 명령 코드를 상태로 되돌려준다 — 추측 없이 확인하는 길이다.
+        # A lead on command codes whose meaning is still unknown: changing the mode in the app
+        # makes the room controller echo that command code back as state — a way to confirm it
+        # without guessing.
         "observed_commands": dict(sorted(device.observed_commands.items())),
         "gas_total_month": device.gas_total_month,
         "gas_heating_month": device.gas_heating_month,
         "gas_hot_water_month": device.gas_hot_water_month,
-        # 의미가 아직 확정되지 않은 플래그는 숫자 원문만 남긴다.
+        # Flags whose meaning is not settled keep their raw numbers and nothing more.
         "status_numbers": _numbers_only(device.status),
         "feature_numbers": _numbers_only(device.feature),
     }
 
 
 def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
-    """에어원을 어떻게 해석했는지.
+    """How Airone was parsed.
 
-    **실기기 미검증 구간이라 이 표가 제보의 핵심이다.** 서버가 알려준 조합과
-    통합이 만든 선택 항목을 나란히 담아, 어긋난 곳을 바로 볼 수 있게 한다.
+    **This area is unverified on a real device, which makes this table the heart of a
+    report.** It places the combinations the server declared next to the options the
+    integration built, so a mismatch is visible at a glance.
     """
     return {
         "service_code": device.service_code,
@@ -369,33 +380,33 @@ def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
         "model_name": device.model_name,
         "odu_model_code": device.odu_model_code,
         "is_v2_generation": device.is_v2_generation,
-        # **「상태가 안 온다」와 「와도 못 붙인다」를 가리는 값들.** 값을 담지 않고
-        # 관계와 유무만 담는다.
+        # **Values that tell "no state arrives" from "it arrives and cannot be attached".**
+        # They carry relationships and presence, never the values themselves.
         #
-        # 토픽에 쓰는 식별자가 기기목록의 것과 같은지 — 올인원 룸콘과 분리형이
-        # 여기서 갈릴 수 있다. 가림 때문에 두 ID 를 눈으로 비교할 수 없어서
-        # 같은지 여부를 따로 적는다.
+        # Whether the identifier used in the topic matches the one in the device list — an
+        # all-in-one room controller and a split unit can differ here. Redaction makes the two
+        # ids impossible to compare by eye, so the answer is recorded separately.
         "physical_id_same_as_device_id": (
             device.physical_device_id == device.device_id
         ),
-        # 상태가 한 번이라도 도착했는지, 어느 묶음이 왔는지.
+        # Whether state ever arrived, and which groups of it.
         "reported_received": bool(device.reported),
-        # 되살린 값인지. 기기가 새로 올리기 전까지는 잠정이라, 「켜짐」으로 보이는데
-        # 실제로는 꺼져 있을 수 있다.
+        # Whether the value was restored. Until the device pushes a fresh one it is
+        # provisional, so something showing as on may in fact be off.
         "state_restored": restored,
         "reported_keys": sorted(device.reported or {}),
         "reported_room_controller_keys": sorted(
             (device.reported or {}).get("roomController") or {}
         ),
-        # **키 이름만으로는 부족했다.** 목표 습도가 어디에 실려 오는지 찾으려면
-        # 값을 봐야 한다. 그래서 **숫자만** 담는다 — 문자열은 통째로 뺀다.
-        # 별칭(`zoneNickname`)·식별자·SSID 는 모두 문자열이라 이 그물에 걸리지
-        # 않는다. 참·거짓과 정수·소수만 나간다.
+        # **Key names alone were not enough.** Finding where the target humidity arrives means
+        # seeing values, so **only numbers** go in and strings are dropped wholesale. Nicknames
+        # (`zoneNickname`), identifiers and SSIDs are all strings and none pass this net. Only
+        # booleans, integers and floats leave.
         "reported_room_controller_numbers": _numbers_only(
             (device.reported or {}).get("roomController")
         ),
-        # `additionalData` 는 자리마다 뜻이 다른 목록이다 (모드 안에서는 습도 40~65,
-        # 컨트롤러 수준에서는 0~4). 어느 쪽이 오는지 봐야 한다.
+        # `additionalData` is a list whose meaning depends on where it sits (humidity 40-65
+        # inside a mode, 0-4 at controller level). Which one arrives has to be observed.
         "reported_additional_data": [
             _numbers_only(item)
             for item in (
@@ -407,9 +418,9 @@ def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
             if isinstance(item, dict)
         ],
         "last_humidity_remembered": device.last_humidity,
-        # **순서를 보기 위한 기록.** 「모드를 바꿀 때 습도를 실어 보냈는데 기기가
-        # 되돌리는가」는 그 순간의 값만으로 가릴 수 없다.
-        # `at` 은 절대 시각이 아니라 간격을 보기 위한 눈금이다. 개인정보는 없다.
+        # **A record kept for its ordering.** Whether the device reverts a humidity sent along
+        # with a mode change cannot be told from a single moment's values.
+        # `at` is a ruler for intervals, not an absolute time. Nothing personal.
         "command_log": list(device.command_log),
         "humidity_log": list(device.humidity_log),
         "available": device.available,
@@ -425,18 +436,19 @@ def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
         "error_code": device.error_code,
         "filters": list(device.filters),
         "air_sensor_kinds": list(device.sensor_kinds),
-        # 지금 값이 오는 종류와 **본 적 있는 종류**가 다르면 서버가 이번 조회에서
-        # 일부를 빼고 준 것이다. 에어모니터가 빠졌을 때 그렇게 온다.
+        # When the kinds arriving now differ from **the kinds ever seen**, the server left
+        # some out of this poll — which is what happens when the air monitor drops out.
         "air_sensor_kinds_known": list(device.known_sensor_kinds),
         "air_sensor_kinds_missing": [
             kind for kind in device.known_sensor_kinds if kind not in device.sensor_kinds
         ],
-        # **「앱과 값이 다르다」를 가리는 값들.** 공기질은 5분마다 REST 로 다시
-        # 읽는데, 빈 응답으로 지우지 않기로 한 뒤로는 갱신이 멈춰도 화면에 옛 값이
-        # 그대로 남는다. 아래 셋으로 「방이 조용한 것」과 「우리가 못 읽는 것」을
-        # 가른다. 초와 개수뿐이라 개인정보는 없다.
-        # **공기질을 물어볼 기기인지.** 센서를 아무도 안 들고 있으면 안 묻는다 —
-        # 그때 아래 값들이 전부 0·null 인 것은 고장이 아니다.
+        # **Values that resolve "the app disagrees with HA".** Air quality is re-read over
+        # REST every five minutes, and since an empty response stopped clearing values, a
+        # stalled refresh leaves the old numbers on screen. The three fields below separate "the
+        # room is simply quiet" from "we cannot read it". Seconds and counts only, so nothing
+        # personal.
+        # **Whether this device is asked about air quality at all.** With no sensor anywhere,
+        # it is not asked — and the fields below reading 0 or null is then not a fault.
         "wants_air_sensors": device.wants_air_sensors,
         "declared_sensor_count": (
             None if device.declared_sensors is None else len(device.declared_sensors)
@@ -445,7 +457,8 @@ def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
         "air_sensor_empty_responses": device.air_sensor_empty,
         "air_sensor_read_errors": device.air_sensor_errors,
         "air_sensor_unchanged_reads": device.air_sensor_unchanged,
-        # 단위를 앱에서 뽑지 못해 판단으로 정한 항목. 틀렸다는 제보가 오면 고친다.
+        # Items whose unit was a judgement call because the app never revealed one. A report
+        # saying it is wrong is what corrects them.
         "air_sensor_units": {
             kind: {
                 "unit": AIRONE_SENSOR_KINDS[kind][1],
@@ -455,9 +468,9 @@ def _airone_view(device: Any, restored: bool = False) -> dict[str, Any]:
             }
             for kind in device.sensor_kinds
         },
-        # **직접 만든 표에도 가림을 적용한다.** `supported_devices` 는
-        # `async_redact_data` 를 지나지만 이 표는 우리가 조립하므로 그냥 두면
-        # 에어모니터 `deviceId` 가 그대로 나간다 — 실제로 나갔다.
+        # **Redaction applies to tables we build ourselves too.** `supported_devices` passes
+        # through `async_redact_data`, but this table is assembled here, and left alone it ships
+        # the air monitor's `deviceId` verbatim — which is exactly what happened once.
         "air_monitors": [
             async_redact_data(monitor, TO_REDACT) for monitor in device.air_monitors
         ],

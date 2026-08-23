@@ -1,823 +1,927 @@
-# 변경 기록
+# Changelog
 
-## 개발 중 — NR-67D 보일러 지원
+## Unreleased — NR-67D boiler support
 
-- `NR-67D`에서 확인한 `smarttok` MQTT 상태를 읽어 온도·습도 센서로 표시합니다.
-- 실내 온도와 습도는 0.1 단위, 나머지 온도는 0.5℃ 단위라는 실측 배율을 적용합니다.
-- 앱 코드·공식 설명서·실기기 온도 변화를 함께 확인해 `operationBusy=1`은 `대기`,
-  `2`는 `히팅`으로 바로잡았습니다. 선택된 `operationMode`는 별도 운전 모드 센서에
-  사람이 읽는 이름으로 표시하고, 원시 모드·오류 코드는 비활성 진단 센서로 남깁니다.
-- MQTT 토픽, 세션, MAC, 컨트롤러 일련번호 등 식별정보는 진단에서 제거합니다.
-- Navien Smart 2.10.4의 `modelCode=20` 분기에서 확인한 명령으로 온수·난방수 설정
-  온도를 제어합니다. 서버 범위를 따르고 0.5℃ 단위만 허용합니다.
-- 히팅 여부와 관계없이 설정 온도 명령을 보내며, 성공 뒤에도 낙관적으로 값을 바꾸지
-  않고 실제 상태를 다시 요청합니다.
-- 보일러가 MQTT 상태를 보내지 않은 채 마지막 송수신부터 5분이 지나면 상태를 한 번
-  요청합니다. 상태가 먼저 오면 타이머를 다시 5분 뒤로 미뤄 불필요한 폴링을 피합니다.
-- 앱 화면과 `modelCode=20` 호출에서 확인한 전원·빠른온수·빠른온수 스마트운전·
-  터보온수 스위치를 추가합니다. 서버가 해당 기능을 지원한다고 알린 기기에만 만듭니다.
-- 이번 달 가스 사용량을 m³ 센서로 추가하고, 난방·온수 사용량을 속성으로 제공합니다.
-  월 누적값은 별도 가스 조회 명령으로 한 시간마다 갱신합니다.
-- 앱의 일별 배열에서 Home Assistant 현지 날짜를 골라 `오늘 가스 사용량` 센서로
-  표시합니다. 자정에는 네트워크 조회를 기다리지 않고 날짜 기준부터 바꿉니다.
-- **두 가스 센서가 `last_reset` 을 내보냅니다.** `TOTAL` 상태 클래스는
-  `last_reset` 이 바뀔 때만 주기가 끝난 것으로 보기 때문에(HA
-  `sensor/recorder.py`), 이 값을 내보내지 않으면 달이 바뀌어 누적값이 0 으로
-  돌아갈 때 리셋이 아니라 감소로 읽혀 장기 통계에서 그 달치가 통째로 빠졌습니다.
-  월간 센서의 주기 시작은 벽시계가 아니라 **서버가 말한 달**의 1일로 잡습니다.
-- **가스 사용량 이력을 장기 통계로 남깁니다.** 가스 조회 한 번에 앱의 가스
-  사용량 화면과 같은 자료가 전부 옵니다 — 일별 두 달치(`gasMeterLastMonth` ·
-  `gasMeterThisMonth`)와 월별 두 해치(`gasMeterLastYear` · `gasMeterThisYear`).
-  네 배열을 한 줄로 합쳐 전체·난방·온수 세 갈래의 외부 통계로 넣습니다.
-  겹치는 달은 일별만 남겨 같은 사용량을 두 번 세지 않고, 값이 `null` 인 미래
-  날짜는 사용량 0 이 아니라 자료 없음으로 둡니다.
-- 조회할 때마다 그 구간을 통째로 다시 써넣습니다. 같은 시각의 행은 덮어써지므로
-  Home Assistant 가 며칠 꺼져 있었어도 다음 조회 한 번에 스스로 메워지고,
-  나비엔이 값을 나중에 고쳐도 따라갑니다. 서버가 주는 범위 밖으로 밀려난 옛
-  구간은 이미 저장된 누적을 이어받아 어긋나지 않게 붙입니다.
+- Reads the `smarttok` MQTT status confirmed on an `NR-67D` and surfaces it as temperature
+  and humidity sensors.
+- Applies the observed scale factors: indoor temperature and humidity in 0.1 units, every
+  other temperature in 0.5C units.
+- Corrected `operationBusy=1` to idle and `2` to heating, by cross-checking the app code, the
+  official manual and temperature changes on a real device. The selected `operationMode` is
+  shown as a human-readable name on its own sensor, while the raw mode and error codes stay
+  as disabled diagnostic sensors.
+- Strips identifiers — MQTT topics, sessions, MAC addresses, controller serial numbers —
+  from diagnostics.
+- Controls the hot-water and heating-water setpoints with the commands confirmed in the
+  `modelCode=20` branch of Navien Smart 2.10.4. It follows the server's range and accepts
+  only 0.5C steps.
+- Sends a setpoint command regardless of whether the boiler is heating, and re-reads the real
+  state afterwards rather than updating the value optimistically.
+- Requests status once when five minutes pass with no traffic in either direction. A status
+  arriving first pushes the timer five minutes out again, so nothing is polled needlessly.
+- Adds the power, fast-hot-water, fast-hot-water smart-operation and turbo-hot-water switches
+  confirmed on the app screen and in the `modelCode=20` calls. They are created only on
+  devices whose server data declares the feature.
+- Adds this month's gas usage as an m3 sensor, with the heating and hot-water figures as
+  attributes. The monthly total refreshes hourly through a separate gas query.
+- Selects Home Assistant's local date from the app's daily array and shows it as a
+  "오늘 가스 사용량" sensor. At midnight the date basis rolls without waiting for a network
+  query.
+- **Both gas sensors export `last_reset`.** The `TOTAL` state class treats a cycle as
+  finished only when `last_reset` changes (HA's `sensor/recorder.py`), so without it the
+  month-end drop to zero read as a decrease rather than a reset and that month fell out of
+  the long-term statistics entirely. The monthly sensor's cycle start is the first of **the
+  month the server named**, not the wall clock.
+- **Keeps gas usage history as long-term statistics.** One gas query returns everything the
+  app's gas-usage screen draws — two months of daily figures (`gasMeterLastMonth`,
+  `gasMeterThisMonth`) and two years of monthly ones (`gasMeterLastYear`,
+  `gasMeterThisYear`). The four arrays merge into one series and go in as external statistics
+  under three headings: total, heating and hot water. An overlapping month keeps only its
+  daily figures so the same usage is never counted twice, and a future date whose values are
+  `null` means no data rather than zero usage.
+- Every query rewrites that whole span. Rows at the same timestamp are overwritten, so Home
+  Assistant can be off for days and repair itself on the next query, and it follows along
+  when Navien corrects a figure later. An older span that has fallen outside the range the
+  server returns is spliced onto the cumulative total already stored, so nothing goes out of
+  line.
 
-- **그동안 읽고 버리던 상태 필드를 엔티티로 엽니다.** `NR-67D` 가 보내는 44개
-  status 필드 중 25개를 파싱만 하고 쓰지 않고 있었습니다. 그중 뜻이 확실한
-  것만 만듭니다.
-  - **외기 온도** — 0.1℃ 단위. **보일러가 잰 값이 아니라 지역 기상 관측값**
-    입니다. 이 값이 27.0℃ 일 때 같은 시각 기상청 서울 관측이 27.0℃ 로 정확히
-    같았고 동네 추정치는 25.8℃ 로 달랐으며, 지금까지 본 값도 늘 정수 ℃ 입니다.
-    `outsideTemperatureDisplayUse` 를 조건으로 쓰지 않습니다 — 그 값은 룸콘
-    화면에 띄울지에 대한 것이지 자료가 오는지가 아니고, 이 기기는 그 값이 1
-    인데도 온도가 정상으로 옵니다.
-  - **온수 사용 중** — `DHWUse`. 온수 기능 스위치와 같은 1=끔·2=켬입니다.
-    수도를 열면 켜지므로 샤워·설거지 감지에 쓸 수 있습니다.
-  - **온수 유량 · 난방 유량 · Wi-Fi 신호 · 고장 상태** — 진단 항목입니다.
-    Wi-Fi 신호는 단위를 확인하지 못해 숫자만 남기고, 고장 비트는 각 비트의 뜻을
-    모르므로 0 이 아닌지만 알립니다.
-- **난방 강도는 읽기만 합니다.** 단계 이름을 앱과 설명서에서 확인하지 못했고,
-  서버가 준 범위도 `heatingIntensityMin: 3` · `heatingIntensityMax: 1` 로 최소가
-  최대보다 커서 방향조차 확정할 수 없습니다. 원시 단계 값만 보여줍니다.
-- **예약도 읽기만 합니다.** 주간·빠른온수 예약이 켜져 있는지, 반복 주기가
-  얼마인지, 24시간 예약 원문이 무엇인지 보여줍니다. 시간표 각 자리의 뜻은
-  해석하지 않고, 예약을 바꾸지도 않습니다 — 시간표 전체를 덮는 별도
-  프로토콜이라 잘못 보내면 실제 예약을 지웁니다.
-- **운전 상태의 `히팅` 을 `연소` 로 바꿉니다.** 공식 `NCB753` 설명서가 쓰는
-  말입니다 — `히팅` 은 설명서에도 앱에도 없는 표현이었습니다.
-  > **자동화를 확인해 주세요.** 운전 상태를 `히팅` 으로 비교하는 자동화가 있다면
-  > `연소` 로 바꾸셔야 합니다.
-- **오류 코드에 설명서의 이름을 붙입니다.** 공식 `NCB753` 설명서 「12. 자가 진단
-  조치 방법」 표를 그대로 옮겨 `E001` 같은 표기와 「열교환기 과열」 같은 이상 발생
-  내용을 속성으로 넣습니다. 서버가 주는 정수를 설명서의 세 자리 번호로 읽은
-  것이고 실기기에서 오류를 재현해 확인한 것은 아니므로, **표에 없는 번호는 이름을
-  비워 두고 숫자만** 보여줍니다.
-- 설명서를 전수 확인한 결과 **「난방 강도」라는 설정은 없습니다.** 단계로 조절하는
-  것은 화면 밝기와 근접 센서뿐입니다. 설명서의 「가스비 절감」도 설정이 아니라
-  화면에 뜨는 아이콘이며, 그 아이콘을 켜는 상태 값은 아직 찾지 못했습니다.
-- 룸콘이 마지막으로 처리한 명령 코드를 상태가 되돌려주므로, 본 적 있는 코드를
-  모아 진단에 남깁니다. 운전모드처럼 아직 뜻을 모르는 명령을 **추측 없이**
-  알아내는 길입니다 — 앱에서 그 기능을 한 번 누르면 코드가 드러납니다.
+- **Opens up status fields that used to be read and discarded.** Of the 44 status fields an
+  `NR-67D` sends, 25 were parsed and never used. Only those whose meaning is certain are
+  surfaced.
+  - **Outside temperature** — in 0.1C units, and **not measured by the boiler but a regional
+    weather observation**. When this read 27.0C the KMA observation for Seoul at the same
+    moment was exactly 27.0C while the neighbourhood estimate was 25.8C, and every value seen
+    so far has been a whole degree. `outsideTemperatureDisplayUse` is not used as a
+    condition: it governs whether the room controller displays the value, not whether the
+    data arrives, and this device has it at 1 while the temperature arrives normally.
+  - **Hot water in use** — `DHWUse`, on the same 1=off, 2=on scheme as the hot-water feature
+    switches. It turns on when a tap opens, so it can detect a shower or the washing-up.
+  - **Hot-water flow, heating flow, Wi-Fi signal and fault status** — diagnostic items. The
+    Wi-Fi signal keeps only its number because the unit was never confirmed, and the fault
+    bits only report whether they are non-zero, because what each bit means is unknown.
+- **Heating intensity is read only.** Neither the app nor the manual names the steps, and the
+  range the server sends has `heatingIntensityMin: 3` above `heatingIntensityMax: 1`, so even
+  the direction cannot be settled. Only the raw step value is shown.
+- **Schedules are read only too.** It shows whether the weekly and fast-hot-water schedules
+  are on, what the repeat interval is, and the raw 24-hour schedule. What each position of
+  that table means is not interpreted, and schedules are never written — that is a separate
+  protocol which overwrites the whole timetable, so a wrong command erases the real one.
+- **The running state `히팅` becomes `연소`,** the word the official `NCB753` manual uses.
+  `히팅` appeared in neither the manual nor the app.
+  > **Check your automations.** Any automation comparing the running state against `히팅`
+  > has to be changed to `연소`.
+- **Error codes carry the manual's names.** The "12. 자가 진단 조치 방법" table of the
+  official `NCB753` manual was transcribed verbatim, giving an `E001`-style label and a fault
+  description such as "열교환기 과열" as attributes. This reads the integer the server sends
+  as the manual's three-digit number rather than reproducing errors on a real device, so **a
+  number absent from the table is left unnamed and shown as a number.**
+- An exhaustive read of the manual shows **there is no "heating intensity" setting.** The
+  only things adjusted in steps are the screen brightness and the proximity sensor. The
+  manual's "gas saving" is an icon on the display rather than a setting, and the status value
+  that lights it has not been found.
+- The room controller echoes the last command code it processed back in its status, so every
+  code seen is collected into diagnostics. It is a way to learn a command whose meaning is
+  still unknown — an operating mode, say — **without guessing**: pressing that feature once
+  in the app reveals the code.
 
-### 공기질 센서가 재시작 때 사라지던 문제
+### Air-quality sensors disappearing on restart
 
-**서버가 공기질 종류를 일부만 주는 동안 Home Assistant 를 재시작하면 나머지
-센서가 통째로 `사용할 수 없음` 이 됐습니다.** 값이 다시 와도 재시작 전까지는
-살아나지 않았습니다.
+**While the server was sending only some of the air-quality kinds, restarting Home Assistant
+turned the remaining sensors unavailable wholesale.** Even when the values came back, they
+did not revive until another restart.
 
-실기기(`NRT-20D`)에서 CO₂ · 미세먼지 · 라돈 · 휘발성유기화합물 · 통합공기질
-다섯 개가 이렇게 끊겼습니다. 에어모니터가 빠지면 서버가 온도·습도만 줍니다.
+On a real `NRT-20D` this cut off five of them: CO2, particulates, radon, volatile organic
+compounds and the overall index. When the air monitor drops out, the server sends only
+temperature and humidity.
 
-세션 안에서는 빈 응답이 앞서 받은 값을 지우지 않도록 겹쳐 쓰고 있었는데,
-**엔티티는 시작할 때 한 번만 만들어지므로 그 보호가 재시작을 넘지 못했습니다.**
+Within a session an empty response was already prevented from erasing values received
+earlier, but **entities are created only once at startup, so that protection did not survive
+a restart.**
 
-이제 **한 번이라도 값이 온 종류를 저장해 두고 다음 시작 때 되살립니다.**
-값은 되살리지 않습니다 — 며칠 지난 수치를 현재값처럼 보여주는 것이 「알 수
-없음」보다 나쁩니다. 엔티티만 남아 있으면 값이 돌아올 때 이력이 그대로
-이어집니다.
+Now **every kind that has ever produced a value is stored and restored on the next start.**
+The values are not restored — showing a days-old number as if it were current is worse than
+unknown. With the entity in place, the history resumes as soon as values return.
 
-진단에 `air_sensor_kinds_known` 과 `air_sensor_kinds_missing` 을 남겨,
-이번 조회에서 어떤 종류가 빠졌는지 밖에서 볼 수 있게 했습니다.
+Diagnostics gained `air_sensor_kinds_known` and `air_sensor_kinds_missing`, so which kinds
+were absent from a given poll is visible from outside.
 
-**끊긴 것을 알려주는 `공기질 자료 끊김` 센서를 만듭니다.** 아무 신호가 없던
-것이 문제였습니다 — 오류 코드도 안 오고 조회도 성공하므로 어디에도 티가 나지
-않았습니다. 전에 받던 항목이 안 오면 켜지고, 무엇이 빠졌는지 속성에 적습니다.
-세션 중에 빠지면 로그로도 한 번 알립니다.
+**A "공기질 자료 끊김" sensor now reports the loss.** The problem was that nothing signalled
+it at all: no error code was sent and the query still succeeded, so it showed up nowhere. It
+turns on when an item that used to arrive stops arriving, and names what is missing in its
+attributes. A loss during a session is logged once as well.
 
-기기가 「센서가 없다」고 말한 적은 없으므로 고장이라고 하지 않습니다 —
-**전에 받아봤는데 지금은 안 온다**는 관찰만 알립니다.
+The device never claims to have no sensor, so this does not call it a fault — it reports only
+the observation that **we used to receive it and now do not**.
 
-**본 종류는 공기질 조회 때 바로 남깁니다.** 종류는 그 조회로만 갱신되는데 저장은
-MQTT 보고 때만 일어나서, 자료가 돌아와도 늘어난 종류가 디스크에 닿지 않았습니다.
-그러면 재시작할 때마다 옛 종류만 되살아나 돌아온 항목이 계속 엔티티 없이
-남습니다. 다만 **되살리기 전에는 쓰지 않습니다** — 첫 조회가 되살리기보다 먼저
-도는데 그때 쓰면 아직 읽지 않은 마지막 상태를 우리 손으로 지우게 됩니다.
+**A newly seen kind is persisted during the air-quality query itself.** Kinds are only
+updated by that query while saving happened on an MQTT report, so a kind that returned never
+reached disk; every restart then restored the old set and the returned item stayed without an
+entity. But **nothing is written before the restore runs**: the first poll happens before it,
+and writing then would erase the last stored state with our own hands.
 
-**라돈이 늘 `0` 이면 그 기기에 라돈 센서가 없는 것입니다.** 서버는 센서가 없어도
-`0` 을 보내 줄 뿐 「없다」고 말해 주지 않아 저희도 가릴 수 없습니다. 실기기
-(`NRT-20D`)에서 확인했습니다. 항목을 지우지는 않습니다 — 다른 개체에는 센서가
-있을 수 있고, 지우면 그 기기의 값을 버리게 됩니다.
+**Radon permanently reading `0` means that device has no radon sensor.** The server sends `0`
+whether or not the sensor exists and never says it is absent, so this cannot be told apart
+here either. Confirmed on a real `NRT-20D`. The item is not removed — another unit may have
+the sensor, and removing it would throw that device's value away.
 
-**`외출` 운전모드가 공식 앱에서도 룸콘 실물 버튼에서도 걸리지 않는 사례를
-확인했습니다.** 룸콘과 보일러가 접점 방식으로 연결된 설치라 그 배선으로는 모드가
-전달되지 않는 것일 수도 있고 기기 이상일 수도 있어, 지금 자료로는 가릴 수
-없습니다 — 제조사 문의가 필요합니다. 명령을 열지 않는다는 결론은 그대로입니다.
+**A case was confirmed where the away operating mode takes effect from neither the official
+app nor the room controller's physical button.** In that installation the room controller and
+the boiler are wired through a contact, so the mode may simply not be conveyable over that
+wiring, or the device may be faulty; the evidence at hand cannot separate the two and a
+question to the manufacturer is needed. The conclusion, not to open the command, is unchanged.
 
-### 전체 검토에서 나온 수정
+### Fixes from the full review
 
-**되살린 공기질 종류가 5분 뒤 사라지고 있었습니다.** 기기 객체는 폴링마다 새로
-만들면서 이어받을 값을 손으로 나열하는데, 「본 적 있는 종류」가 그 목록에
-빠져 있었습니다. 저장소에서 되살린 값이 다음 폴링에서 지금 오는 것만으로 다시
-좁혀지고, 그 좁혀진 값이 디스크까지 덮어썼습니다. 위의 되살리기는 서버가 모든
-종류를 주는 동안에만 유효했던 셈입니다.
+**Restored air-quality kinds were disappearing five minutes later.** Device objects are
+rebuilt on every poll with the values to carry over listed by hand, and "kinds ever seen" was
+missing from that list. What the restore read from storage was narrowed back down on the next
+poll to whatever was arriving, and that narrowed set overwrote the stored copy. The restore
+above was therefore only effective while the server was sending every kind.
 
-**비밀번호를 바꾸면 재인증 화면이 열리지 않았습니다.** 확인 화면은 있는데 흐름의
-입구(`async_step_reauth`)가 없었습니다. 통합을 지웠다 다시 까는 수밖에 없었고,
-그러면 엔티티 ID 와 장기 통계가 통째로 끊깁니다.
+**Changing the password never opened the re-authentication screen.** The confirmation step
+existed but the flow's entry point (`async_step_reauth`) did not. The only remedy was to
+delete and reinstall the integration, which severs every entity id and all long-term
+statistics.
 
-**가스 장기 통계 두 가지를 고쳤습니다.** 반영이 겹치면 누적이 어긋날 수 있어
-기기마다 하나씩만 돌게 했습니다. 그리고 서버가 주는 범위가 앞으로 밀렸는데 그
-자리에 저장된 행이 없으면 2년치가 통째로 0 부터 다시 쌓여 그 경계에 **거대한
-음수 사용량**이 그려졌습니다 — 이제 앞의 마지막 누적을 찾아 이어붙입니다.
+**Two problems in the long-term gas statistics were fixed.** Overlapping writes could
+corrupt the running total, so only one now runs at a time per device. And when the range the
+server returns moved forward with no stored row at that point, two years of data restarted
+from zero and drew a **huge negative usage** at that boundary — the last preceding total is
+now found and spliced on.
 
-**나비엔 앱을 열어두면 5초마다 재접속을 되풀이할 수 있었습니다.** 접속 승인만
-받으면 재시도 간격을 처음으로 되돌리고 있어서, 붙자마자 끊기는 상황에서 간격이
-영영 늘지 않았습니다. 그때마다 기기 전체에 초기 상태 요청이 다시 나갔습니다.
-이제 60초를 버틴 뒤에만 되돌립니다.
+**Leaving the Navien app open could produce a reconnect every five seconds.** The retry
+interval was reset as soon as the connection was accepted, so when the link dropped
+immediately after connecting the interval never grew, and each time an initial status request
+went out to every device. It now resets only after the connection has held for 60 seconds.
 
-그 밖에 — 이슈에 붙여 달라고 안내하는 경고에서 기기 식별자를 가리고(진단
-내보내기는 같은 값을 가리고 있어 앞뒤가 맞지 않았습니다), 통합을 끌 때 남아
-있던 일회성 타이머 세 개를 취소하고, 동시에 실패한 요청들이 각자 로그인하지
-않게 하고(계정당 세션이 하나뿐이라 서로를 무효화합니다), 설정온도 슬라이더가
-서버가 지금 말하는 범위를 따르게 했습니다.
+Also: the device identifier is redacted from the warning that asks users to attach it to an
+issue (the diagnostics export redacts the same value, so the two disagreed); three one-shot
+timers left running are cancelled when the integration is unloaded; requests that fail at the
+same time no longer each log in (one session per account means they invalidate each other);
+and the setpoint slider follows the range the server reports now.
 
 ## v0.18.0 — 2026-08-10
 
-**필터 센서 이름을 고쳤습니다. 그리고 시험을 저장소에 넣었습니다.**
+**The filter sensor name was corrected, and the tests were added to the repository.**
 
-### 「필터 사용률」이 아니라 「필터 잔량」입니다 (제보 · PR #18)
+### It is "필터 잔량" (life remaining), not "필터 사용률" (usage) — report and PR #18
 
-값이 `87` 이면 **87% 남은 것**입니다. 지금 이름으로는 「87% 썼다」로 읽혀서 **뜻이 정확히 반대**였습니다. 교체 시점을 보는 값인데 판단이 뒤집힙니다.
+A value of `87` means **87% remaining**. Under the old name it read as "87% used", which is
+**exactly the opposite meaning** — and this is the value people use to judge when to replace
+a filter, so the judgement flipped.
 
-제보해 주신 분이 실기기에서 앱과 대조해 주셨습니다 — 센서 `87`, 앱 「필터 87% 남음」, 실제 사용량 13%.
+The reporter compared it against the app on a real device: sensor `87`, app "필터 87% 남음",
+actual usage 13%.
 
-저희도 앱을 뜯어 따로 확인했습니다. 필터 관리 화면이 이렇게 판단합니다.
+We confirmed it independently by taking the app apart. Its filter-management screen decides
+like this:
 
-| 값 | 앱 문구 |
+| value | app text |
 | --- | --- |
-| 76 이상 | 필터가 충분하네요! |
-| 41~75 | 아직은 여유있네요! |
-| 11~40 | 곧 필터를 교체해야 해요! |
-| 10 이하 | 필터를 교체해 주세요! |
+| 76 and above | 필터가 충분하네요! |
+| 41-75 | 아직은 여유있네요! |
+| 11-40 | 곧 필터를 교체해야 해요! |
+| 10 and below | 필터를 교체해 주세요! |
 
-**값이 클수록 「충분」입니다.** 사용률이라면 정반대여야 합니다.
+**A higher value means "plenty left".** For a usage figure it would be the other way around.
 
-**값은 그대로 둡니다.** 처음부터 잔량이었으므로 지금까지 쌓인 기록은 이미 옳습니다. 여기서 뒤집으면 이 버전을 경계로 같은 숫자가 정반대 뜻이 됩니다.
+**The value itself is unchanged.** It was the remaining life from the start, so everything
+recorded so far is already correct. Inverting it here would make the same number mean the
+opposite on either side of this version.
 
-**엔티티 ID 도 그대로입니다.** 표시 이름만 바뀌므로 대시보드와 자동화가 깨지지 않습니다.
+**The entity ids are unchanged too**, since only the display name moves, so dashboards and
+automations keep working.
 
-### 시험을 저장소에 넣었습니다
+### The tests were added to the repository
 
-`tests/` 가 생겼습니다.
+There is now a `tests/` directory.
 
 ```bash
 python3 tests/run.py
 ```
 
-**Home Assistant 를 설치하지 않아도 돌아갑니다.** 외부 패키지도 필요 없습니다.
+**It runs without Home Assistant installed**, and needs no external packages.
 
-제보해 주시거나 코드를 고쳐 보내주실 때, 바뀐 것이 다른 곳을 건드리지 않았는지 직접 확인하실 수 있습니다.
+When you send a report or a code change, you can check for yourself that what changed did not
+disturb anything else.
 
 ## v0.17.2 — 2026-08-05
 
-**끈 구역이 다시 안 켜지는 경우가 남아 있었습니다.** 앱을 다시 뜯어 두 군데를 맞췄습니다.
+**A zone that had been turned off still sometimes failed to come back on.** Taking the app
+apart again settled two places.
 
-### 꺼졌는지를 잘못된 곳에서 보고 있었습니다
+### Off was being decided from the wrong field
 
-저희 코드가 **같은 것을 두 군데서 다르게** 판단하고 있었습니다.
+Our code was deciding **the same question differently in two places**.
 
-| | 무엇으로 판단 |
+| | decided from |
 | --- | --- |
-| 화면에 「꺼짐」으로 표시 | 기기가 보내는 **켜짐 표시** |
-| 켤 때 온도를 올릴지 결정 | **온도 값** |
+| showing "off" on screen | the **enable flag** the device sends |
+| whether to raise the temperature when turning on | the **temperature value** |
 
-나비엔 앱은 두 곳 모두 **켜짐 표시**만 봅니다. 그것도 일부러 그렇게 합니다 — 꺼진 구역이 보고하는 온도는 믿지 않고, 화면에 그릴 때 아예 「꺼짐」으로 덮어씁니다.
+The Navien app reads **only the enable flag** in both places, and it does so deliberately: it
+does not trust the temperature a powered-off zone reports and overwrites the display with
+"off".
 
-**앱과 같게 맞췄습니다.** 이제 화면과 명령이 같은 근거를 봅니다.
+**We now match the app**, so the display and the command rest on the same evidence.
 
-### 켜라고 해도 그 구역이 명령에서 빠지는 경우가 있었습니다
+### A zone could drop out of the command even when asked to turn on
 
-기기가 어떤 구역의 온도를 안 보내주면, 저희는 **그 구역을 명령에서 통째로 빼버렸습니다.** 「우측 켜줘」를 눌러도 명령에 우측이 없어서, 기기 전원만 켜지고 그 구역은 그대로 남았습니다.
+When the device sent no temperature for a zone, we **left that zone out of the command
+entirely**. Pressing "turn the right side on" produced a command with no right side in it, so
+the device powered on and the zone stayed as it was.
 
-**이제 켜라고 하신 구역은 반드시 명령에 넣습니다.** 값을 모르면 최저 온도로 켭니다.
+**A zone you asked to turn on is now always in the command.** With no value known, it turns
+on at the minimum temperature.
 
-### 기존에 쓰시던 것에 영향이 있나
+### Does this affect what you already use?
 
 | | |
 | --- | --- |
-| **카본(단계형) 매트** | **영향 없습니다.** 두 판단이 항상 같은 답을 냅니다 |
-| 온도 설정 · 끄기 | 그대로 |
-| 이미 켜져 있는 구역 | 값을 안 건드립니다 — 33℃는 33℃ 그대로 |
-| 환기청정 · 전원 스위치 · 조작 잠금 | 무관 |
+| **carbon (stepped) mats** | **no effect** — both readings always give the same answer |
+| setting a temperature, turning off | unchanged |
+| a zone that is already on | its value is untouched: 33C stays 33C |
+| Airone, the power switch, the control lock | unrelated |
 
-달라지는 것은 **꺼진 구역을 켤 때** 하나뿐이고, 방향은 「안 되던 게 된다」입니다.
+The only thing that changes is **turning a powered-off zone on**, and the direction of the
+change is "something that did not work now does".
 
 ## v0.17.1 — 2026-08-04
 
-**끈 구역이 다시 안 켜지던 문제를 고쳤습니다.** v0.17.0 이 남긴 반쪽입니다.
+**Fixed a zone that had been turned off failing to come back on** — the half that v0.17.0
+left behind.
 
-### 켤 때 온도를 안 올리고 있었습니다
+### Turning on did not raise the temperature
 
-v0.17.0 에서 「끌 때 온도를 최저치 아래로 내려야 한다」를 고쳤는데, **켜는 쪽에 같은 계산을 안 넣었습니다.**
+v0.17.0 fixed "turning off has to lower the temperature below the minimum", but **the same
+calculation never went into turning on**.
 
-한쪽을 끄면 그 구역 온도가 `27.5` 로 내려갑니다. 그 상태에서 다시 켜면 저희는 **`27.5` 를 그대로 다시 보냈습니다.** 27.5 는 「꺼져 있어라」라는 뜻이라, 기기 전원만 켜지고 그 구역은 계속 꺼진 채였습니다.
+Turning one side off drops that zone's temperature to `27.5`. Turning it on again, we
+**resent `27.5` unchanged**. Since 27.5 means "stay off", the device powered on while that
+zone remained off.
 
-**이제 꺼져 있던 구역은 최저 온도로 올려서 켭니다.** 난방이면 28℃, 냉방이면 20℃ 입니다. 앱에서 「꺼짐」 상태에 `+` 를 누르면 28이 되는 것과 같습니다.
+**A zone that was off is now raised to the minimum temperature when it is turned on** — 28C
+while heating, 20C while cooling. It matches pressing `+` from the off state in the app,
+which lands on 28.
 
-**켜져 있던 구역은 건드리지 않습니다.** 33℃로 맞춰두신 쪽을 28로 되돌리지 않습니다.
+**A zone that was already on is left alone.** A side set to 33C is not dragged back to 28.
 
-### 확인된 모델이 늘었습니다
+### More confirmed models
 
-`EME-520/521`(온도형 싱글·퀸)에서 전원 · 온도 · 좌우 따로 끄기가 모두 확인됐습니다. 제보해 주신 덕분입니다.
+On an `EME-520/521` (temperature mat, single and queen) power, temperature and turning the
+two sides off independently were all confirmed, thanks to a report.
 
-서버는 `EME-520` 과 `EME-521` 을 **둘 다 `EME-520`** 으로 알려줍니다. 저희는 모델명이 아니라 서버가 주는 제어 방식을 따르므로 둘 다 같게 동작합니다.
+The server reports **both `EME-520` and `EME-521` as `EME-520`**. We follow the control
+scheme the server sends rather than the model name, so both behave identically.
 
 ## v0.17.0 — 2026-08-03
 
-**매트를 끌 수 없던 문제를 고쳤습니다.** 제보(#16)로 두 가지가 겹쳐 있는 것을 찾았습니다.
+**Fixed being unable to turn a mat off.** Report #16 revealed two problems layered on top of
+each other.
 
-### 전원 스위치가 안 생기는 모델이 있었습니다
+### Some models never got a power switch
 
-서버가 알려주는 `powerCtrl` 값으로 전원 스위치를 만들지 말지 정하고 있었습니다. **근거 없는 규칙이었습니다.**
+Whether to create the power switch was decided from the `powerCtrl` value the server sends.
+**That rule had no evidence behind it.**
 
-나비엔 앱은 그 값을 **읽지도 않습니다.** 앱 전체에서 그 필드를 꺼내 쓰는 곳이 한 군데도 없습니다. 그런데 저희만 그걸 보고 스위치를 안 만들었고, `EME-520` 을 쓰시는 분은 **기기를 끌 방법이 아예 없었습니다.**
+The Navien app does not even **read** that value — nothing anywhere in it pulls that field
+out. We alone consulted it and withheld the switch, which left `EME-520` owners with **no way
+at all to turn the device off**.
 
-**이제 매트에는 언제나 전원 스위치가 생깁니다.**
+**A mat now always gets a power switch.**
 
-지금까지 제보된 기기가 전부 `powerCtrl: true` 였습니다. `EME-520` 이 처음으로 `false` 로 온 모델이라 아무도 걸리지 않았습니다.
+Every device reported so far had `powerCtrl: true`. The `EME-520` was the first model to
+arrive with `false`, so nobody had hit it before.
 
-### 좌·우 「꺼짐」이 먹지 않았습니다
+### Turning the left or right side off did nothing
 
-온도형 매트에서 한쪽을 끄면 아무 일도 일어나지 않았습니다. **끄는 방법이 달랐습니다.**
+On a temperature mat, turning one side off had no effect. **The way to turn it off is
+different.**
 
-앱은 온도를 **설정 가능한 최저치보다 한 칸 아래**로 내려서 끕니다.
+The app turns a side off by lowering the temperature **one step below the lowest settable
+value**.
 
-| 매트 | 최저 온도 | 한 칸 | 끄는 값 |
+| mat | minimum | one step | off value |
 | --- | --- | --- | --- |
-| 카본 (단계형) | 1단계 | 1 | **0 = 운전 대기** |
-| 사계절 · 온도형 | 28℃ | 0.5 | **27.5** |
+| carbon (stepped) | level 1 | 1 | **0 = 운전 대기** |
+| four-season and temperature | 28C | 0.5 | **27.5** |
 
-**단계형이 지금까지 멀쩡했던 이유가 이것입니다.** 저희가 보내던 `0단계` 가 우연이 아니라 같은 규칙의 결과였습니다. 온도형만 이 계산을 빠뜨렸습니다.
+**This is why stepped mats worked all along.** The `level 0` we were sending was not luck but
+the same rule. Only temperature mats were missing the calculation.
 
-### 마지막 한 쪽은 끌 수 없습니다 — 이제 이유를 알려드립니다
+### The last remaining side cannot be turned off, and now says why
 
-**기기가 막는 동작입니다.** 좌우 중 한쪽이 이미 꺼져 있으면 나머지 한쪽은 꺼지지 않습니다.
+**The device refuses this.** With one of the two sides already off, the other one will not
+turn off.
 
-지금까지는 눌러도 **아무 일도 안 일어났습니다.** 이제 앱과 같은 안내가 뜹니다.
+Until now, pressing it **did nothing at all**. It now shows the same message as the app.
 
 > 이미 다른 편측이 운전대기 상태입니다. 난방을 끄시려면 매트 전원을 종료해 주세요.
 
-**전원을 대신 꺼드리지는 않습니다.** 앱도 그렇게 하지 않고, 시키지 않은 일이기 때문입니다. 위 첫 번째 수정으로 이제 모든 매트에 전원 스위치가 있으니 그걸 쓰시면 됩니다.
+**It does not power the device down on your behalf.** The app does not either, and it is not
+what was asked for. With the first fix above, every mat now has a power switch to use instead.
 
-### 환기청정 「자동운전」이 「자동」이 됩니다
+### The Airone mode 자동운전 becomes 자동
 
-제보해 주신 대로 고쳤습니다. 앱 제어 화면 표기가 **`자동`** 입니다.
+Corrected as reported: the app's control screen says **`자동`**.
 
-앱에는 이름이 두 벌 있습니다 — 모드를 고르는 목록은 `자동운전`, 제어 화면에 보이는 것은 `자동`. 나머지 이름(환기 · 청정 · 제습 · 요리 · 환기제습 · 바이패스)은 전부 제어 화면 쪽을 쓰고 있었는데 이것만 목록 쪽에서 가져와 어긋나 있었습니다.
+The app carries two sets of names — the mode picker says `자동운전` while the control screen
+shows `자동`. Every other name (환기, 청정, 제습, 요리, 환기제습, 바이패스) already came from
+the control screen; only this one had been taken from the picker and broke the pattern.
 
-> **자동화를 쓰신다면 확인해 주세요.** `자동운전` 을 이름으로 지정하는 자동화가 있다면 `자동` 으로 바꾸셔야 합니다. 운전 모드를 고르거나 상태를 비교하는 자동화가 해당합니다.
+> **Check your automations.** Any automation naming `자동운전` has to be changed to `자동`.
+> That covers automations selecting an operating mode or comparing the state.
 
-### 기존에 쓰시던 것에 영향이 있나
+### Does this affect what you already use?
 
 | | |
 | --- | --- |
-| 카본(단계형) 한쪽 대기로 내리기 | **완전히 그대로입니다** |
-| 단계 올리고 내리기 | 그대로 |
-| 전원 스위치가 이미 있던 분 | 그대로 |
-| `EME-520` 쓰시는 분 | 전원 스위치가 **새로 생깁니다** |
-| 온도형 「꺼짐」 | **이제 실제로 꺼집니다** (전에는 아무 일도 안 일어남) |
-| 환기청정 `자동운전` | **`자동` 으로 바뀝니다** — 자동화 확인 필요 |
+| dropping one side of a carbon (stepped) mat to standby | **completely unchanged** |
+| raising and lowering steps | unchanged |
+| anyone who already had a power switch | unchanged |
+| `EME-520` owners | a power switch **appears** |
+| turning a temperature mat side off | **it now actually turns off** (previously nothing happened) |
+| the Airone `자동운전` mode | **becomes `자동`** — check your automations |
 
 ## v0.16.0 — 2026-08-01
 
-**전원이 목록 맨 위로 올라옵니다. 좌우 분리형에서 순서가 뒤엉키던 것을 고쳤습니다.**
+**Power moves to the top of the list, fixing the tangled ordering on split left/right mats.**
 
-### 전원이 좌·우 사이에 끼어 있었습니다
+### Power was wedged between the left and right sides
 
-기기 페이지는 이름을 **한글 사전순**으로 정렬합니다. 그런데 `ㅇ` 가 `ㅈ` 보다 앞이라 이렇게 됐습니다.
+The device page sorts by name in **Korean dictionary order**, and because `ㅇ` sorts before
+`ㅈ` the result looked like this:
 
 ```
 ○○ 우측난방 단계     ㅇ
-○○ 전원              ㅈ + ㅓ      ← 한가운데
+○○ 전원              ㅈ + ㅓ      <- right in the middle
 ○○ 좌측난방 단계     ㅈ + ㅗ
 ```
 
-**이제 전원이 기기 대표 엔티티가 됩니다.** 이름이 기기 이름 그대로(`○○`)가 되어 항상 맨 위에 옵니다.
+**Power is now the device's primary entity.** Its name becomes the device name itself (`○○`),
+so it always sorts first.
 
 ```
-○○                    ← 전원
+○○                    <- power
 ○○ 우측난방 단계
 ○○ 좌측난방 단계
 ```
 
-Home Assistant 가 「기기의 단일 주 기능」에 쓰라고 정해둔 방식입니다. 전원은 어느 모델이든 기기당 하나입니다 — 좌우 분리형도 좌/우를 아무리 조작해도 전원 값은 움직이지 않습니다(실기기 확인).
+This is the approach Home Assistant prescribes for "the single main feature of a device".
+Every model has exactly one power control per device — on a split mat, no amount of operating
+the two sides moves the power value (confirmed on a real device).
 
-### 조작음 음량을 「설정」으로 내렸습니다
+### Button sound volume moved under configuration
 
-한 번 정하고 안 건드리는 값이라 주 제어와 섞여 있을 이유가 없습니다. 기기 페이지의 설정 칸으로 갑니다.
+It is set once and left alone, so there is no reason for it to sit among the main controls.
+It now lives in the configuration section of the device page.
 
-**조작 잠금은 그대로 둡니다.** 아이 있는 집에서 매일 켜고 끄는 것이라 기본 「개요」 화면에서 빠지면 안 됩니다.
+**The control lock stays where it is.** A household with children toggles it daily, so it must
+not drop off the default Overview dashboard.
 
-### 기존에 쓰시던 것에 영향이 있나
+### Does this affect what you already use?
 
 | | |
 | --- | --- |
-| 엔티티 ID | **안 바뀝니다.** 자동화·스크립트 그대로 동작합니다 |
-| 전원 표시 이름 | `○○ 전원` → `○○` |
-| **음성비서 호출어** | **`○○ 전원 켜줘` → `○○ 켜줘`** 로 바뀝니다 |
-| 이름을 직접 바꿔 두셨다면 | 그 이름이 유지됩니다 |
-| 조작음 음량 | 기본 「개요」 화면에서는 빠집니다. 기기 페이지 설정 칸에 있습니다 |
+| entity ids | **unchanged** — automations and scripts keep working |
+| the power entity's display name | `○○ 전원` becomes `○○` |
+| **voice assistant phrasing** | **`○○ 전원 켜줘` becomes `○○ 켜줘`** |
+| a name you set yourself | your name is kept |
+| button sound volume | drops off the default Overview; it is in the configuration section of the device page |
 
-### 좌 → 우 순서는 아직입니다
+### Left-then-right ordering is still not possible
 
-한글로는 `우`가 `좌`보다 앞서서 이름으로는 못 고칩니다(「왼쪽/오른쪽」도 `오 < 왼`).
-원하는 순서로 보시려면 대시보드에 카드를 만들어 직접 순서를 적으시면 됩니다.
+In Korean `우` sorts before `좌`, so the order cannot be fixed through names (the same holds
+for 왼쪽/오른쪽, where `오 < 왼`). To see them in the order you want, build a dashboard card
+and list them explicitly.
 
 ## v0.15.0 — 2026-08-01
 
-**엔티티 이름을 나비엔 앱 표기로 맞췄고, 서버를 너무 자주 부르지 못하게 막았습니다.**
+**Entity names now match the Navien app's own wording, and the server can no longer be called
+too often.**
 
-### 공기질은 왜 5분인지 README 에 적었습니다
+### The README explains why air quality is on five minutes
 
-「앱처럼 실시간으로 안 되나」라는 질문(#1)에 답하려고 나비엔 앱을 다시 뜯었습니다.
+To answer "why is it not real-time like the app" (#1), the Navien app was taken apart again.
 
-**앱도 푸시가 아니었습니다. 똑같이 물어보고 있었습니다.**
+**The app is not push-based either. It polls in exactly the same way.**
 
 ```java
-while (화면이 열려 있는 동안) {
+while (the screen is open) {
     RealtimeAirSensor(...);
-    delay(60000);          // 60초
+    delay(60000);          // 60 seconds
 }
 ```
 
-| | 나비엔 앱 | 이 통합 |
+| | Navien app | this integration |
 | --- | --- | --- |
-| 주기 | 1분 | 5분 |
-| 언제 | 공기질 화면을 보는 동안만 | 24시간 |
-| 하루 요청 수 | 화면 10분 → 10회 | 288회 |
+| interval | 1 minute | 5 minutes |
+| when | only while the air-quality screen is open | around the clock |
+| requests per day | 10 minutes on screen means 10 | 288 |
 
-**순간 반응은 앱이 5배 빠르고, 하루 총량은 저희가 30배 많습니다.**
-1분으로 당기면 하루 1,440번 — 앱이 절대 만들지 않는 부담입니다.
-그래서 기본값은 5분 그대로 두고, 필요한 분이 자동화로 당기는 방법을 적었습니다.
+**The app reacts five times faster in the moment, and we make thirty times the daily
+traffic.** Pulling it in to one minute would mean 1,440 requests a day, a load the app never
+creates. So the default stays at five minutes, and the README explains how to pull it in with
+an automation for anyone who needs to.
 
-### 반복 요청에 하한을 걸었습니다
+### Repeated requests now have a floor
 
-`homeassistant.update_entity` 로 통합을 언제든 깨울 수 있습니다. **HA 기본
-하한은 10초입니다.** 자동화 한 줄이면 계정 하나가 나비엔 서버를 하루 8,000번
-넘게 두드립니다. 비공식 통합이 막히면 그분만 막히는 게 아니라 쓰시는 모든
-분이 막힙니다.
+`homeassistant.update_entity` can wake the integration at any time, and **HA's default floor
+is 10 seconds**. A single line of automation would have one account hitting Navien's servers
+more than 8,000 times a day. When an unofficial integration is blocked, it is not blocked for
+that person alone but for everyone using it.
 
-**이제 반복 요청은 폴링 주기에 맞춰 묶입니다** — 환기청정이 있으면 5분,
-매트만 있으면 15분.
+**Repeated requests are now coalesced to the polling interval** — five minutes with an Airone
+present, fifteen minutes with mats alone.
 
-| 10초짜리 자동화를 걸면 | v0.14.7 까지 | v0.15.0 |
+| with a 10-second automation | up to v0.14.7 | v0.15.0 |
 | --- | --- | --- |
-| 환기청정 있음 | 하루 8,352회 | **하루 576회** |
-| 매트만 | 하루 8,352회 | **하루 192회** |
-| 한 번씩 새로고침 | 즉시 | **즉시** (그대로) |
+| Airone present | 8,352 a day | **576 a day** |
+| mats only | 8,352 a day | **192 a day** |
+| a single manual refresh | immediate | **immediate** (unchanged) |
 
-**막는 것은 반복이지 한 번이 아닙니다.** 지금 값을 보려고 새로고침하시는 건
-언제든 곧바로 됩니다.
+**What is throttled is repetition, not a single call.** Refreshing to see the current value
+still works instantly, whenever you want.
 
-숫자를 따로 정하지 않고 **폴링 주기와 같게** 맞췄습니다. 밖에서 깨워도 저희가
-스스로 도는 속도보다 빨라지지 않는다는 뜻입니다.
+Rather than picking a number, this was **tied to the polling interval**, which means nothing
+outside can wake us faster than we poll ourselves.
 
-**폴링 주기 자체는 달라지지 않았습니다.**
+**The polling interval itself is unchanged.**
 
-### 엔티티 이름을 앱 표기로 맞췄습니다
+### Entity names match the app
 
-제보해 주신 대로 고쳤습니다 ([#1](https://github.com/ripe-avocado/navien_smart_ha/issues/1)).
-앱 리소스로 하나씩 대조했습니다.
+Corrected as reported
+([#1](https://github.com/ripe-avocado/navien_smart_ha/issues/1)), checked one by one against
+the app resources.
 
-| 지금까지 | 이제 | 근거 |
+| until now | now | evidence |
 | --- | --- | --- |
-| 종합 공기질 | **통합공기질** | 앱 공기질 화면 제목 그대로 |
-| 목표 습도 | **희망습도** | 앱 제어화면 제목 그대로 |
-| 운전 모드 | **운전모드** | 앱 표기 |
-| 운전 상태 | **운전상태** | 앱이 이 자리에 띄어쓰기를 쓰지 않습니다 |
+| 종합 공기질 | **통합공기질** | the app's air-quality screen title, verbatim |
+| 목표 습도 | **희망습도** | the app's control screen title, verbatim |
+| 운전 모드 | **운전모드** | the app's spelling |
+| 운전 상태 | **운전상태** | the app uses no space here |
 
-「종합 공기질」과 「목표 습도」는 **앱에 없는 말이었습니다.** 저희가 지어낸
-표현이라 앱과 나란히 보면 다른 기능처럼 보였습니다.
+"종합 공기질" and "목표 습도" were **phrases the app never uses** — we invented them, and
+side by side with the app they looked like different features.
 
-**자동화는 안 깨집니다.** 화면에 보이는 이름만 바뀌고 엔티티 ID 는 그대로입니다.
-직접 이름을 바꿔 두셨다면 그 이름이 유지됩니다.
+**Automations do not break.** Only the display name changes; the entity ids are unchanged. A
+name you set yourself is kept.
 
-### 그 밖에는 그대로입니다
+### Nothing else changed
 
-폴링 주기도 엔티티 구성도 달라지지 않았습니다.
+Neither the polling interval nor the entity layout moved.
 
 ## v0.14.7 — 2026-08-01
 
-**환기청정 공기질이 멈추던 원인을 찾았습니다. 저희가 갱신을 굶기고 있었습니다.**
+**Found why ventilation/purifier air quality stalled: we were starving our
+own refresh.**
 
-제보(#1 · #12 · #13) 셋이 전부 같은 모양이었습니다.
+Three reports (#1, #12, #13) all showed the same shape.
 
 ```
-last_poll_seconds_ago   600 ~ 1113초   ← 갱신 주기는 300초
+last_poll_seconds_ago   600 ~ 1113s   ← refresh interval is 300s
 poll_failures           0
 polling_disabled_in_ha  false
 mqtt_connected          true
 ```
 
-**실패한 게 아니라 아예 안 돌고 있었습니다.** 로그에도 아무것도 없었습니다.
+**It wasn't failing — it wasn't running at all.** Nothing in the logs
+either.
 
-### 실시간 메시지가 올 때마다 다음 갱신이 5분 뒤로 밀렸습니다
+### Every realtime message pushed the next refresh five minutes further out
 
-기기가 상태를 보내오면 저희가 그걸 화면에 반영하는데, 그때 쓰던 함수가
-**예약된 다음 갱신을 취소하고 처음부터 다시 세고 있었습니다.**
+When a device sends a state, we apply it to the UI. The function that did
+that was **cancelling the scheduled next refresh and restarting the count
+from zero.**
 
-| | 메시지 간격 | 결과 |
+| | Message interval | Result |
 | --- | --- | --- |
-| 환기청정 | **46초** | 300초 타이머가 **영영 안 터짐** |
-| 숙면매트 | 3.2시간 | 정상 |
+| ventilation/purifier | **46s** | the 300s timer **never fires** |
+| sleep mat | 3.2 hours | fine |
 
-**환기청정 쓰시는 분만 겪은 이유**입니다. 매트는 조용해서 타이머가 정상적으로
-터졌습니다.
+**That's why only ventilation/purifier users hit this.** Mats are quiet
+enough that the timer fired normally.
 
-이제 상태 반영과 갱신 예약을 분리했습니다. **공기질이 5분마다 제대로
-갱신됩니다.**
+State application and refresh scheduling are now separate. **Air quality
+refreshes correctly every 5 minutes.**
 
-### 미세먼지 단위가 규격에 안 맞았습니다
+### The particulate-matter unit didn't match the spec
 
-제보자 로그가 알려줬습니다.
+A reporter's log pointed it out.
 
 ```
 using native unit '㎍/㎥' which is not a valid unit for device class 'pm1';
 expected one of ['µg/m³']
 ```
 
-앱 표기를 그대로 썼는데 Home Assistant 는 다른 글자를 요구합니다. **이 상태로는
-미세먼지 3종의 통계가 만들어지지 않습니다.** 규격에 맞췄습니다.
+We'd used the app's own notation, but Home Assistant requires a different
+character. **As it stood, statistics for all three particulate sensors
+couldn't be built.** Matched it to spec.
 
-> ⚠️ 단위가 바뀌므로 미세먼지 3종에 통계 「수리」 알림이 한 번 뜹니다.
-> 설정 → 시스템 → 수리에서 정리하시면 됩니다.
+> ⚠️ Because the unit changes, you'll see one statistics "repair" notice for
+> the three particulate sensors. Clear it under Settings → System → Repairs.
 
-### 조용히 멈추던 구멍 둘을 막았습니다
+### Closed two holes that failed silently
 
-- 서버 응답이 객체가 아닐 때(`null`·배열) 그대로 갱신이 멈췄습니다
-- 기기 목록에 예상 못 한 항목이 있을 때도 같았습니다
+- A server response that wasn't an object (`null`, an array) stalled the
+  refresh with no further signal
+- Same for an unexpected entry in the device list
 
-둘 다 저희 오류로 분류되지 않아 **횟수에도 로그에도 안 남았습니다.**
+Neither was classified as our error, so **neither showed up in the failure
+count or the logs.**
 
-### 다음에 또 멈추면 바로 알 수 있게 했습니다
+### Made the next stall visible immediately
 
-통계정보에 두 가지가 늘었습니다.
+Two new fields in the diagnostics.
 
 ```
-poll_attempts     갱신을 몇 번 시도했나  ← 「안 부름」과 「실패」를 가른다
-poll_last_error   마지막 실패가 무엇이었나
+poll_attempts     how many refresh attempts were made  ← separates "never called" from "failed"
+poll_last_error   what the last failure was
 ```
 
 ## v0.14.6 — 2026-08-01
 
-**자동건조 진행률을 읽습니다.**
+**Reads the auto-dry progress.**
 
-v0.14.5 에서 「앱은 진행률도 보여주는데 그 값이 어디 있는지 확인하지 못했다」고
-적었습니다. **확인 못 한 게 아니라 안 찾은 것**이었습니다. 앱 코드를 30줄 더
-읽으니 있었습니다.
+v0.14.5 noted that "the app also shows a progress value, but we couldn't find
+where it lives." **We hadn't looked hard enough.** Thirty more lines of app
+code turned it up.
 
 ```java
 do { ... } while (additionalDataStatusPrevious.getType() != 4);
 value = additionalDataStatus.getValue();
 ```
 
-**상태 문구는 「자동건조」 그대로 두고 진행률은 속성으로 뺐습니다.**
-`자동건조 47%` 처럼 상태에 숫자를 섞으면 문자열을 비교하는 자동화가 매번
-깨집니다.
+**The state string stays "Auto Dry"; the progress moved to an attribute.**
+Mixing a number into the state, like "Auto Dry 47%", breaks any automation
+that compares the string.
 
 ```
-운전 상태 센서
-  상태     자동건조
-  속성     auto_dry_percent: 47
+Operation status sensor
+  state       Auto Dry
+  attribute   auto_dry_percent: 47
 ```
 
-자동건조가 아닐 때는 속성이 아예 없습니다. 앱도 그 조건 안에서만 이 값을 봅니다.
+The attribute is absent entirely outside auto-dry — the app only reads this
+value under the same condition.
 
-> **실기기로 확인됐습니다.** PR 을 보내주신 `moKorean` 님이
-> 「실기기에서 자동 건조 진행도 잘 표시됨을 확인했습니다」라고 알려주셨습니다.
+> **Confirmed on a real device.** `moKorean`, who sent the PR, reported that
+> "the auto-dry progress displays correctly on a real device."
 
 ## v0.14.5 — 2026-08-01
 
-### 운전 상태 「자동건조」가 이름 없이 뜨던 것을 고쳤다
+### Fixed the "Auto Dry" operation status showing with no name
 
-제습을 끄면 기기가 스스로 내부를 말리는데, 그 상태가 **「알 수 없음(4)」**으로
-보였습니다.
+Turning off dehumidify makes the device dry itself out internally, and that
+state was showing as **"Unknown (4)"**.
 
-[PR #15](https://github.com/ripe-avocado/navien_smart_ha/pull/15) — `moKorean` 님이
-실기기 `NRT-530Z3` 에서 확인해 보내주셨습니다. 앱 코드로도 대조했습니다.
+[PR #15](https://github.com/ripe-avocado/navien_smart_ha/pull/15) — `moKorean`
+confirmed this on a real `NRT-530Z3` and sent it in. Cross-checked against the
+app code too.
 
 ```java
 if (... roomController.getRunning() != 4) { ... }
    → "자동건조 중 %02d%%"
 ```
 
-이름은 앱 표기를 따라 **「자동건조」**로 뒀습니다. **전원 판정은 안 바뀝니다** —
-자동건조는 끈 뒤의 뒷정리라 「꺼짐」으로 봅니다.
+Named it **"Auto Dry"**, matching the app's label. **The power-state
+determination doesn't change** — auto-dry is cleanup after power-off, so it
+still counts as "off".
 
-> 앱은 진행률(`47%`)도 함께 보여줍니다. 그 값은 다른 곳에 있어서 아직 안 읽습니다.
+> The app also shows a progress value (`47%`). It lives elsewhere and isn't
+> read yet.
 
-### 갱신이 왜 멈췄는지 통계정보로 알 수 있게 했다
+### Surfaced why polling stops, in the diagnostics
 
-제보(#1)에서 이런 자료가 나왔습니다.
+A report (#1) turned up this data.
 
 ```
-last_poll_seconds_ago   69110.5   ← 19.2시간
-update_interval_seconds 300       ← 5분 주기인데
-poll_failures           0         ← 실패로 세지도 않음
+last_poll_seconds_ago   69110.5   ← 19.2 hours
+update_interval_seconds 300       ← should be every 5 minutes
+poll_failures           0         ← not even counted as a failure
 ```
 
-**실패가 아니라 아예 안 도는 상태**입니다. Home Assistant 쪽에서 이걸 만드는
-설정이 하나 있습니다.
+**It wasn't failing — it wasn't running at all.** Home Assistant has a setting
+that causes exactly this.
 
-> 설정 → 기기 및 서비스 → 나비엔 스마트 → ⋮ → 시스템 옵션
-> → **「변경 사항에 대한 폴링 활성화」**
+> Settings → Devices & services → Navien Smart → ⋮ → System options
+> → **"Enable polling for updates"**
 
-끄면 HA 가 주기 갱신을 통째로 멈춥니다. 그런데 실시간 연결은 저희가 직접 붙기
-때문에 계속 살아 있어서, **운전 모드·전원은 멀쩡한데 공기질만 멈추는** 모양이
-됩니다.
+Turning it off stops HA's periodic refresh entirely. But the realtime
+connection is one we maintain ourselves, so it stays alive — which means
+**operation mode and power stay current while only air quality stalls.**
 
-**그 설정값을 통계정보에 담습니다** (`polling_disabled_in_ha`). 이제 물어보지
-않아도 파일 한 장으로 갈립니다.
+**That setting is now in the diagnostics** (`polling_disabled_in_ha`). No more
+guessing — one file answers it.
 
 ## v0.14.4 — 2026-07-31
 
-**처음 보는 구형 모델에는 바이패스를 넣지 않습니다.**
+**An unrecognized legacy model no longer gets the bypass mode.**
 
-v0.14.3 은 반대였습니다 — 「없다고 확인된 모델만 뺀다」라서 목록에 없는 기기에는
-계속 보였습니다. 뒤집었습니다.
+v0.14.3 had it backwards — it excluded only models *confirmed* to lack
+bypass, so anything not on the list still showed it. Flipped that.
 
-| 모델 | 바이패스 |
+| Model | Bypass |
 | --- | --- |
-| `NRT-20DS` · `NRT-20DSW` · `NRT-21DS` | 있음 |
-| `NRT-30` · `NTR-10PW` | 있음 |
-| `NRT-20D` · `NRT-21D` | 없음 |
-| **그 밖의 모델** | **없음** ← v0.14.3 에서 바뀐 부분 |
+| `NRT-20DS` · `NRT-20DSW` · `NRT-21DS` | has it |
+| `NRT-30` · `NTR-10PW` | has it |
+| `NRT-20D` · `NRT-21D` | no |
+| **everything else** | **no** ← changed from v0.14.3 |
 
-**없는데 보이는 쪽이 더 나쁩니다.** 누르면 실외기가 서고 사용자가 앱으로
-되돌려야 합니다. 있는데 안 보이는 것은 **제보 한 줄로 넣으면 됩니다.**
+**Showing a mode that isn't there is worse than hiding one that is.**
+Pressing it stops the outdoor unit, and the user has to undo it through the
+app. A missing mode that does exist is fixed with **one report.**
 
-구형은 계열이 여섯뿐이라 목록으로 관리할 수 있고, 신형은 서버가 모드를
-알려주므로 처음부터 영향이 없습니다.
+Legacy models come in only six families, small enough to manage as a list;
+new models get their mode straight from the server, so they were never
+affected.
 
-**목록에 없는데 앱에 바이패스가 보이는 모델을 쓰신다면 알려 주세요.** 바로 넣습니다.
+**If you're on a model not in the list and your app shows bypass, let us
+know** — it goes in right away.
 
 ## v0.14.3 — 2026-07-31
 
-**바이패스가 없는 모델에서 그 모드를 뺐다.** 제보(#13).
+**Removed the bypass mode from models that don't have it.** Report (#13).
 
-`NRT-20D` 사용자께서 알려주셨습니다 — **앱에 바이패스가 없는데 저희는 보여주고
-있었습니다.** 눌러보니 실외기가 서고 전력이 3W 로 떨어졌습니다(환기·미풍 51W).
+An `NRT-20D` user reported it — **the app has no bypass mode, but we were
+showing one.** Pressing it stopped the outdoor unit and power dropped to 3W
+(ventilation/low-fan draws 51W).
 
-앱은 기기가 알려주는 값으로 이 모드를 붙일지 정하는데, **그 값이 저희가 읽을 수
-없는 곳에 있습니다.** 그래서 v0.11.0 부터 모든 구형에 붙이고 있었습니다.
+The app decides whether to offer this mode from a value the device reports,
+and **that value lives somewhere we can't read.** So since v0.11.0 we'd been
+adding it to every legacy model.
 
-### 「없다고 확인된 것만」 뺍니다
+### Excluding only what's confirmed absent
 
-| 모델 | 바이패스 |
+| Model | Bypass |
 | --- | --- |
-| `NRT-20D` · `NRT-21D` | **없음** — 이 버전에서 제외 |
-| `NRT-20DS` · `NRT-20DSW` · `NRT-21DS` | 있음 |
-| `NRT-30` · `NTR-10PW` | 있음 |
-| 그 밖의 모델 | **그대로 둡니다** |
+| `NRT-20D` · `NRT-21D` | **no** — excluded as of this version |
+| `NRT-20DS` · `NRT-20DSW` · `NRT-21DS` | has it |
+| `NRT-30` · `NTR-10PW` | has it |
+| everything else | **unchanged** |
 
-처음에는 「`S` 가 붙은 모델만 보여준다」로 만들었다가 **되돌렸습니다.**
-`NRT-30` 과 `NTR-10PW` 는 `S` 가 없는데 바이패스가 있습니다. 그 방식이었으면
-그 계열이 **되던 기능을 잃었을 것**입니다.
+The first attempt was "only show it for models with an `S` suffix," and we
+**reverted that.** `NRT-30` and `NTR-10PW` have no `S` but do have bypass —
+that approach would have **broken a working feature** for that family.
 
-**넓게 막으면 되던 기기를 깨뜨리고, 좁게 막으면 제보 한 건으로 넓힐 수 있습니다.**
-되돌리기 쉬운 쪽을 골랐습니다. 목록에 없는데 바이패스가 없는 모델을 쓰신다면
-알려 주세요.
+**Excluding broadly breaks working devices; excluding narrowly can always be
+widened by one more report.** We picked the reversible option. If your model
+isn't listed and has no bypass, let us know.
 
-### 영향
+### Impact
 
-**`NRT-20D` · `NRT-21D` 만 모드가 6개에서 5개로 줄어듭니다.** 나머지 구형은
-그대로이고, 신형은 서버가 모드를 알려주므로 처음부터 영향이 없습니다.
+**Only `NRT-20D` and `NRT-21D` drop from 6 modes to 5.** Every other legacy
+model is unchanged, and new models get their mode from the server, so they
+were never affected.
 
 ## v0.14.2 — 2026-07-31
 
-**휘발성유기화합물(TVOC)에 단위 `ppb` 를 붙였다.** 제보 요청(#13).
+**Gave TVOC the `ppb` unit.** Requested in a report (#13).
 
-앱 리소스를 전수 확인했다 (APK 2.10.4). **앱이 화면에 적는 단위는 넷뿐이다.**
+Checked every app resource string (APK 2.10.4). **The app only prints a unit
+for four things.**
 
-| 항목 | 앱이 적나 |
+| Metric | Does the app print a unit? |
 | --- | --- |
-| 미세먼지 · 초미세먼지 · 극초미세먼지 | **적는다** — `㎍/㎥` |
-| 이산화탄소 | **적는다** — `ppm` |
-| TVOC · 라돈 | **안 적는다** |
-| 종합 공기질 | 점수라 단위가 없다 |
+| PM10 · PM2.5 · PM1 | **yes** — `µg/m³` |
+| CO2 | **yes** — `ppm` |
+| TVOC · radon | **no** |
+| overall air quality | it's a score, no unit applies |
 
-TVOC 와 라돈은 설명 화면 제목이 「휘발성 유기화합물 TVOC」 · 「라돈 RADON」 으로
-끝난다. `ppb` 와 `Bq` 는 리소스에도 코드에도 없다.
+TVOC and radon's info-screen titles end in "Volatile Organic Compounds TVOC"
+and "Radon RADON" respectively. Neither `ppb` nor `Bq` appears anywhere in
+the resources or code.
 
-**그래도 붙인다.** 숫자만 있고 단위가 없으면 읽을 수가 없다. 대신 통계정보에
-`inferred: true` 로 남겨 **근거 없이 붙은 값이라는 것을 밖에서 볼 수 있게** 한다.
-라돈을 이미 그렇게 다루고 있었다 — TVOC 만 빼두는 것이 오히려 일관성이 없었다.
+**We add it anyway.** A number with no unit can't be read meaningfully.
+Diagnostics carries `inferred: true` alongside it, so **an externally
+visible flag marks it as an inferred value, not a confirmed one.** Radon was
+already handled this way — leaving TVOC without a unit was the inconsistent
+choice.
 
-### ⚠️ 통계 「수리」 알림이 한 번 뜹니다
+### ⚠️ You'll see one statistics "repair" notice
 
-단위가 **없음 → `ppb`** 로 바뀌므로 Home Assistant 가 기존 기록과 맞지 않는다고
-알립니다. 설정 → 시스템 → 수리에서 한 번 정리하시면 됩니다.
+Since the unit changes from **none → `ppb`**, Home Assistant flags the
+existing history as mismatched. Clear it once under Settings → System →
+Repairs.
 
 ## v0.14.1 — 2026-07-31
 
-**풍량이 하나뿐인 모드에서 엔티티가 통째로 사라지던 것을 고쳤다.**
+**Fixed the fan-speed entity disappearing entirely on single-speed modes.**
 
-제보(#12): 환기·약풍에서 **숙면으로 바꾸면 풍량이 사라진다.**
+Report (#12): switching from ventilation/low to **sleep mode makes the
+fan-speed entity vanish.**
 
-> 앱에서는 「숙면 + 자동(비활성)」으로 보입니다.
+> In the app it shows as "Sleep + Auto (disabled)".
 
-우리 규칙이 이랬다.
+Our rule read:
 
 ```python
 return super().available and len(self._choices) > 1
 ```
 
-숙면은 후보가 **자동 하나**다. `1 > 1` 이 거짓이라 엔티티가 빠졌다.
+Sleep mode has exactly **one** candidate, "auto". `1 > 1` is false, so the
+entity dropped out.
 
-**하나뿐인 것과 없는 것은 다르다.** 앱은 값을 보여주면서 못 누르게만 한다 —
-숨기지 않는다. 사용자에게는 「지금 풍량이 뭔지」가 사라지는 것이라 숨기는 편이
-더 나쁘다. 하나뿐이면 그 값을 보여준다.
+**Having only one choice is not the same as having none.** The app shows the
+value and just disables pressing it — it doesn't hide it. For the user,
+hiding it means losing "what fan speed is it on right now," which is worse.
+When there's only one value, show it.
 
-### 생각보다 넓게 걸려 있었다
+### The blast radius was wider than expected
 
-| 기기 | 사라지던 모드 |
+| Device generation | Modes that disappeared |
 | --- | --- |
-| 신형 | 숙면 |
-| 구형 | **자동운전 · 요리 · 숙면** |
+| new | sleep |
+| legacy | **auto-run · cooking · sleep** |
 
-구형 자동운전·요리는 **v0.13.1 이 넓힌 것**이다. 앱 파일대로 한 개짜리로
-바로잡았는데, 그 순간 이 규칙에 걸려 같이 사라졌다.
+Legacy auto-run and cooking were **widened in v0.13.1.** Correcting them back
+to a single choice, per the app's own file, triggered this same rule and made
+them vanish too.
 
-### 확인해 주신 것
+### Confirmed by a user
 
-같은 제보자께서 v0.13.2 의 **운전 모드 「알 수 없음」 문제가 해결된 것**도
-확인해 주셨습니다. 통합 코드를 직접 따라가 정리해 주신 자료가 두 번 다
-원인을 찍었습니다.
+The same reporter also confirmed that v0.13.2's **"Unknown" operation-mode
+issue was resolved.** Their own trace through the integration code pinned
+down the root cause both times.
 
 ## v0.14.0 — 2026-07-31
 
-**붙이자마자 상태가 생긴다.**
+**State exists the moment a device is added.**
 
-지금까지는 매트를 붙여도 **기기가 스스로 뭔가 보낼 때까지 상태가 없었다.**
-매트는 조용하다 — 제보 자료에서 19시간에 실시간 메시지 6건, 쓸 수 있는 상태
-1건이었다. 겨울 매트를 여름에 붙이면 하루가 지나도 안 올 수 있다.
+Until now, adding a mat left it **with no state until the device sent
+something on its own.** Mats are quiet — one report's data showed 6 realtime
+messages and 1 usable state over 19 hours. Add a winter mat in summer and a
+day could pass with nothing.
 
-그 사이 온도 조절을 누르면 v0.13.3 에서 문구만 고쳤던 그 오류가 났다.
+Pressing the temperature control in that window hit the error that v0.13.3
+had only reworded.
 
-### 서버가 마지막 상태를 들고 있었다
+### The server was holding the last state
 
-AWS 섀도우는 기기가 마지막으로 보고한 문서를 **서버에** 저장한다. 그걸 달라고
-요청하는 길이 있었고, **나비엔 서버가 받아준다.**
+The AWS shadow stores the document a device last reported **on the server
+side.** There's a way to request it, and **Navien's server honors the
+request.**
 
-**실기기 두 대로 확인했다** (`EME-500` 싱글·더블).
+**Confirmed on two real devices** (`EME-500` single and double zone).
 
-| | REST 연결 | 섀도우 응답 |
+| | REST connection | Shadow response |
 | --- | --- | --- |
-| 싱글 | **오프라인** | 왔다 — 설정 1단, connected false |
-| 더블 | 온라인 | 왔다 — 좌 0단 꺼짐 / 우 3단 켜짐 |
+| single | **offline** | came back — level 1, connected false |
+| double | online | came back — left off / right level 3 on |
 
-**꺼져 있어도 옵니다.** 기기가 아니라 서버가 답하기 때문입니다.
+**It answers even when the device is off**, because the server responds, not
+the device.
 
-### 무엇이 달라지나
+### What changes
 
 ```
-전:  매트 붙임 → 상태 없음 → 온도 조절 누르면 오류
-     (기기가 뭔가 보낼 때까지 기다림)
+before: add mat → no state → pressing temperature control errors
+        (waiting for the device to send something on its own)
 
-후:  매트 붙임 → 바로 상태 옴 → 바로 조작됨
+after:  add mat → state arrives immediately → controllable right away
 ```
 
-### 안전한 쪽으로 만들었다
+### Kept it on the safe side
 
-- **읽기다.** 기기 설정을 바꾸지 않고 섀도우에 흔적도 안 남긴다
-- 기기당 **한 번**, 붙일 때만. 폴링마다 아니다
-- 실패해도 **v0.13.x 와 같아질 뿐**이다. 잃는 것이 없다
-- 함께 오는 「보낸 값(desired)」은 **읽지 않는다** — 기기가 확인한 값이 아니다
+- **It's a read.** It doesn't change device settings and leaves no trace in
+  the shadow
+- **Once per device**, only when it's added — not on every poll
+- A failure just **leaves things at v0.13.x behavior**. Nothing is lost
+- The accompanying "desired" value that comes with it is **not read** — it's
+  not a value the device has confirmed
 
 ## v0.13.3 — 2026-07-31
 
-**기기가 Wi-Fi 에서 빠졌을 때 무엇이 문제인지 알려준다.**
+**Tell the user what's actually wrong when a device has dropped off Wi-Fi.**
 
-제보: 매트가 자꾸 Wi-Fi 에서 빠지는데, 그 상태에서 HA 로 켜면 이렇게 나온다.
+Report: a mat kept dropping off Wi-Fi, and turning it on from HA in that state
+produced this.
 
 ```
 climate/set_hvac_mode 동작을 수행하지 못했습니다. 보낼 구역 값이 없습니다.
 ```
 
-**우리 문구인데 사용자가 이걸 보고 할 수 있는 게 없다.**
+**That's our own message ("no zone value to send"), and there's nothing the
+user can do with it.**
 
-### 무슨 일인가
+### What was happening
 
-1. 기기 목록(서버)은 정상이라 **모델이 잡힌다**
-2. 기기가 상태를 안 보낸다 — **여름이라 뽑아뒀거나, Wi-Fi 에서 빠졌거나,
-   방금 통합만 붙였거나** 셋 다 같은 상태가 된다
-3. 그런데 서버의 `connected` 는 **등록 여부에 가까워서** 한동안 정상으로 남는다
-4. 그래서 **엔티티는 멀쩡해 보이는데** 누르면 실패한다
+1. The device list (server-side) is fine, so **the model gets recognized**
+2. The device isn't sending state — **unplugged for summer, dropped off
+   Wi-Fi, or the integration was just added**, all three look the same
+3. But the server's `connected` field **tracks registration more than
+   liveness**, so it stays "normal" for a while
+4. So **the entity looks healthy**, and pressing it fails
 
-앱은 전원을 켤 때 **지금 설정값을 함께 실어 보낸다.** 저희도 그 형태를 따르므로,
-상태를 한 번도 못 받았으면 그 값을 만들 수 없다.
+The app sends **the current setting along with power-on.** We follow the same
+shape, so if we've never received a state, we can't build that value.
 
-전원 스위치(`switch`)는 `operationMode` 만 보내서 이 문제가 없다. `climate` 만 걸린다.
+The power switch (`switch`) only sends `operationMode`, so it doesn't hit
+this. Only `climate` does.
 
-### 문구를 바꿨다
+### Reworded the message
 
 ```
-전: 보낼 구역 값이 없습니다.
+before: 보낼 구역 값이 없습니다.
 
-후: 기기가 아직 상태를 보내오지 않아 온도를 함께 실을 수 없습니다.
-    「전원」 스위치로는 켤 수 있습니다 — 켜면 기기가 상태를 보내고
-    그 뒤로 온도 조절도 됩니다. 그래도 안 되면 매트가 전원·Wi-Fi 에
-    연결돼 있는지 확인해 주세요.
+after:  기기가 아직 상태를 보내오지 않아 온도를 함께 실을 수 없습니다.
+        「전원」 스위치로는 켤 수 있습니다 — 켜면 기기가 상태를 보내고
+        그 뒤로 온도 조절도 됩니다. 그래도 안 되면 매트가 전원·Wi-Fi 에
+        연결돼 있는지 확인해 주세요.
 ```
 
-**동작은 바꾸지 않았다.** 기기가 정말 오프라인이면 어떤 명령도 안 먹는다.
-할 수 있는 것은 왜 안 되는지 알려주는 것뿐이다.
+**The behavior itself is unchanged.** If the device is truly offline, no
+command will get through either way. All this does is explain why.
 
 ## v0.13.2 — 2026-07-31
 
-**받은 상태를 우리가 스스로 지우고 있었다. 환기청정 엔티티가 `unavailable` 로
-빠지던 원인이다.**
+**We were erasing state we had just received ourselves. This is why the
+ventilation-purifier entity kept falling into `unavailable`.**
 
-제보자가 코드까지 읽고 자료를 정리해 보내주었다 ([#12]). 그 기록의 **시각**이
-원인을 찍었다.
+A reporter read the code and put together the evidence ([#12]). The
+**timestamps** in that record pinpointed the cause.
 
 ```
 command_log   change-mode  at 2038928.0
               status       at 2038931.3
 
-humidity_log  mode: 4      at 2038930.9   ← change-mode 응답
-              mode: null   at 2038939.9   ← status 응답이 덮었다
+humidity_log  mode: 4      at 2038930.9   ← change-mode response
+              mode: null   at 2038939.9   ← overwritten by the status response
 ```
 
-`status` 요청에 기기가 **DID 문서 전체**로 답한다. 그 안의 `roomController.mode`
-는 지금 운전 모드(정수)가 아니라 **지원 조합 배열 14개**다. 그대로 겹쳐 써서 방금
-받은 모드 번호를 배열이 덮었다.
+The device answers a `status` request with the **entire DID document**. The
+`roomController.mode` field inside it isn't the current operating mode (an
+integer) but a **14-entry array of supported combinations**. We overwrote
+blindly with it, and the array clobbered the mode number we'd just received.
 
-### 그 다음이 「기기가 죽은 것처럼 보이는」 이유다
+### And that's why the device looked dead
 
 ```
 mode = None
-  → 지금 모드의 풍량 후보가 빈 목록
-  → 풍량 select 가 「고를 것이 없다」로 판단해 unavailable
+  → the fan-speed candidates for "the current mode" become an empty list
+  → the fan-speed select decides "nothing to choose from" and goes unavailable
 ```
 
-기기는 멀쩡했다. 통계정보에 `available: true`, `poll_failures: 0`,
-`mqtt_connected: true` 가 다 찍혀 있는데 엔티티만 빠져 있던 것이 이것이다.
+The device was fine the whole time. This is why diagnostics showed
+`available: true`, `poll_failures: 0`, and `mqtt_connected: true` all at once
+while only the entity was missing.
 
-### 같은 함정이 하나 더
+### One more instance of the same trap
 
-`additionalData` 도 상태로 올 때와 능력으로 올 때 모양이 다르다.
+`additionalData` also has a different shape depending on whether it arrives
+as state or as capability.
 
-| 어디서 오나 | 모양 |
+| where it comes from | shape |
 | --- | --- |
-| 상태 | `{"type": 3, "value": 40}` — 값 |
-| DID | `{"type": 1, "min": 0, "max": 4}` — 범위표 |
+| state | `{"type": 3, "value": 40}` — a value |
+| DID | `{"type": 1, "min": 0, "max": 4}` — a range table |
 
-범위표가 덮으면 읽어둔 **목표 습도가 사라진다.** 값이 하나도 없는 목록은 상태가
-아니므로 버린다.
+When the range table overwrites it, **the target humidity we'd stored
+disappears.** A list with no values at all isn't state, so it's now discarded.
 
-**진짜 상태값은 그대로 덮어씁니다.** 정수 모드는 정상적으로 갈리고, 값이 있는
-`additionalData` 도 반영됩니다.
+**A real state value still overwrites as normal.** The integer mode switches
+correctly, and `additionalData` that does carry a value is applied.
 
 ## v0.13.1 — 2026-07-31
 
-**구형에서 자동운전·요리에 없는 풍량을 만들고 있었다.**
+**Older models were being offered fan speeds that auto-run and cooking don't have.**
 
-구형(`NRT20DS`) 제보자 화면에 **자동운전인데 풍량이 미풍·약풍·강풍·자동 네 개**로
-떴다. 자동 하나여야 한다.
+A reporter's older-model (`NRT20DS`) screen showed **auto-run with four fan
+speeds — low, medium, high, auto** — when it should have been auto alone.
 
-구형 모드 목록은 앱에 내장된 파일에서 온다. 그 파일에 **「이 모드에서 풍량을 고를
-수 있는가」가 적혀 있는데 옮길 때 흘렸다.** 대신 「기본 조합이면 고를 수 있다」로
-짐작했고, 그 짐작이 두 모드에서 틀렸다.
+The mode list for older models comes from a file bundled in the app. That
+file **records whether fan speed can be chosen in each mode, and that got
+lost in translation on our side.** We guessed instead that "the default
+combination means it can be chosen," and that guess was wrong for two modes.
 
-| 모드 | 앱 파일 | v0.13.0 까지 | v0.13.1 |
+| mode | app file | through v0.13.0 | v0.13.1 |
 | --- | --- | --- | --- |
-| 자동운전 | 고정 | 미풍·약풍·강풍·자동 | **자동** |
-| 요리 | 고정 | 미풍·약풍·강풍·자동 | **강풍** |
-| 환기 · 청정 | 고를 수 있음 | 여섯 | 여섯 (그대로) |
-| 숙면 | 고정 | 자동 | 자동 (그대로) |
+| auto-run | fixed | low/medium/high/auto | **auto** |
+| cooking | fixed | low/medium/high/auto | **high** |
+| ventilation/purification | selectable | six | six (unchanged) |
+| sleep | fixed | auto | auto (unchanged) |
 
-**서버가 다르게 알려줘도 파일을 따릅니다.** 앱이 구형에서는 서버 목록을 아예 안
-보기 때문입니다. 파일에 없는 조합은 서버 쪽을 그대로 씁니다.
+**We now follow the file even when the server says otherwise**, because on
+older models the app never even looks at the server's list. A combination
+missing from the file still falls back to whatever the server says.
 
-**신형은 아무것도 안 바뀝니다.**
+**Nothing changes on newer models.**
 
-### 같이 막아둔 것
+### Also blocked while we were in there
 
-파일의 모든 항목에 `{type:1, min:0, max:4}` 가 달려 있는데 이건 **풍량 범위**입니다.
-신형에서는 같은 번호가 습도 범위라, 그대로 넘겼다면 「목표 습도 0~4%」가 만들어질
-뻔했습니다. 싣지 않도록 하고 검사를 붙였습니다.
+Every entry in the file carries `{type:1, min:0, max:4}`, which means **a
+fan-speed range**. On newer models the same numbers mean a humidity range,
+and passing it through unchanged would have produced a "target humidity
+0-4%." We stopped it from being applied and added a check for it.
 
 ## v0.13.0 — 2026-07-31
 
-**조작 잠금을 켜고 끌 수 있게 했다. v0.12.0 의 판단이 틀렸다.**
+**Control lock can now be switched on and off. v0.12.0's conclusion was
+wrong.**
 
-v0.12.0 에서 「앱에도 Wi-Fi 로 잠그는 기능이 없다」고 적고 읽기 전용 센서로 냈다.
-제보자가 **앱 제어 화면에 자물쇠 버튼이 있는 사진**을 보내와 다시 뒤졌더니 있었다.
+v0.12.0 stated that "the app has no way to lock over Wi-Fi either" and shipped
+it as a read-only sensor. A reporter sent **a screenshot of a lock button on
+the app's control screen**, and digging again turned it up.
 
 ```java
 String str = !mateInfoData1.getLockState() ? "lock-on" : "lock-off";
@@ -825,971 +929,1188 @@ r11 = Boolean.valueOf(areEqual(r35, "lock-on"));   // childLock
 r4  = new Desired(r11, new Event(modelCode), null × 12);
 ```
 
-계절 전환과 같은 모양이고 토픽도 우리가 이미 쓰는 것이다.
+Same shape as the seasonal switch, and the topic is one we already use.
 
-### 왜 놓쳤나
+### Why we missed it
 
-두 검색이 나란히 빗나갔다.
+Two searches missed it in the same direction.
 
-- 명령 이름을 **문자열 그대로** 넘기는 호출만 훑었다. 잠금은 `lock-on`/`lock-off`
-  를 **변수로** 넘긴다
-- `new Desired(` 로 찾았는데 실제 코드는 **전체 경로명**
-  (`new kr.co.kdnavien...Desired(`)이라 안 걸렸다
+- We only scanned calls that pass the command name **as a literal string**.
+  Lock passes `lock-on`/`lock-off` **through a variable**
+- We searched for `new Desired(`, but the actual code uses the **fully
+  qualified name** (`new kr.co.kdnavien...Desired(`), so it didn't match
 
-「없다」를 확인할 때 **한 가지 검색으로 단정하지 않는다.** 앱 화면에 버튼이 보이면
-그게 근거고, 못 찾은 것은 우리 쪽 문제다.
+**Never conclude "it doesn't exist" from one search alone.** A button visible
+on the app screen is evidence; failing to find it is our problem.
 
-### 엔티티가 바뀐다
+### The entity changes
 
 ```
-binary_sensor.<기기>_조작_잠금   →   switch.<기기>_조작_잠금
+binary_sensor.<device>_조작_잠금   →   switch.<device>_조작_잠금
 ```
 
-v0.12.0 · v0.12.1 을 쓰셨다면 **옛 `binary_sensor` 가 「복원됨」 상태로 남습니다.**
-설정 → 기기 및 서비스 → 나비엔 스마트에서 지우시면 됩니다.
+If you were on v0.12.0 or v0.12.1, **the old `binary_sensor` is left behind
+in a "restored" state.** Remove it from Settings → Devices & services →
+Navien Smart.
 
-### 확인된 것
+### Confirmed
 
-제보자가 v0.12.0 에서 **음량 변경이 정상 동작**하는 것을 확인해 주었다.
-잠금 상태 읽기도 맞게 나왔다.
+A reporter confirmed that **changing the volume worked correctly** on
+v0.12.0. Reading the lock state also came back correct.
 
 ## v0.12.1 — 2026-07-31
 
-**센서가 없는 기기에 공기질을 묻던 것을 멈췄다.**
+**Stopped asking devices with no sensor for air quality.**
 
-에어원 제보 둘이 모두 `NRT-530Z3` 였다. 우연이 아니었다.
+Both Airone reports were on an `NRT-530Z3`. Not a coincidence.
 
-### 공기질이 있으면 서버를 6배 두드린다
+### Having air quality means hitting the server 6x harder
 
-| | 매트만 | 에어원 1대 |
+| | mat only | one Airone |
 | --- | --- | --- |
-| 폴링 주기 | 15분 | **5분** (공기질이 REST 로만 오니까) |
-| 주기마다 요청 | 1회 | **2회** (기기목록 + 공기질) |
-| **시간당** | **4회** | **24회** |
+| poll interval | 15 min | **5 min** (air quality only arrives over REST) |
+| requests per cycle | 1 | **2** (device list + air quality) |
+| **per hour** | **4** | **24** |
 
-에어원 사용자만 문제를 겪은 이유가 이것이다. 안 되는 게 아니라 **더 두드려서 더
-걸린 것**이다.
+This is why only Airone users ran into the problem. It wasn't that things
+were broken — **it was being hit harder and taking more damage.**
 
-### 그런데 그 요청이 필요 없는 기기가 있다
+### But some devices don't need that request at all
 
-명세에 이미 적혀 있던 것을 연결하지 못하고 있었다.
+We had failed to wire up something the spec already told us.
 
 ```
-NRT-530S3 (모니터 없음)  roomController.sensor 에 센서 표    ← 룸콘 내장
-NRT-530Z3 (모니터 있음)  roomController.sensor 는 빈 배열
-                         airMonitor[].sensor 에 센서 표      ← 별도 기기
+NRT-530S3 (no monitor)  sensor table on roomController.sensor    ← built into the room controller
+NRT-530Z3 (has monitor) roomController.sensor is an empty array
+                         sensor table on airMonitor[].sensor     ← a separate device
 ```
 
-**둘 다 없는 경우가 있다** — 에어모니터를 안 산 전열교환기. 그 기기에 5분마다
-물어봐야 빈 응답만 온다. 그리고 v0.12.0 이전에는 그 호출이 늦으면 **폴링 전체가
-죽어서 모든 엔티티가 `unavailable`** 이 됐다.
+**There's also a case where neither has one** — an energy-recovery
+ventilator without an air monitor purchased. Asking that device every five
+minutes only gets an empty response back. And before v0.12.0, if that call
+ran slow, **the entire poll would die and every entity went
+`unavailable`.**
 
-이제 기기가 「센서를 아무도 안 들고 있다」고 밝히면 묻지 않는다.
-그 기기의 요청이 **시간당 24회에서 12회로** 줄고, 폴링이 실패할 자리도 절반이 된다.
+Now, once a device declares that "nobody is carrying a sensor," we stop
+asking. That device's requests drop **from 24 per hour to 12**, and there's
+half as much surface for the poll to fail on.
 
-**없다고 확신할 때만 안 묻는다.**
+**We only stop asking once we're sure there's none.**
 
-- 에어모니터가 붙어 있으면 묻는다 — 표가 비어 있어도 묻는다
-- 룸콘이 센서 표를 내놨으면 묻는다
-- **표 자체가 안 왔으면 묻는다** — 「없다」가 아니라 「모른다」다
-- 나중에 에어모니터를 달면 기기목록에 잡혀서 자동으로 다시 묻는다
+- If an air monitor is attached, we ask — even if its table is empty
+- If the room controller offers a sensor table, we ask
+- **If the table itself never arrived, we ask** — that's "unknown," not
+  "none"
+- If an air monitor gets added later, it shows up in the device list and
+  gets asked again automatically
 
-건너뛴 것은 로그에 한 번 남긴다. 판단이 틀렸다면 그 줄이 제보로 돌아온다.
-통계정보에도 `wants_air_sensors` 와 `declared_sensor_count` 로 나온다.
+A skip is logged once. If the judgment turns out wrong, that log line comes
+back as a report. Diagnostics also carries `wants_air_sensors` and
+`declared_sensor_count`.
 
 ## v0.12.0 — 2026-07-31
 
-**제보 셋을 한 번에 처리했다. 둘은 버그, 하나는 새 기능이다.**
+**Handled three reports at once. Two were bugs, one was a new feature.**
 
-### 환기청정 풍량이 3개만 나왔다 — 앱은 6개다 (#9)
+### Ventilation-purifier fan speed only showed 3 options — the app has 6 (#9)
 
-제보자가 앱 「풍량 설정」 화면 사진을 보냈다. **자동 · 절전 · 미풍 · 약풍 · 강풍 ·
-터보 여섯 개.** 우리는 세 개만 만들고 있었다.
+A reporter sent a screenshot of the app's "fan speed" screen. **Six of
+them: auto, eco, low, medium, high, turbo.** We were only creating three.
 
-`supportedAirVolumes` 라는 목록 필드만 믿고 있었는데 **그 필드는 앱 2.10.4 에 아예
-없다.** 서버가 나중에 넣었고 옛 펌웨어 기기는 지금도 안 내려준다. 앱이 실제로 보는
-것은 `configurable` 이다.
+We trusted only the `supportedAirVolumes` list field, but **that field
+doesn't exist at all in app 2.10.4.** The server added it later, and
+devices on old firmware still don't send it. What the app actually looks
+at is `configurable`.
 
-그대로 넓히면 서버가 좁혀준 목록까지 되살아나므로 두 겹으로 막았다 —
-목록을 준 기기는 그 목록만, 같은 조합을 여러 항목으로 나열한 기기는 그 나열만,
-풍량 값이 아예 없는 기기(전열교환기)는 여전히 터보·절전만 보여준다.
+Widening it as-is would also revive the list a device had narrowed down on
+the server side, so we blocked it in two layers — a device that gives a
+list gets only that list; a device that enumerates the same combination as
+multiple entries gets only that enumeration; a device with no fan-speed
+value at all (an energy-recovery ventilator) still shows only turbo/eco.
 
-### 공기질이 열 시간 동안 안 바뀌었다 (#1)
+### Air quality hadn't changed in ten hours (#1)
 
-제보 자료가 서로 안 맞았다.
+The report's data didn't add up.
 
 ```
-마지막으로 값이 바뀐 뒤   35395초   ← 9.8시간째 그대로
-빈 응답 0 · 조회 실패 0 · 안 바뀐 채로 읽은 횟수 0
+seconds since last value changed   35395   ← unchanged for 9.8 hours
+empty responses 0 · query failures 0 · reads with no change 0
 ```
 
-9.8시간 그대로였다면 읽을 때마다 마지막 줄이 올라갔어야 한다. 0 이면 **읽기가 아예
-끝나지 않은 것**인데 실패 횟수도 0 이다. 기록을 안 남기고 빠져나가는 길이 하나 있었다.
+If it had genuinely stayed unchanged for 9.8 hours, that last line should
+have climbed on every read. At 0, **the read never finished at all**, yet
+the failure count was also 0. There was one path out that left no record
+behind.
 
 ```python
-except aiohttp.ClientError    # ← 시간초과를 못 잡는다
+except aiohttp.ClientError    # ← doesn't catch a timeout
 ```
 
-`TimeoutError` 는 `OSError` 계열이라 이 줄에 안 걸린다. **주기까지 겹쳤다** —
-기본 시간제한이 5분인데 환기청정 폴링 주기도 5분이다. 한 번 늦어지면 다음 차례가
-통째로 밀린다.
+`TimeoutError` is in the `OSError` family, so it slips past this line.
+**The intervals also happened to line up** — the default timeout is 5
+minutes, and the ventilation-purifier poll interval is also 5 minutes. One
+late call pushes the entire next cycle back.
 
-같은 시간 MQTT 는 살아 있어서 전원·모드는 멀쩡해 보였다. 공기질만 멈춘 것처럼 보인
-이유가 이것이다.
+MQTT stayed alive the whole time, so power and mode looked fine. That's why
+only air quality looked stuck.
 
-- 시간초과를 잡아 실패로 세고, 3회 연속이면 로그에 남긴다
-- 요청 시간제한을 **30초**로 직접 정했다
-- **폴링 자체의 시각**을 진단에 남긴다 — `last_poll_seconds_ago` · `poll_failures`
+- Timeouts are now caught and counted as a failure, logged after 3 in a row
+- Set the request timeout explicitly to **30 seconds**
+- Diagnostics now carries **the poll's own timing** — `last_poll_seconds_ago`
+  and `poll_failures`
 
-마지막 줄이 핵심이다. 실패·빈 응답·안 바뀜이 모두 0 인데 값만 옛것인 상황을 다음에는
-자료 한 장으로 가른다.
+That last line is the key. When failures, empty responses, and no-change
+reads are all 0 yet the value is stale, that one field will separate the
+two cases next time.
 
-### 매트에 조작음 음량과 조작 잠금이 생겼다
+### Mats gained key-tone volume and control lock
 
-제보자 `EMF520` 상태에 `volume` 과 `childLock` 이 둘 다 올라왔다. **성격이 다르다.**
+A reporter's `EMF520` state showed both `volume` and `childLock`. **They're
+different in nature.**
 
 | | |
 | --- | --- |
-| 조작음 음량 | **바꿀 수 있다.** 음소거 · 1 · 2 · 3 단계 (`select`) |
-| 조작 잠금 | **보여주기만 한다** (`binary_sensor`) |
+| key-tone volume | **changeable.** Mute · 1 · 2 · 3 (`select`) |
+| control lock | **display only** (`binary_sensor`) |
 
-앱 음량 화면에 칸이 넷이고 그 값이 그대로 명령에 실린다. 범위를 추측한 것이 아니다.
+The app's volume screen has four slots and the value is sent to the command
+as-is. This isn't a guessed range.
 
-잠금은 다르다. **앱에 Wi-Fi 로 잠그는 경로가 없다** — 잠금·해제 상수는 있는데 쓰는
-곳이 앱 전체에 없고, 필드에 setter 조차 없다. 조작은 블루투스 모델에만 있다.
-스위치로 만들면 눌러도 아무 일이 없으므로 상태만 보여준다.
+Lock is different. **The app has no path to lock over Wi-Fi** — the
+lock/unlock constants exist, but nothing in the whole app calls them, and
+the field doesn't even have a setter. Control is Bluetooth-only, and only
+on some models. As a switch, pressing it would do nothing, so it's shown as
+state only.
 
-기기에 없는 기능은 여전히 안 만든다 — 음량은 `functions.beep`, 잠금은
-`functions.lockMode` 가 있을 때만 생긴다.
+A feature the device doesn't have is still not created — volume only
+appears when `functions.beep` is present, lock only when
+`functions.lockMode` is.
 
-### 냉방에서 좌우가 따로 된다는 것이 확인됐다
+### Confirmed that cooling controls left and right independently
 
-`EMF520` 제보에 냉방 중 **좌 25.0 · 우 25.5** 로 서로 다르게 잡혀 있었다.
-v0.11.1 에서 「좌우를 묶던 것」을 걷어낸 판단이 실기기로 맞은 것이 됐다.
-README 를 「모델에 따라 다릅니다」에서 사실대로 고쳤다.
+An `EMF520` report showed cooling mode holding **left at 25.0 and right at
+25.5**, different from each other. This confirms, on a real device, the
+judgment behind removing "tying left and right together" in v0.11.1. The
+README's "depends on the model" wording was corrected to match the fact.
 
 ## v0.11.1 — 2026-07-31
 
-**사계절 매트 제보로 셋을 고쳤다. 둘은 내가 만든 것이다.**
+**A four-season mat report led to three fixes. Two of them were bugs we
+introduced.**
 
-`EMF520` 사용자가 v0.10.0 의 계절 전환을 실기기에서 확인해 주었다 —
-**난방↔냉방 전환이 된다.** 온도 범위가 계절 따라 갈리는 것도 의도대로다.
+An `EMF520` user confirmed v0.10.0's season switching on a real device —
+**heating↔cooling switching works.** The temperature range shifting by
+season is also working as intended.
 
-### 냉방인데 운전 상태가 「난방」으로 보였다
+### Cooling showed the running state as "heating"
 
-`operationMode` 는 난방이든 냉방이든 **운전 중이면 같은 값**이다. 무엇을 하는지는
-`season` 이 정하는데, 표를 그대로 써서 냉방에도 「난방」이 나왔다.
+`operationMode` **carries the same value whether heating or cooling, as
+long as it's running.** What it's actually doing is decided by `season`,
+but we used the table as-is, so cooling also showed "heating."
 
-고치면서 하나 더 찾았다 — **냉방 기능이 없는 매트가 `season` 을 보내와도 냉방으로
-읽히고 있었다.** `is_cooling` 이 `coolControl` 을 보지 않았다.
+While fixing it we found one more — **a mat with no cooling feature at all
+was still being read as cooling** whenever it sent a `season` value.
+`is_cooling` wasn't checking `coolControl`.
 
-### 냉방에서 좌우를 묶던 것을 걷어냈다 — 모델별 동작을 코드에 박아넣었다
+### Removed the code that tied left and right together in cooling — it had
+### baked model-specific behavior into the code
 
-v0.9.0 부터 냉방+좌우분리면 한쪽을 바꿔도 **양쪽에 같은 값**을 보냈다. 근거는 앱
-안내문이었다.
+Since v0.9.0, changing one side while cooling with independent left/right
+sent **the same value to both sides.** The basis for that was the app's
+help text.
 
 ```
-COOL 모드 — 매트의 좌우가 같은 온도로 동작합니다
+COOL mode — the mat's left and right run at the same temperature
 ```
 
-**모델 얘기가 빠진 문구였다.** 나비엔 제품 페이지는 이렇게 적는다.
+**That wording left out which model it applied to.** Navien's product page
+says:
 
 ```
-0.5℃ 분리 냉난방 기술로 좌우 원하는 온도로
-해당 기능은 사계절형 Pro 모델에만 적용됩니다
+0.5°C independent heating/cooling technology lets you set left and right
+to the temperature you want — this feature only applies to the four-season
+Pro model
 ```
 
-Pro 는 냉방에서도 좌우가 따로 간다. **서버는 Pro/Air 를 알려주지 않는다.**
-모델별 동작을 코드에 박아넣은 셈이고, 그건 이 통합이 하지 않기로 한 것이다.
+The Pro model does control left and right independently even in cooling.
+**The server doesn't tell us Pro versus Air.** Tying them together amounted
+to baking model-specific behavior into the code, which is exactly what this
+integration decided not to do.
 
-제보자가 올린 스마트싱스 화면에 냉방 상태로 **좌 25.5 / 우 24.5** 가 떠 있었다.
-그게 답이었는데 못 알아봤다.
+A SmartThings screenshot the reporter posted showed cooling state with
+**left at 25.5 and right at 24.5.** That was the answer, and we didn't
+recognize it at the time.
 
-이제 **누르신 구역에만 보낸다.** 묶여 도는 모델이면 기기가 두 값을 같게 돌려주고
-우리는 그것을 보여준다. **기기가 하는 일을 앞질러 정하지 않는다.**
+Now **we only send the zone you pressed.** On a model that runs tied
+together, the device itself returns both values equal and we just show
+that. **We don't get ahead of the device and decide what it does.**
 
-### 오류 코드 이름
+### Error code names
 
-제보자가 기기 설명서에서 옮겨 준 15개를 넣었다.
+Added 15 codes a reporter transcribed from the device manual.
 
-**상태값은 숫자 그대로 두고 `error_text` 속성으로만 보여준다** — 글자로 바꾸면 이
-값을 쓰던 자동화가 깨진다. 그리고 **온도형에만 붙인다.** 물탱크·순환펌프·UV램프·
-누수가 나오는 것으로 보아 온수·사계절 계열 설명서이고, 카본(단계형)에 같은 번호가
-같은 뜻이라는 근거가 없다.
+**The state value stays a raw number; the name only shows up as the
+`error_text` attribute** — turning it into text would break any automation
+built on the numeric value. And **it's only attached to the temperature-mat
+type.** The presence of water tank, circulation pump, UV lamp and leak
+codes marks this as a hot-water/four-season-line manual, and there's no
+basis for assuming the same numbers mean the same thing on a carbon
+(stepped) mat.
 
-### 오늘 세 번째로 같은 실수였다
+### The same mistake, for the third time today
 
-- 진단 기록 — 「쌓인다」를 **코드로만** 확인했다 (v0.9.5)
-- 모드 목록 — **함수 하나** 보고 출처를 단정했다 (v0.11.0)
-- 좌우 묶기 — **문구 하나** 보고 기기 동작을 단정했다
+- Diagnostics recording — confirmed "it accumulates" **from the code
+  alone** (v0.9.5)
+- Mode list — concluded where it came from **from a single function**
+  (v0.11.0)
+- Tying left/right together — concluded device behavior **from a single
+  line of text**
 
-셋 다 **하나만 보고 결론을 냈다.**
+All three **reached a conclusion from a single piece of evidence.**
 
 ## v0.11.0 — 2026-07-30
 
-**환기청정 구세대(`modelCode` 1000 미만)를 지원한다.** 지금까지 엔티티가 하나도
-안 생겼던 기기들이다.
+**Adds support for older-generation ventilation-purifiers (`modelCode`
+below 1000).** These devices had produced zero entities up to now.
 
-### 기여로 열렸다
+### Opened up by a contribution
 
-실기기 `NRT-20DSW` 를 가진 분이 확인해서 보내주셨다
-([#7](https://github.com/ripe-avocado/navien_smart_ha/pull/7)). **우리에게 구세대
-기기가 없어 열 수 없던 구간이다.**
+A user with a real `NRT-20DSW` confirmed and sent this in
+([#7](https://github.com/ripe-avocado/navien_smart_ha/pull/7)). **This was
+a section we had no way to open without an older-generation device on
+hand.**
 
-설계가 좋다 — 세대 차이를 **받는 곳과 보내는 곳 두 군데에만** 넣고 모델·엔티티는
-신형 어휘 하나만 안다. 검증된 신형 경로를 흔들지 않는다.
+The design is good — the generation difference is confined to **exactly two
+places, where state arrives and where commands are sent**, and the
+model/entity layer only knows one, current-generation vocabulary. The
+verified current-generation path isn't disturbed.
 
-| | 신형 | 구세대 |
+| | current generation | older generation |
 | --- | --- | --- |
-| 상태 경로 | `did.reported` | `did.state.reported` |
-| 제어 토픽 | `cmd/rc/v2/…` | `cmd/rc/…` (`v2` 없음) |
-| 명령 봉투 | `state.desired` | `request` |
-| 전원 | 운전 = 1 | **운전 = 2** (반대) |
+| state path | `did.reported` | `did.state.reported` |
+| control topic | `cmd/rc/v2/…` | `cmd/rc/…` (no `v2`) |
+| command envelope | `state.desired` | `request` |
+| power | running = 1 | **running = 2** (reversed) |
 
-전원 반전은 앱 소스에서도 따로 확인했다 — `powercontrol()` 의
-`modelCode < 1000` 분기가 켜져 있으면 1, 꺼져 있으면 2 를 보낸다.
+The reversed power value was separately confirmed in the app's source too —
+in `powercontrol()`, the `modelCode < 1000` branch sends 1 when turning on
+and 2 when turning off.
 
-### 모드 목록 — 내가 두 번 틀렸다
+### Mode list — I got this wrong twice
 
-**처음에 DID 를 능력 목록으로 봤다.** 기여자가 DID 에 없는 모드를 목록에 넣어
-왔고, 나는 다른 제보 자료를 반례로 들어 좁히게 했다.
+**At first I read the DID as a capability list.** A contributor sent in a
+list containing modes absent from the DID, and I had it narrowed down by
+citing other report data as a counterexample.
 
-그 뒤 앱 함수 하나(`makeModeList()`)가 DID 로 목록을 만드는 것을 보고 **「좁힌 것이
-앱과 같다」고 답했다. 그것도 틀렸다** — 그 함수가 읽는 변수를 누가 채우는지 보지
-않았다.
+I then saw a single app function (`makeModeList()`) build the list from the
+DID and **concluded "the narrowed version matches the app." That was also
+wrong** — I never traced who fills in the variable that function reads.
 
-사용자 **두 분의 앱 화면이 모두 여섯 개**인 것이 확인되어 다시 뒤졌고, 답이
-나왔다. 앱은 구세대에서 **DID 를 아예 보지 않는다.**
+Rechecking after **both users'** app screens turned out to show six modes
+each, the answer came out: on older-generation devices the app **doesn't
+look at the DID at all.**
 
 ```java
 if (modelCode < 1000) { loadlegacyModeDataFromFile(); ... }
 // assets/jsons/airone_legacy_mode_did.json
 ```
 
-이제 그 파일 내용을 그대로 쓴다. **모델별 표가 아니라 세대별 표 하나**이고 앱도
-모든 구세대에 같은 것을 쓴다.
+We now use that file's contents directly. **It's one table per generation,
+not per model**, and the app uses the same one for every older-generation
+device.
 
 ```
 자동운전 · 환기 · 청정 · 요리 · 숙면 · 바이패스
 풍량: 미풍 · 약풍 · 강풍 · 자동 · 터보 · 절전
 ```
 
-### 바이패스만 조건이 다르다 — 읽을 수 없는 플래그
+### Bypass is the one exception — a flag we can't read
 
-분기를 끝까지 읽으니 앱도 능력으로 거른다. **다만 그 능력이 `mode[]` 가 아니다.**
+Reading the branch all the way through, the app does filter by capability
+too — **just not through `mode[]`.**
 
 ```java
-if (did.supportByPass == 2)  modeDidList.add(ModeDid(17, 1, …))   // 바이패스
+if (did.supportByPass == 2)  modeDidList.add(ModeDid(17, 1, …))   // bypass
 ```
 
-`supportByPass` 는 **MQTT 로 DID 를 따로 요청해 받는 응답**에 있고 기기목록에는
-없다. 확인한 두 대 모두 없었다. **그래서 이 조건을 평가할 수 없다.**
+`supportByPass` lives in **the response to a DID request made separately
+over MQTT**, and it's absent from the device list. Neither of the two
+devices we checked had it. **So this condition can't be evaluated.**
 
-그래도 바이패스를 넣는다 — 실기기 두 대의 앱 화면에 다 있고, 기여자가 17 명령이
-기기에 먹는 것을 확인했다. 안 넣으면 두 기기 모두 있는 기능이 사라진다.
+We include bypass anyway — it's present on both real devices' app screens,
+and a contributor confirmed command 17 is accepted by the device. Leaving
+it out would remove a feature both devices actually have.
 
-같은 자리의 기저 환기(`basalairUse`)와 요리 풍량 자동(`kitchenMode.autoUse`)은
-**넣지 않았다.** 두 기기에서 확인된 것이 없다.
+Two items in the same spot — basal ventilation (`basalairUse`) and
+cooking-mode auto fan speed (`kitchenMode.autoUse`) — were **left out.**
+Neither was confirmed on either device.
 
-**정확히 하려면 구세대에서 DID 를 MQTT 로 요청해야 한다.** 남은 일로 적어 두었다.
+**Doing this correctly would mean requesting the DID over MQTT on
+older-generation devices too.** Noted as remaining work.
 
-### 기기는 DID 에 없는 모드도 받는다
+### The device accepts modes absent from the DID
 
-기여자 실측이다. `mode[]` 에 없는 12 · 6 · 17 을 보내도 기기가 적용한다.
-**「기기가 받는 것」과 「앱이 보여주는 것」이 다르고, 앱 쪽이 좁다.**
+A contributor's real measurement: sending 12, 6, or 17, none of which are
+in `mode[]`, the device applies them anyway. **"What the device accepts"
+and "what the app shows" are different, and the app is the narrower one.**
 
-**교훈:** 함수 하나를 보고 출처를 단정했다. 그 함수가 읽는 값을 **누가 채우는지**
-따라가지 않았다. 두 번째로 같은 실수다 — 첫 번째는 진단 기록이 폴링마다
-지워지던 것(v0.9.5)이었고, 그때도 「쌓인다」를 코드로만 확인했다.
+**Lesson:** we concluded where something came from by looking at a single
+function, without tracing **who fills in** the value that function reads.
+This is the same mistake for the second time — the first was diagnostics
+being erased on every poll (v0.9.5), where we also confirmed "it
+accumulates" from the code alone.
 
-### 그 밖에
+### Also
 
-- **재시작 후 상태 복원** — 구세대는 상태 요청에 답하지 않는다. 마지막으로 받은
-  값을 되살리고, 진단에 `state_restored` 로 **복원된 값임을 표시**한다.
-  기기가 스스로 올리면 표시가 지워진다
-- **구세대 전용 진단 센서** — 설정값과 동작값이 나뉘어 오는데 이름이 오해를
-  부른다(`supportedOperationMode` 는 능력 목록이 아니라 **설정된 모드**다).
-  뜻이 확인된 것만 이름을 붙였다
-- **필터** — 구세대는 사용률(%)이 아니라 사용 시간으로 온다. **단위를 몰라
-  숫자만 둔다**
+- **State restored after a restart** — older-generation devices don't
+  answer a state request. We restore the last value received, and
+  diagnostics marks it with `state_restored` **to flag it as a restored
+  value.** The flag clears once the device reports on its own
+- **Older-generation-only diagnostic sensors** — the configured value and
+  the operating value arrive separately under names that invite confusion
+  (`supportedOperationMode` isn't a capability list, it's **the configured
+  mode**). Only named the ones whose meaning was confirmed
+- **Filter** — on older-generation devices this arrives as usage time, not
+  a usage percentage. **We leave it as a bare number since the unit is
+  unknown**
 
-### 아직 안 된 것
+### Still not done
 
-**우리 손으로 확인할 수 없는 경로가 생겼다.** 구세대 기기가 없다. 앞으로 에어원
-쪽을 고칠 때 못 보는 자리가 있다는 뜻이다.
+**This opened up a path we can't verify ourselves.** We don't have an
+older-generation device. It means there will be a blind spot the next time
+the Airone side gets fixed.
 
 ## v0.10.0 — 2026-07-30
 
-**난방↔냉방 전환이 HA 에서 됩니다.** 「기기에서 바꿔 주세요」라고 적어둔 것을 걷었다.
+**Heating↔cooling switching now works from HA.** Removed the note that
+said "switch it from the device."
 
-### 커뮤니티 댓글 하나로 풀렸다
+### Solved by a single community comment
 
-스마트싱스 커스텀 컴포넌트가 계절모드를 `coolPlus` 로 보여준다는 제보가 왔다.
+A report came in that a SmartThings custom component displays the season
+mode as `coolPlus`.
 
-**`coolPlus` 는 나비엔 값이 아니다** — 앱 문자열 전수 검색에서 0건이다. 스마트싱스
-쪽 라벨이고, 규격표의 `Cool+` 도 모델 이름이다.
+**`coolPlus` isn't a Navien value** — a full-text search of the app's
+strings turns up zero matches. It's a SmartThings-side label, and the
+spec sheet's `Cool+` is a model name too.
 
-**그 제보가 다시 뒤지게 만든 것이 수확이었다.** 계절을 쓰는 경로가 앱에 있었다.
+**What mattered was that the report sent us digging again.** The app does
+have a path that uses season.
 
-| 확인한 것 | |
+| what we confirmed | |
 | --- | --- |
-| 값 | **0 난방 / 2 냉방 두 개뿐** — 앱 계절 화면에 버튼이 둘이다 |
-| 봉투 | `Desired.season` (정수) — **우리가 이미 쓰는 그 봉투** |
-| 토픽 | shadow 업데이트 — **우리가 이미 쓰는 그 토픽** |
-| `event.modelCode` | `async_control` 이 이미 모든 명령에 붙인다 |
+| values | **only 0 (heating) / 2 (cooling)** — the app's season screen has
+two buttons |
+| envelope | `Desired.season` (integer) — **the same envelope we already
+use** |
+| topic | the shadow update — **the same topic we already use** |
+| `event.modelCode` | `async_control` already attaches this to every
+command |
 
-**새로 만든 것이 없다.** 기존 경로에 필드 하나를 더 얹는 것이 전부였다.
-그동안 못 연 이유는 「어디로 보내는지 모른다」였고, 그것만 남아 있었다.
+**Nothing new had to be built.** It was just one more field on top of an
+existing path. The reason we hadn't opened this before was "we don't know
+where to send it," and that was the only thing missing.
 
-### 「계절」 목록으로 만들었다
+### Modeled as a "season" list, not a climate mode
 
-`climate` 의 난방·냉방 버튼으로 만들지 않았다. **계절은 지금 무엇을 하는지가 아니라
-기기가 어느 쪽으로 설정돼 있는지**다. 앱도 제어 화면이 아니라 기기 설정 화면에 두고,
-바꾸면 온도 범위가 통째로 갈린다(난방 28~45 / 냉방 20~35).
+We didn't build this as heating/cooling buttons on `climate`. **Season
+isn't what the device is doing right now, it's which side the device is
+configured for.** The app puts it on the device settings screen rather
+than the control screen too, and switching it shifts the whole temperature
+range (heating 28-45, cooling 20-35).
 
-`climate` 모드 버튼에 얹으면 「지금 난방 중」과 「난방으로 설정됨」이 같은 자리에
-겹친다.
+Putting it on the `climate` mode buttons would overlap "currently heating"
+and "configured for heating" in the same spot.
 
-**아는 값만 보낸다.** 0 과 2 가 아니면 거부한다 — `coolPlus` 같은 것을 넣을 자리를
-만들지 않는다. 서버가 모르는 값을 보내오면 목록 상태를 비운다.
+**We only send values we recognize.** Anything other than 0 or 2 is
+rejected — there's no slot for something like `coolPlus` to land in. If
+the server sends a value we don't know, the list state is left empty.
 
-### 아직 확인되지 않았다
+### Not yet confirmed
 
-**사계절 매트가 없어 직접 눌러보지 못했다.** 앱이 보내는 것과 같은 값을 같은 경로로
-보내지만, 그것과 기기가 반응하는 것은 다르다 — 오늘 그걸로 두 번 틀렸다.
+**We have no four-season mat, so we couldn't press it ourselves.** Sending
+the same value over the same path the app uses is not the same thing as
+the device actually responding to it — we got that wrong twice today
+already.
 
-`EMF520` 사용자 두 분이 냉방 제어를 요청했다. 그분들 회신으로 닫는다.
+Two `EMF520` users had requested cooling control. We're closing this out on
+their confirmation.
 
-**단계형 사계절의 냉방 단계 범위는 여전히 모른다.** 단계 목록은 냉방에서 그대로
-손을 뗀다.
+**The cooling step range for the stepped four-season models is still
+unknown.** The step list stays untouched in cooling.
 
 ## v0.9.5 — 2026-07-30
 
-**진단 기록이 폴링마다 지워지고 있었다. v0.9.3 의 공기질 감지는 한 번도 울릴 수
-없었다.**
+**Diagnostics records were being erased on every poll. This meant the
+air-quality-detection warning added in v0.9.3 could never fire.**
 
-### 이어받을 목록에 안 넣었다
+### Left out of the carry-over list
 
-기기 객체는 폴링마다 새로 만든다. 그때 무엇을 이어받을지 나열하는데,
-v0.9.0~v0.9.3 에서 넣은 기록을 그 목록에 넣지 않았다.
+Device objects are rebuilt fresh on every poll. That rebuild lists what
+should carry over, and the records added in v0.9.0-v0.9.3 were never added
+to that list.
 
 ```python
-device.reported = old.reported          # 이것만 이어받고
+device.reported = old.reported          # only these carried over
 device.air_sensors = old.air_sensors
 device.sensor_kinds = old.sensor_kinds
 device.last_humidity = old.last_humidity
-# command_log · state_log · air_sensor_errors · air_sensor_unchanged … 없음
+# command_log · state_log · air_sensor_errors · air_sensor_unchanged … absent
 ```
 
-| 만든 것 | 실제 동작 |
+| what we built | what it actually did |
 | --- | --- |
-| 공기질 3회 연속 실패 시 `WARNING` | **한 번도 울릴 수 없었다** — 횟수가 0 으로 돌아가 3 에 못 닿는다 |
-| `air_sensor_unchanged_reads` | 항상 0 |
-| 매트 `command_log` · `state_log` | 폴링마다 지워짐 |
-| 에어원 `command_log` · `humidity_log` | 폴링마다 지워짐 |
+| `WARNING` after 3 consecutive air-quality failures | **could never fire**
+— the counter reset to 0 and never reached 3 |
+| `air_sensor_unchanged_reads` | always 0 |
+| mat `command_log` / `state_log` | erased on every poll |
+| Airone `command_log` / `humidity_log` | erased on every poll |
 
-**그동안 쓸모가 있었던 것은 제보자들이 몇 분 안에 조작하고 바로 받았기
-때문이다.** 폴링 창 하나 안에 들어갔다. 운이 좋았을 뿐이다.
+**The only reason this had seemed to work at all is that reporters operated
+the device and got a response within a few minutes** — inside a single poll
+window. Pure luck.
 
-### 왜 못 알아챘나
+### Why we didn't catch it
 
-**「기록이 남는다」를 코드로만 확인하고 시간 축으로 확인하지 않았다.** 테스트는
-한 객체에 값을 여러 번 넣어 쌓이는 것만 봤다. 폴링이 객체를 갈아치우는 것은
-그 테스트가 볼 수 없는 자리였다.
+**We confirmed "the record persists" from the code alone, never along the
+time axis.** The tests only checked that pushing several values into one
+object made them accumulate. A poll replacing the whole object was a spot
+those tests couldn't see.
 
-이제 이어받는 것을 검사에 넣었다.
+Carrying values over is now covered by a check.
 
-### 이 판으로 갈릴 것
+### What this will help tell apart
 
-제보: 「HA 값이 15분 넘게 안 바뀐다」 — 히스토리가 3시간 반 동안 평평했다.
-원인이 둘인데 아직 못 갈랐다.
+A report: "the HA value hasn't changed in over 15 minutes" — the history
+sat flat for three and a half hours. There are two possible causes and we
+still can't tell them apart.
 
-| | 이제 어떻게 보이나 |
+| | how it will show up now |
 | --- | --- |
-| 서버가 같은 값을 계속 준다 | `air_sensor_unchanged_reads` 가 수십으로 쌓인다 |
-| 조회가 주기대로 안 돈다 | 그 값은 0 인데 `air_sensor_changed_seconds_ago` 만 커진다 |
+| the server keeps returning the same value | `air_sensor_unchanged_reads`
+climbs into the dozens |
+| queries aren't running on schedule | that value stays 0 while only
+`air_sensor_changed_seconds_ago` grows |
 
 ## v0.9.4 — 2026-07-30
 
-**통계정보에 기기ID가 새고 있었다. 값 안에 박힌 것은 안 가려졌다.**
+**Device IDs were leaking through diagnostics. What's embedded inside a
+value wasn't being redacted.**
 
-### 값 안에 식별자가 박혀 있으면 그냥 나갔다
+### An identifier embedded inside a value just went out as-is
 
-이슈 제보 파일에 이 줄이 그대로 있었다.
+An issue report's attached file had this line, unredacted.
 
 ```
 "requestTopic": "dt/rc/7/1097BD3F5CACB84E/did"
 ```
 
-`requestTopic` 이 가릴 키 목록에 없었고, **그 값 안에 기기ID가 들어 있다.**
-제보자가 이 줄을 공개 이슈에 올렸다.
+`requestTopic` wasn't in the list of keys to redact, and **the device ID is
+embedded inside its value.** The reporter posted this line on a public
+issue.
 
-**같은 종류의 사고가 두 번째다.** 처음은 우리가 직접 만든 표(`air_monitors`)에
-가림을 빼먹은 것이었다. 그때는 그 표에만 가림을 더했다. **그것으로 끝낸 것이
-잘못이었다** — 방식 자체가 「키 이름이 목록에 있으면 가린다」였고, 값 속에 박힌
-식별자는 처음부터 대상이 아니었다.
+**This is the second incident of the same kind.** The first was missing
+redaction on a table we built ourselves (`air_monitors`). That time we only
+added redaction for that one table. **Stopping there was the mistake** —
+the approach itself was "redact if the key name is on the list," and an
+identifier embedded inside a value was never in scope to begin with.
 
-### 키를 더하는 것으로 끝내지 않았다
+### Didn't stop at adding one more key
 
-`requestTopic` 을 목록에 넣으면 이번 것만 막힌다. 다음에 또 샌다.
+Adding `requestTopic` to the list only blocks this one case. The next leak
+happens the same way.
 
-**식별자 값을 먼저 모아 두고, 결과 전체에서 그 문자열을 지운다.** 키 이름이
-무엇이든, 어느 깊이에 있든 걸린다.
+**Instead, identifier values are now collected first, and that exact
+string is stripped from the entire result** — no matter what the key is
+named or how deep it sits.
 
 ```
 "requestTopic": "dt/rc/7/**REDACTED**/did"
 ```
 
-**토픽 모양은 남는다.** 지원을 넓히는 데 필요한 것은 모양이고 식별자가 아니다.
+**The topic's shape survives.** What's needed to widen support is the
+shape, not the identifier.
 
-8자 미만은 모으지 않는다 — 짧은 값은 다른 문자열에 우연히 들어 있을 수 있고,
-그걸 지우면 멀쩡한 값이 망가진다. 긴 것부터 지운다.
+Anything under 8 characters isn't collected — a short value could
+coincidentally appear inside some other string, and stripping it would
+corrupt a perfectly good value. Longer values are stripped first.
 
-### README 가 안 되는 모델을 되는 것처럼 적어 두었다
+### The README listed models as supported when they aren't
 
-환기청정 모델 목록이 **앱 「기기 추가」 화면의 목록**이었다. 앱이 지원하는 모델이지
-우리가 지원하는 모델이 아니다. 「신형만 됩니다」를 아래에 적어두긴 했지만, 표에
-`NRT-20D 시리즈` 가 있으면 된다고 읽는다.
+The ventilation-purifier model list had been **the list from the app's
+"add device" screen.** That's what the app supports, not what we support.
+"Newer models only" was noted below it, but seeing `NRT-20D series` in the
+table reads as "this works."
 
-같은 제보로 `NRT-20DS` 가 구형(`modelCode 7`)임을 확인했다. 이제 표를
-**확인된 것 / 안 되는 것 / 아직 모르는 것**으로 나눠 적는다.
+The same report confirmed `NRT-20DS` is an older-generation model
+(`modelCode 7`). The table now separates entries into **confirmed / does
+not work / not yet known.**
 
-「아직 모르는 것」은 안 된다는 뜻이 아니다. 모델별 표를 코드에 넣지 않으므로
-신형이면 될 가능성이 높다 — 그 말도 함께 적었다.
+"Not yet known" doesn't mean it doesn't work. Since we don't hard-code a
+per-model table, a newer model is likely to work — that note was added
+alongside it.
 
-`TAC` 계열(상업용 SCADA)이 범위 밖이라는 것도 명시했다.
+Also made explicit that the `TAC` line (commercial SCADA) is out of scope.
 
 ## v0.9.3 — 2026-07-30
 
-**아무 문제가 없는데 로그에 경고를 찍고 있었다. 그리고 공기질이 멈춰도 흔적이
-없었다.**
+**We were logging a warning about a situation that had no problem at all.
+And air quality could stop updating with no trace of it.**
 
-### 「실기기로 검증하지 않았습니다」를 `WARNING` 으로 찍고 있었다
+### "Not verified on a real device" was being logged as a `WARNING`
 
-제보자가 이 줄을 **오류로 알고 이슈에 붙였다.**
+A reporter **took this line as an error and attached it to an issue.**
 
 ```
 환기청정을 찾았습니다 (modelCode=1900). 지원을 켰지만 실기기로 검증하지
 않았습니다 — 동작하지 않거나 값이 이상할 수 있습니다.
 ```
 
-두 가지가 틀렸다.
+Two things were wrong with it.
 
-1. **사실이 아니다.** 상태·제어·목표 습도가 제보로 확인됐다
-2. **`WARNING` 은 문제가 있을 때만 쓴다.** HA 로그 화면은 기본으로 경고 이상만
-   보여준다. 그래서 아무 문제가 없는데 걱정을 만들었다
+1. **It wasn't even true anymore.** State, control, and target humidity
+   had already been confirmed by reports
+2. **`WARNING` should only be used when something is actually wrong.** The
+   HA log screen shows warnings and above by default, so this raised
+   concern over nothing
 
-`INFO` 로 내리고 문구를 고쳤다. 무엇을 찾았는지만 남기고, 이상하면 알려 달라고 한다.
-**검증된 모델 목록은 코드에 적지 않는다** — 모델은 계속 늘어난다.
+Dropped it to `INFO` and reworded it — it now only states what was found,
+and asks to be told if something looks off. **We don't hard-code a list of
+verified models in the code** — models keep getting added.
 
-### 공기질이 멈춰도 아무 흔적이 없었다
+### Air quality could stop with no trace left behind
 
-제보: 「값이 다르네요」 — HA 는 CO₂ 527ppm·습도 49%, 앱은 479ppm·52%.
-온도·종합 공기질·먼지는 정확히 같았으니 **값이 오는 길 자체는 맞다.**
+A report: "the values are different" — HA showed CO2 527ppm / humidity
+49%, the app showed 479ppm / 52%. Temperature, the overall air-quality
+index, and particulates matched exactly, so **the path the values travel
+through is correct.**
 
-측정 시각 차이일 가능성이 크지만 **가릴 수가 없었다.**
+Most likely a difference in measurement timing, but **there was no way to
+tell.**
 
-v0.8.2 에서 「빈 응답으로 이미 받은 값을 지우지 않는다」로 고쳤다. 그 대가로
-**갱신이 멈춰도 화면에 옛 값이 그대로 남는다.** 조회 실패와 빈 응답이 둘 다
-`DEBUG` 였다. **v0.8.3 에서 지적한 것과 똑같은 구멍을 여기에 남겼다.**
+v0.8.2 had fixed this by "an empty response no longer erases a value
+already received." The cost of that fix was that **a stale value stays on
+screen indefinitely if updates stop.** Both query failures and empty
+responses were logged at `DEBUG`. **This left exactly the same gap that
+v0.8.3 had pointed out, in this spot.**
 
-| 진단 항목 | 무엇을 가리나 |
+| diagnostic field | what it shows |
 | --- | --- |
-| `air_sensor_changed_seconds_ago` | 값이 **마지막으로 바뀐** 뒤 몇 초 |
-| `air_sensor_read_errors` | 조회가 실패한 횟수 |
-| `air_sensor_empty_responses` | 빈 응답이 온 횟수 |
-| `air_sensor_unchanged_reads` | 값이 왔는데 앞과 같았던 횟수 |
+| `air_sensor_changed_seconds_ago` | seconds since the value **last
+changed** |
+| `air_sensor_read_errors` | number of failed queries |
+| `air_sensor_empty_responses` | number of empty responses received |
+| `air_sensor_unchanged_reads` | number of reads that came back the same as
+before |
 
-조회가 **3회 연속(약 15분) 실패하면 `WARNING`** 으로 알린다 — 화면 값이 그 전에
-받은 것이라고 명시한다.
+A query failing **3 times in a row (roughly 15 minutes) now raises a
+`WARNING`** — stating explicitly that the value on screen is from an
+earlier read.
 
-### 문서
+### Docs
 
-- 환기청정 두 형태 모두 확인됐다고 적었다 (분리형 `NRT-530Z3`, 올인원 `NRT-530S3`)
-- **올인원 룸콘은 에어모니터 없이도 공기질이 나온다** — 룸콘에 센서가 들어 있다
-- 코드 주석의 「에어원은 실기기에 보내본 적이 없다」를 고쳤다. **직접 눌러본 것과
-  제보로 들은 것을 구분해서 적는다**
+- Noted that both ventilation-purifier form factors are confirmed
+  (separate `NRT-530Z3`, all-in-one `NRT-530S3`)
+- **The all-in-one room controller reports air quality even without an air
+  monitor** — the sensor is built into the room controller
+- Fixed a code comment claiming "Airone has never been sent a command on a
+  real device." **We now distinguish what was pressed ourselves from what
+  we only heard through a report**
 
 ## v0.9.2 — 2026-07-30
 
-**제습 목표 습도가 이제 보인다. 원인은 읽는 자리를 잘못 짚은 것이었다.**
+**Target dehumidification humidity is now visible. The cause was looking
+in the wrong place for it.**
 
-### 기기는 `type 3` 으로 돌려준다
+### The device reports it back as `type 3`
 
-v0.9.1 에서 넣은 진단이 **첫 제보에서 답을 줬다.**
+The diagnostics added in v0.9.1 **gave us the answer on the very first
+report.**
 
 ```
 "reported_additional_data": [
   {"type": 1, "value": 1},
-  {"type": 3, "value": 60}     ← 목표 습도
+  {"type": 3, "value": 60}     ← target humidity
 ]
 ```
 
-서버 능력 정보는 범위를 `{"type": 1, "min": 40, "max": 65}` 로 준다. 그래서 **읽기도
-같은 번호일 것이라 단정했다.** 아니었다. 상태는 값을 `type: 3` 으로 준다. 같은 목록의
-`type: 1` 은 범위 0~4 인 다른 항목이고, 그것만 뒤지다가 못 찾아 화면이 늘 비어 있었다.
+The server's capability info gives the range as `{"type": 1, "min": 40,
+"max": 65}`. So **we assumed the reported value would use the same
+number.** It didn't. State reports the value as `type: 3`. `type: 1` in
+the same list is a different item with a range of 0-4, and searching only
+that one meant we never found it, so the display stayed empty forever.
 
-**번호를 조건으로 걸지 않았다.** 관측이 한 기기뿐이다. 판정 기준은 **서버가 알려준
-범위 안에 있는 값**이고, 후보가 여럿일 때만 확인된 번호(`3`)를 먼저 쓴다.
+**We stopped hard-coding the number as a condition.** Only one device has
+been observed. The rule now is **a value that falls inside the range the
+server reported**, and only when there are multiple candidates does the
+confirmed number (`3`) get tried first.
 
-### 보내는 것은 처음부터 먹고 있었다
+### The command we send had been working all along
 
-제보자가 앱으로 확인해 주었다 — HA 에서 55 로 맞추면 앱도 55, 60 으로 맞추면 앱도 60.
+A reporter confirmed via the app — setting 55 from HA also showed 55 in
+the app, setting 60 showed 60.
 
-**기기는 값을 잃은 적이 없다.** 「제습으로 돌아오면 40% 로 초기화된다」는 것은
-**우리 화면이 비어 있어 손잡이가 맨 왼쪽에 붙은 것**이었다. 실제로 40 이 온 적은
-없다.
+**The device had never actually lost the value.** "It resets to 40% when
+returning to dehumidify mode" was actually **our display sitting empty and
+its slider handle resting at the far left.** 40 was never actually
+reported.
 
-v0.8.3 과 v0.9.0 에서 두 번 「기기가 되돌린다」는 전제로 고치려 했고 둘 다 틀렸다.
-**전제를 확인하지 않고 대책을 세웠다.** v0.9.0 의 재적용은 그래서 사용자 조작까지
-덮었다(v0.9.1 에서 걷어냈다).
+v0.8.3 and v0.9.0 had both tried to fix this on the assumption that "the
+device reverts it," and both were wrong. **We built a fix on top of an
+unverified assumption.** That's why v0.9.0's reapply logic ended up
+overwriting the user's own input too (removed in v0.9.1).
 
-### 문서
+### Docs
 
-환기청정을 룸콘 형태로 나눠 적었다 — 분리형은 되고, 올인원은 상태값 문제를 찾는 중이다.
-터보·절전에서 목표 습도가 「자동」인 것도 적었다.
+Split the ventilation-purifier notes by room-controller form factor —
+separate units work, the all-in-one is still being investigated for a
+state-value issue. Also noted that target humidity shows as "auto" in
+turbo and eco.
 
 ## v0.9.1 — 2026-07-30
 
-**v0.9.0 이 사용자 조작을 되돌렸다. 걷어냈다.**
+**v0.9.0 was reverting the user's own actions. Removed.**
 
-### 풍량을 바꾸면 8초 뒤에 되돌아갔다 — v0.9.0 에서 내가 넣은 버그
+### Changing fan speed snapped back after 8 seconds — a bug I introduced in
+### v0.9.0
 
-제보자가 v0.9.0 통계정보를 보내줬다. **보낸 기록과 관측 기록을 시각순으로 붙이니
-바로 나왔다.**
+A reporter sent their v0.9.0 diagnostics. **Lining up the commands sent
+and the states observed in time order made it obvious immediately.**
 
 ```
-610528.4  우리 보냄   제습 · 기본풍량   습도 50
-610530.4  우리 보냄   제습 · 터보        ← 사용자가 터보 선택
-610531.9  우리 보냄   제습 · 기본풍량    ← 재적용이 터보를 덮었다
-610533.2  기기 응답   제습 · 터보
-610534.8  기기 응답   제습 · 기본풍량    ← 끌려갔다
+610528.4  we sent    dehumidify · default fan speed   humidity 50
+610530.4  we sent    dehumidify · turbo                ← the user selected turbo
+610531.9  we sent    dehumidify · default fan speed    ← reapply overwrote turbo
+610533.2  device replied   dehumidify · turbo
+610534.8  device replied   dehumidify · default fan speed  ← dragged back
 ```
 
-판정에서 `mode` 만 비교하고 `option` 을 빼먹었다. 같은 제습 안에서 풍량만 바꾸면
-「다른 모드로 갔다」로 안 보고 덮어썼다.
+The comparison only checked `mode` and left out `option`. Changing only
+the fan speed within the same dehumidify mode wasn't seen as "moved to a
+different mode," so it got overwritten.
 
-### 재적용 자체를 걷어냈다
+### Removed the reapply mechanism entirely
 
-가드를 고치는 것으로 끝내지 않았다. **성립할 수 없는 장치였다.**
+We didn't stop at fixing the guard condition. **The whole mechanism could
+never have worked.**
 
-`humidity_log` 관측 여덟 건이 **전부 비어 있다.** 기기가 목표 습도를 상태로 돌려주지
-않는다. 그러면 「되돌려졌는지」를 판정할 수가 없고, 재전송은 영원히 실패로 취급되어
-모드를 바꿀 때마다 한 번 더 나간다.
+All eight of the `humidity_log` observations **came back empty.** The
+device never reports target humidity back as state. Without that, there's
+no way to judge whether a value "got reverted," so the resend would be
+treated as having failed forever, firing once more every time the mode
+changed.
 
-**근거 없이 계속 쏘지 않는다.** 습도는 모드 변경에 실어 한 번만 보낸다.
+**We stop firing a command with no evidence to justify it.** Humidity is
+now sent exactly once, riding along with the mode change.
 
-### 터보·절전에서 습도 범위를 만들어내지 않는다
+### Stopped inventing a humidity range for turbo and eco
 
-서버는 제습·기본풍량에만 범위(40~65)를 준다. v0.9.0 은 「범위는 모드의 성질이다」며
-같은 모드의 다른 조합에서 끌어왔다. **추측이었고 앱과 어긋난다** — 앱 리소스에
-`humidityAutoText` 와 `humiditySeekbarNone` 이 있다. 터보·절전에서 앱은 슬라이더를
-감추고 「자동」으로 보여준다.
+The server only gives a range (40-65) for dehumidify with default fan
+speed. v0.9.0 had assumed "the range is a property of the mode" and
+carried it over to other fan-speed combinations in the same mode. **That
+was a guess, and it contradicted the app** — the app's resources contain
+`humidityAutoText` and `humiditySeekbarNone`. In turbo and eco, the app
+hides the slider and shows "auto" instead.
 
-이제 조합이 정확히 맞을 때만 인정한다. 없는 범위를 만들면 조절할 수 없는 값을
-조절하는 것처럼 보이고, 그 값이 명령에 실려 나간다.
+We now only accept it when the exact combination matches. Inventing a
+range that doesn't exist makes an uncontrollable value look adjustable,
+and that value then rides along in the command.
 
-### 목표 습도가 어디 있는지 찾을 자리
+### A place to look for where target humidity actually lives
 
-기기가 습도를 안 돌려준다는 것까지는 알았고, **어디에 싣는지는 모른다.** 키 이름만
-담아서는 더 못 간다.
+We now know the device doesn't report humidity back, but **we don't know
+where it puts it.** Just logging key names won't get us any further.
 
-진단에 **숫자와 참·거짓만** 담는다. 문자열을 통째로 빼는 것이 가림 장치다 —
-기기ID·SSID·별칭·MAC 은 모두 문자열이라 걸리지 않는다. **가릴 키를 나열하는 방식은
-새 키가 생기면 새는데**, 이 방식은 새 문자열 키가 생겨도 안 나간다.
+Diagnostics now carries **only numbers and booleans.** Stripping out
+entire strings is the redaction mechanism here — device IDs, SSIDs,
+nicknames, and MAC addresses are all strings, so none of them slip
+through. **A method that lists keys to redact leaks the moment a new key
+appears**; this method doesn't leak even when a new string-valued key
+shows up.
 
-### 별칭이 문자열로 오면 통합 전체가 죽었다
+### The whole integration crashed if the nickname arrived as a plain string
 
-`nickName` 을 항상 `{"mainItem": ...}` 형태로 단정하고 있었다. 문자열로 오는 계정이
-있으면 해석 중에 예외가 나고 **기기가 하나도 안 보인다.** 통계정보에서는 이 값이
-가려져 원래 형태를 알 수 없다 — 그러니 단정할 근거가 없었다.
+We had assumed `nickName` always arrives shaped as `{"mainItem": ...}`. On
+an account where it arrives as a plain string, parsing throws and **not a
+single device shows up.** Diagnostics redacts this value, so its actual
+shape wasn't visible — there was never a basis for that assumption.
 
-실제로 그런 제보가 온 것은 아니다. 값이 싼 방어라 넣었다.
+No report of this actually happening has come in. It's a cheap enough
+defense to add regardless.
 
 ## v0.9.0 — 2026-07-30
 
-**사계절 매트 냉방을 제어할 수 있게 했고, 매트 값이 사라지던 버그와 제습 목표 습도가
-되돌아가던 버그를 고쳤다.**
+**Four-season mat cooling can now be controlled, along with fixes for a
+bug that erased mat values and a bug that reverted the dehumidify target
+humidity.**
 
-### 사계절 매트 냉방 제어
+### Four-season mat cooling control
 
-지금까지 냉방은 **읽기만** 됐다. 온도가 보이고 값도 맞는데 조절할 수 없었다.
-냉방 값 체계를 확인하지 못해 막아둔 것이었다.
+Until now, cooling was **read-only.** The temperature showed correctly,
+but it couldn't be adjusted. It had been blocked because the cooling value
+scheme hadn't been confirmed.
 
-서버가 내려주는 `coolControl` 이 나비엔 공개 규격표와 정확히 일치하는 것을
-확인했다 — 0.5도 간격, 모델별 범위, 안전값. **표를 코드에 넣지 않는다.**
-기기가 알려준 범위를 그대로 쓴다.
+We confirmed that the `coolControl` field the server sends matches
+Navien's published spec sheet exactly — 0.5-degree steps, per-model
+ranges, safety limits. **We don't hard-code the spec sheet.** We use
+whatever range the device itself reports.
 
-| | 난방 | 냉방 |
+| | heating | cooling |
 | --- | --- | --- |
-| 온도 조절 | 됨 | **됨** (새로) |
-| 슬라이더 범위 | `heatControl` | `coolControl` |
-| 좌우 분리 | 각각 | **같은 값** |
+| temperature control | works | **works** (new) |
+| slider range | `heatControl` | `coolControl` |
+| left/right independence | independent | **same value** |
 
-**냉방에서 좌우가 같은 값이 되는 것은 기기 동작이다.** 앱 안내문에 그렇게 적혀
-있다. 한쪽만 바꿔도 양쪽이 함께 간다.
+**Left and right ending up at the same value in cooling is device
+behavior**, stated as such in the app's help text. Changing one side moves
+both.
 
-열지 않은 것:
+Not yet opened up:
 
-- **난방 ↔ 냉방 전환** — 계절 값을 쓰는 방법을 모른다. 기기·앱에서 바꾼다
-- **단계형 사계절 모델의 냉방** — 확인된 것은 온도형뿐이다. 단계 선택은 그대로 막아둔다
-- **냉방 고온 경고** — 난방은 「너무 뜨거움」이 위험이지만 냉방은 반대다.
-  안전값이 어느 방향인지 몰라 붙이지 않았다
+- **Heating ↔ cooling switching** — we don't know how to write the season
+  value yet. Switch it on the device or in the app
+- **Cooling on stepped four-season models** — only the temperature-based
+  models have been confirmed. Step selection stays blocked
+- **Cooling high-temperature warning** — for heating, "too hot" is the
+  dangerous direction, but cooling is the opposite. We didn't add a safety
+  limit since we don't know which direction applies
 
-### 매트 값이 「알 수 없음」으로 사라졌다 — 내 버그
+### Mat values vanished into "unknown" — a bug on our side
 
-`EMF520` 사용자 제보: 좌우 컨트롤러가 「한쪽은 꺼짐만, 한쪽은 꺼짐과 현재온도를
-번갈아, 그러다 둘 다 꺼짐」.
+An `EMF520` user reported: the left/right controllers went "one side
+showing only off, the other alternating between off and the current
+temperature, then both ended up off."
 
-**원인은 v0.8.1 에서 이미 고친 것과 같은 종류였다.** 그때는 환기청정만 고쳤다.
-매트는 「상태가 항상 전체로 온다」고 보고 손대지 않았다.
+**The cause was the same kind of bug already fixed in v0.8.1** — but that
+fix only covered ventilation-purifiers. We had left mats alone, believing
+"state always arrives as a complete set."
 
-**그 근거는 내 매트 두 대뿐이었다.** 사계절 모델은 바뀐 구역 하나만 보낸다.
-통째로 갈아끼우는 바람에 전원·계절·반대쪽 구역이 함께 사라졌다.
+**That belief rested on nothing but my own two mats.** Four-season models
+only send the one zone that changed. Replacing the whole object wholesale
+erased power, season, and the other zone along with it.
 
-이제 매트도 **들어온 것만 겹쳐 쓴다.** 깊이 상관없이 겹치므로, 온도 하나만 온
-응답에서도 단계나 켜짐 상태를 잃지 않는다.
+Mats now **overlay only what arrived**, the same as everything else,
+regardless of depth — so even a response carrying just one temperature no
+longer loses the step level or on/off state.
 
-### 제습 목표 습도가 40% 로 되돌아가던 것 — v0.8.3 의 고침이 틀렸다
+### Dehumidify target humidity kept reverting to 40% — v0.8.3's fix was
+### wrong
 
-v0.8.3 에서 **모드 변경 메시지에 습도를 같이 실어 보내는 방식**으로 고쳤다.
-제보자가 확인해 주었다 — **증상이 그대로였다.**
+v0.8.3 had fixed this by **sending humidity along with the mode-change
+message.** A reporter confirmed **the symptom was unchanged.**
 
-기기가 그 습도를 안 받는다. 모드에 **들어간 뒤에** 받아야 하는 것으로 보인다.
+The device doesn't accept that humidity value there. It appears to need
+to be sent **after** entering the mode, not alongside the switch into it.
 
-이제 모드를 바꾼 뒤 상태를 다시 읽고, **그때도 값이 되돌아가 있을 때만** 한 번 더
-보낸다.
+We now re-read the state after changing mode, and send it once more
+**only if the value has actually reverted** at that point.
 
-- 기기가 처음 것을 이미 받았으면 값이 같아 보내지 않는다
-- 사용자가 일부러 그 값으로 두었으면 역시 건드리지 않는다
-- 그 사이 다른 모드로 갔으면 남의 조작을 덮지 않는다
-- **반복 전송은 하지 않는다.** 한 번만 고쳐 보낸다
+- If the device already accepted the first value, it matches and nothing
+  is resent
+- If the user deliberately left it at that value, it's also left alone
+- If the mode changed again in the meantime, someone else's action isn't
+  overwritten
+- **No repeated resending.** At most one corrective send
 
-**이번에도 안 되면 그때는 짐작하지 않는다.** 아래 기록으로 기기가 무엇을 무시하는지
-확정한다.
+**If this still doesn't work, we won't guess again next time.** The
+records below are there to pin down exactly what the device is ignoring.
 
-### 남은 세 건을 「추측」이 아니라 「제보」로 닫게 했다
+### Turned the three remaining open cases into "reports," not "guesses"
 
-값을 짐작해서 코드에 넣는 대신 **근거를 받아낼 자리**를 만들었다. 통계정보만 받으면
-원인이 가려진다.
+Instead of guessing a value and hard-coding it, we built **a place to
+collect evidence.** Diagnostics alone hides the cause.
 
-| 진단 항목 | 무엇을 가리나 |
+| diagnostic field | what it shows |
 | --- | --- |
-| `command_log` | **보낸 값.** 26.0 을 보냈는데 기기가 26.0 을 돌려주는지 |
-| `state_log` | **관측된 값의 순서.** 계절 값이 실제로 무엇으로 바뀌는지 |
-| `humidity_log` | 습도를 실어 보낸 순서와 기기가 돌려준 값 |
-| `mqtt_messages` | **받은 개수와 버린 개수.** 「안 온다」와 「와도 못 쓴다」를 가른다 |
-| `airone_last_unknown_shape_keys` | 버렸다면 어떤 모양이었는지 |
+| `command_log` | **the value sent.** Whether sending 26.0 gets 26.0 back
+from the device |
+| `state_log` | **the order of observed values.** What the season value
+actually changes to |
+| `humidity_log` | the order humidity was sent in, and what the device
+reported back |
+| `mqtt_messages` | **counts received versus discarded.** Separates "it
+never arrived" from "it arrived but couldn't be used" |
+| `airone_last_unknown_shape_keys` | what shape a discarded message had |
 
-기록은 8줄까지만 남는다. **값은 온도·단계·개수·키 이름뿐이다** — 식별자는 담지
-않는다.
+Records are capped at 8 lines. **Values are limited to temperatures,
+steps, counts, and key names** — no identifiers are stored.
 
 ## v0.8.3 — 2026-07-30
 
-**제습 목표 습도가 초기화되던 버그를 고쳤고, 상태가 안 오는 원인을 스스로 밝히게
-만들었다.**
+**Fixed a bug where the target dehumidification humidity kept resetting,
+and made the integration surface, on its own, why state isn't arriving.**
 
-### 목표 습도가 40% 로 되돌아갔다 — 내 버그
+### Target humidity kept reverting to 40% — a bug on our side
 
-제보: 「제습모드에서 목표습도를 설정해놓고 다른모드로 변경하였다가 다시 제습모드로
+Report: 「제습모드에서 목표습도를 설정해놓고 다른모드로 변경하였다가 다시 제습모드로
 전환하면 세팅한게 다시 초기화(40%)로 바뀌어있습니다」
 
 ```python
-target = humidity                       # None (모드만 바꾸는 중)
-bounds = self.humidity_bounds(mode, option)   # 제습 → (40, 65)
+target = humidity                       # None (only changing mode)
+bounds = self.humidity_bounds(mode, option)   # dehumidify → (40, 65)
 if target is None and bounds is not None:
-    current = self.target_humidity      # ← 여기가 문제
+    current = self.target_humidity      # ← the problem is here
 ```
 
-`target_humidity` 는 **「지금 모드」** 를 기준으로 범위를 찾는다. 환기에서 제습으로
-넘어가는 순간에는 아직 환기이므로 **항상 `None`** 이다. 그래서 습도를 아예 실어
-보내지 않고, 기기가 자기 최소값으로 되돌렸다.
+`target_humidity` looks up its range based on **"the current mode."** At
+the exact moment of switching from ventilation into dehumidify, the mode
+is still ventilation, so this is **always `None`.** So humidity never got
+included in the command at all, and the device fell back to its own
+minimum.
 
-이제 **들어갈 모드**의 범위를 보고, **마지막으로 알던 습도를 기억**해 실어 보낸다.
+We now look at the range for **the mode being entered**, and send along
+**the last humidity we remembered.**
 
-범위 밖 기억은 **잘라 쓰지 않고 버린다** — 사용자가 고른 적 없는 값을 만들지 않는다.
-직접 지정한 값은 자른다(의도가 분명하다).
+A remembered value outside that range is **discarded rather than
+clamped** — we don't manufacture a value the user never actually chose. A
+value the user set directly is clamped instead (the intent there is
+unambiguous).
 
-### 상태가 안 오는 원인을 조용히 삼키고 있었다
+### We were silently swallowing the reason state wasn't arriving
 
-`NRT-530S3`(올인원 룸콘) 사용자에게서 운전 모드·전원·풍량이 계속 비어 있다는
-제보가 왔다. 같은 계열 `NRT-530Z3`(룸콘 분리형)은 정상이다.
+A report came in from an `NRT-530S3` (all-in-one room controller) user:
+operating mode, power, and fan speed stayed empty indefinitely. The same
+line's `NRT-530Z3` (separate room controller) works fine.
 
-**원인을 가릴 수 없었다 — 버리는 코드가 전부 `DEBUG` 였다.** 기본 설치는
-`WARNING` 만 보므로 흔적이 하나도 남지 않았다.
+**We had no way to pin down the cause — every discard path logged at
+`DEBUG`.** A default install only shows `WARNING` and above, so nothing
+was left behind at all.
 
-고친 것:
+What was fixed:
 
-- **`idu`(실내기) 상태도 받는다.** 올인원 룸콘은 룸콘과 실내기가 한 덩어리라 상태를
-  이쪽으로 올릴 가능성이 있다 — `did` 에 이 필드가 실재한다. **값은 해석하지 않고**
-  받아서 진단에 담는다
-- **모르는 모양의 상태 메시지를 `WARNING` 으로 남긴다.** 최상위 키 이름만 남기고
-  값은 남기지 않는다
-- **45초 안에 상태가 안 오면 `WARNING`.** 보낸 토픽과 듣는 토픽을 함께 찍는다.
-  **조용한 실패가 가장 잡기 어렵다** — 요청은 성공(HTTP 200)했는데 응답이 없으면
-  사용자는 통합이 고장난 줄 안다
+- **We now also receive `idu` (indoor unit) state.** On the all-in-one room
+  controller, the room controller and indoor unit are one physical unit,
+  so state may be reported under this field instead — it does exist in the
+  `did`. **We don't interpret the value**, just capture it into
+  diagnostics
+- **A state message of unrecognized shape is now logged at `WARNING`.**
+  Only the top-level key names are kept; values are not
+- **`WARNING` if no state arrives within 45 seconds.** Logs the topic sent
+  and the topic being listened on together. **A silent failure is the
+  hardest kind to catch** — when the request itself succeeds (HTTP 200)
+  but no response follows, the user assumes the integration itself is
+  broken
 
-### 진단에 넣은 것
+### What was added to diagnostics
 
-값을 담지 않고 **관계와 유무만** 담는다.
+Rather than values, this carries only **relationships and presence/absence.**
 
-| 항목 | 무엇을 가리나 |
+| field | what it shows |
 | --- | --- |
-| `reported_received` | 상태가 한 번이라도 도착했는지 |
-| `reported_keys` | 어느 묶음이 왔는지 (`roomController` / `odu` / `airMonitor` / `idu`) |
-| `reported_room_controller_keys` | 왔는데 `running`·`mode` 만 빠진 것인지 |
-| `physical_id_same_as_device_id` | 올인원과 분리형의 ID 구조가 다른지 — **가림 때문에 두 ID 를 눈으로 비교할 수 없다** |
-| `last_humidity_remembered` | 습도 기억이 살아 있는지 |
+| `reported_received` | whether state has arrived even once |
+| `reported_keys` | which groups arrived (`roomController` / `odu` /
+`airMonitor` / `idu`) |
+| `reported_room_controller_keys` | whether it arrived but only `running`
+and `mode` were missing |
+| `physical_id_same_as_device_id` | whether the all-in-one and separate
+units differ in ID structure — **redaction means the two IDs can't be
+compared by eye** |
+| `last_humidity_remembered` | whether a remembered humidity value is
+still alive |
 
-**교훈:** 「추측해서 만들지 않는다」는 지켰지만 **「못 쓴 것을 알리지 않았다」.**
-버리는 자리마다 흔적을 남겨야 제보가 답이 된다.
+**Lesson:** we had kept to "don't build on a guess," but **we hadn't been
+telling anyone what we failed to use.** Every discard path needs to leave a
+trace, or a report can't lead anywhere.
 
-합성 데이터 307개 통과. 제보받은 응답으로 만든 것이 89개다.
+307 synthetic test cases pass. 89 of them were built from real reported
+responses.
 
 ## v0.8.2 — 2026-07-30
 
-**공기질 센서가 5분마다 「알 수 없음」으로 빠지던 버그를 고쳤다.**
-v0.8.1 과 같은 실수를 다른 자리에서 반복했다.
+**Fixed a bug where the air-quality sensors fell into "unknown" every five
+minutes.** The same mistake as v0.8.1, repeated in a different spot.
 
-### 원인
+### Cause
 
-공기질은 MQTT 로 오지 않고 **5분마다 `/air-sensor` 를 다시 읽는다.** 그 응답을
-`set_air_sensors` 가 **통째로 갈아끼우고 있었다.**
+Air quality doesn't arrive over MQTT — it's **re-read from `/air-sensor`
+every five minutes.** `set_air_sensors` was **replacing the whole thing
+wholesale** with that response.
 
-응답이 한 번 비어서 오거나 일부 항목만 오면 그때 나머지가 사라진다. 에어모니터가
-잠깐 끊기거나 서버가 한 번 거르면 **5분 주기로 센서가 「알 수 없음」이 된다.**
+If the response arrives empty once, or with only some items, everything
+else vanishes at that point. If the air monitor drops out briefly, or the
+server skips a beat, **the sensors fall into "unknown" on a five-minute
+cycle.**
 
-이제 **겹쳐 쓴다.** 빈 응답으로는 아무것도 지우지 않고, 일부만 오면 그것만 갱신한다.
+We now **overlay it.** An empty response erases nothing, and a partial one
+only updates what it contains.
 
-### 같은 실수를 두 번 했다
+### The same mistake, twice
 
-| 자리 | 고친 버전 |
+| location | fixed in |
 | --- | --- |
-| MQTT 상태 응답 (`apply_reported`) | v0.8.1 |
-| 공기질 REST 응답 (`set_air_sensors`) | **v0.8.2** |
+| MQTT state response (`apply_reported`) | v0.8.1 |
+| air-quality REST response (`set_air_sensors`) | **v0.8.2** |
 
-둘 다 「서버가 준 것으로 갈아끼운다」였고, 둘 다 **서버가 부분만 주는 경우**를
-생각하지 않았다. 매트는 shadow 가 항상 전체를 주므로 이 함정이 없었고, 그 습관을
-에어원에 그대로 옮긴 것이 원인이다.
+Both were "replace with whatever the server gave us," and both never
+considered **the case where the server gives only part of it.** Mats never
+hit this trap because the shadow always sends the whole thing, and that
+habit carried straight over onto Airone, which is what caused this.
 
-**들어오는 것이 전체라는 보장이 없으면 갈아끼우지 않는다.** 에어원 쪽에 남은
-갱신 경로가 이 둘뿐인지 확인했다.
+**When there's no guarantee that what's arriving is the complete set, we
+don't replace wholesale.** Confirmed these are the only two remaining
+update paths on the Airone side.
 
-### 제보로 확인된 것
+### Confirmed by reports
 
-`v0.8.0` 으로 **에어모니터가 정상적으로 추가된다**는 것을 제보자가 확인해 주었다.
-`/air-sensor` 경로 수정(`data.sensorList[].airs[]`)이 실제로 통했다.
+A reporter confirmed that **an air monitor now gets added correctly**
+with `v0.8.0`. The `/air-sensor` path fix
+(`data.sensorList[].airs[]`) actually worked.
 
-「잘 불러오다가 상태값이 가출했다가 모드 바꾸면 또 작동한다」는 제보가 v0.8.1 의
-증상 설명과 정확히 일치한다 — 받아오긴 하는데 유지가 안 됐다.
+A report saying "it loads fine, then the state value goes missing, then
+switching modes makes it work again" matches v0.8.1's symptom description
+exactly — it was arriving, just not staying.
 
-합성 데이터 290개 통과. 제보받은 응답으로 만든 것이 77개다.
+290 synthetic test cases pass. 77 of them were built from real reported
+responses.
 
 ## v0.8.1 — 2026-07-30
 
-**전원을 조작하면 엔티티가 「알 수 없음」으로 빠지던 버그를 고쳤다.**
-커뮤니티 제보로 잡았다.
+**Fixed a bug where entities fell into "unknown" whenever power was
+operated.** Caught through a community report.
 
-### 원인 — 부분 응답을 통째로 덮어썼다
+### Cause — a partial response was overwriting the whole thing
 
 ```python
-device.reported = reported     # ← 갈아끼운다
+device.reported = reported     # ← replaces the whole thing
 ```
 
-에어원은 **명령마다 응답이 따로 오고 그것이 부분 페이로드다.** 전원을 끄면
-`{"roomController": {"running": 2}}` 처럼 바뀐 것만 오거나, `roomController` 없이
-`odu` 만 오기도 한다.
+On Airone, **each command gets its own separate response, and that
+response is a partial payload.** Turning power off might send only what
+changed, like `{"roomController": {"running": 2}}`, or sometimes just
+`odu` with no `roomController` at all.
 
-통째로 갈아끼우면 그때 `mode` · `option` · `airVolume` 이 사라지고, `odu` 만 온
-경우에는 `running` 까지 없어져 **전원 스위치가 「알 수 없음」이 된다.**
+Replacing wholesale erased `mode`, `option`, and `airVolume` at that
+point, and when only `odu` arrived, even `running` disappeared — **making
+the power switch go "unknown."**
 
-이제 **겹쳐 쓴다.** 들어온 항목만 갈아끼우고 나머지는 유지한다. 목록
-(`airMonitor` · `filter`)은 통째로 바꾼다 — 부분 목록을 항목별로 섞으면 자리가
-어긋난다.
+We now **overlay it.** Only the items that arrived get replaced; the rest
+stay as they were. Lists (`airMonitor`, `filter`) are still replaced
+wholesale — merging a partial list item by item would misalign positions.
 
-오래된 값이 남을 수 있다는 것은 감수한다. 기기가 어떤 항목을 더 이상 보내지 않으면
-마지막 값이 남는다. **전부 「알 수 없음」이 되는 것보다 낫다.**
+We accept the risk of a stale value lingering. If the device stops sending
+some item, its last value stays. **Better than everything going
+"unknown."**
 
-**매트는 건드리지 않았다.** shadow 가 항상 전체를 주므로 이 처리가 필요 없고,
-검증이 끝난 경로를 보존하는 것이 우선이다.
+**Mats were left untouched.** The shadow always sends the complete set, so
+this handling isn't needed there, and preserving an already-verified path
+takes priority.
 
-### 같은 제보에서 확인한 것
+### Also confirmed from the same report
 
-**필터 사용률이 「알 수 없음」인 자리는 정상이다.** 제보자 기기는 실외기가 필터 4개를
-선언하고 **2개만 사용률을 보낸다.** 없는 값을 0% 로 채우면 거짓이 된다.
+**A filter usage rate showing "unknown" in some spots is normal.** The
+reporter's device has an outdoor unit declaring 4 filters, but **only 2 of
+them report a usage rate.** Filling the missing ones in as 0% would be a
+lie.
 
-그 기기 펌웨어는 실내기 `10.1` · 실외기 `16.00` 으로, 앞선 제보(`13.0` · `17.00`)보다
-낮다. **같은 모델도 펌웨어에 따라 보내는 항목이 다르다.** 서버가 준 것만 쓰는 설계가
-맞았다.
+That device's firmware is indoor unit `10.1` / outdoor unit `16.00`, older
+than an earlier report's (`13.0` / `17.00`). **Even the same model sends
+different items depending on firmware.** The design of using only what the
+server actually sends turned out to be the right call.
 
-### README — 확인된 것과 아닌 것을 갈랐다
+### README — split confirmed from unconfirmed
 
-환기청정을 「됩니다 (미검증)」으로만 적어뒀다. 제보로 **상태 표시는 확인됐고**
-(운전 상태 · 운전 모드 · 풍량 · 필터 · 공기질), **HA 에서 조작한 것이 기기에 먹히는지는
-여전히 아무도 확인하지 않았다.** 그 구분을 넣었다.
+Ventilation-purifiers had simply been marked "works (unverified)." Reports
+have now confirmed **that state display works** (running state, operating
+mode, fan speed, filter, air quality), while **whether an action taken
+from HA actually reaches the device is still unconfirmed by anyone.** That
+distinction was added.
 
-「됩니다」로 뭉개면 제어가 안 될 때 신뢰를 잃고, 「미검증」으로 뭉개면 이미 확인된
-것을 깎아내린다.
+Blurring it into "works" loses trust the moment control doesn't work;
+blurring it into "unverified" undersells what's already confirmed.
 
-합성 데이터 281개 통과. 제보받은 응답으로 만든 것이 68개다.
+281 synthetic test cases pass. 68 of them were built from real reported
+responses.
 
 ## v0.8.0 — 2026-07-30
 
-**실기기 제보 두 건으로 에어원 버그 다섯 개를 고쳤다.** `NRT-530S3`(1900) 과
-`NRT-530Z3`(1901, 에어모니터 포함) 통계정보를 받았다. 합성 데이터로는 나올 수 없던
-것들이다.
+**Fixed five Airone bugs from two real-device reports.** Received
+diagnostics from an `NRT-530S3` (1900) and an `NRT-530Z3` (1901, with an
+air monitor). None of these could have surfaced from synthetic data.
 
-### 1. 풍량이 「자동」 하나뿐이었다
+### 1. Fan speed only ever showed "auto"
 
-`ModeDid` 에 **APK 에 없던 필드**가 있었다.
+`ModeDid` had **a field that doesn't appear in the APK.**
 
 ```json
 {"name":4, "option":1, "airVolume":4, "supportedAirVolumes":[1,2,3,4]}
 ```
 
-`airVolume` 은 **지금 값**이고 `supportedAirVolumes` 가 **고를 수 있는 목록**이다.
-앞의 것만 읽어서 항목이 하나로 줄었다.
+`airVolume` is **the current value**, and `supportedAirVolumes` is **the
+selectable list.** We only read the former, so the entity had just one
+option.
 
-**커뮤니티의 「풍량에 미풍·약풍·강풍이 안 나온다」가 이 원인이다.**
+**This is the cause behind the community's "fan speed never shows
+low/medium/high."**
 
-### 2. 운전 모드가 절반만 나왔다 — `configurable` 오독
+### 2. Only half the operating modes showed up — `configurable` was
+### misread
 
-「이 모드를 고를 수 있는가」로 읽었다. **틀렸다.** `configurable: true` 인 항목은
-정확히 `supportedAirVolumes` 나 `additionalData` 를 가진 것들이다 —
-**「이 모드 안에서 풍량·습도를 조절할 수 있는가」** 다.
+We had read it as "can this mode be selected." **Wrong.** Entries with
+`configurable: true` are exactly the ones carrying `supportedAirVolumes`
+or `additionalData` — it means **"can fan speed or humidity be adjusted
+within this mode,"** not whether the mode itself is selectable.
 
-자동운전·환기제습·요리·숙면·터보·절전이 전부 `false` 인데 앱에서는 다 고를 수 있다.
+Auto-run, ventilation+dehumidify, cooking, sleep, turbo, and eco all come
+back `false`, yet every one of them is selectable in the app.
 
-| | 전 | 후 |
+| | before | after |
 | --- | --- | --- |
-| 운전 모드 | 환기 · 제습 · 청정 · 바이패스 (4) | **자동운전 · 환기제습 · 환기 · 제습 · 청정 · 요리 · 숙면 · 바이패스 (8)** |
-| 풍량 (환기) | 자동 (1) | **미풍 · 약풍 · 강풍 · 자동 · 터보 · 절전 (6)** |
+| operating modes | ventilation · dehumidify · purify · bypass (4) |
+**auto-run · ventilation+dehumidify · ventilation · dehumidify · purify ·
+cooking · sleep · bypass (8)** |
+| fan speed (ventilation) | auto (1) | **low · medium · high · auto ·
+turbo · eco (6)** |
 
-### 3. 에어모니터 공기질 센서가 하나도 안 생겼다
+### 3. Not a single air-monitor air-quality sensor was created
 
-`/air-sensor` 응답 경로를 틀렸다.
+The `/air-sensor` response path was wrong.
 
 ```
-짐작: data.airs[]
-실제: data.sensorList[].airs[]
+assumed: data.airs[]
+actual:  data.sensorList[].airs[]
 ```
 
-에어모니터가 붙어 있는데도 센서가 0개였다. 존이 여럿일 수 있어 목록을 모두 훑고,
-앞선 짐작도 폴백으로 남겼다.
+An air monitor was attached, yet zero sensors were created. Since there
+can be multiple zones, we now scan the whole list, and kept the earlier
+assumed path as a fallback.
 
-### 4. 목표 습도가 `1` 로 나왔다
+### 4. Target humidity showed as `1`
 
-`additionalData` 의 `type: 1` 이 **자리마다 뜻이 다르다.**
+`type: 1` inside `additionalData` **means something different depending on
+where it appears.**
 
-| 자리 | type 1 범위 | 뜻 |
+| location | type 1 range | meaning |
 | --- | --- | --- |
-| `mode[]` 의 제습 | 40~65 | 목표 습도 |
-| `roomController` 수준 | 0~4 | 습도 아님 |
+| dehumidify inside `mode[]` | 40-65 | target humidity |
+| at the `roomController` level | 0-4 | not humidity |
 
-환기 중인 기기에서 컨트롤러 수준의 `1` 을 습도로 읽어 슬라이더가 맨 왼쪽에 붙었다.
-이제 **서버가 알려준 그 모드의 범위 안에 있을 때만** 습도로 인정한다. 범위를 안 주는
-모드(환기·청정)에서는 슬라이더가 비활성된다 — 앱과 같다.
+On a device in ventilation mode, the controller-level `1` was being read
+as humidity, pinning the slider to the far left. We now only accept it as
+humidity **when it falls inside the range the server reported for that
+mode.** In modes that don't provide a range (ventilation, purify), the
+slider is now disabled — matching the app.
 
-### 5. 통계정보에서 에어모니터 `deviceId` 가 안 가려졌다
+### 5. The air monitor's `deviceId` wasn't being redacted in diagnostics
 
-`supported_devices` 는 `async_redact_data` 를 지나지만, 우리가 직접 조립한
-`airone_entities` 표는 그냥 나갔다. **에어모니터 기기ID 가 그대로 찍혔고 제보자가
-공개 이슈에 올렸다.**
+`supported_devices` passes through `async_redact_data`, but the
+`airone_entities` table we assemble ourselves went out unredacted. **The
+air monitor's device ID appeared as-is, and a reporter posted it on a
+public issue.**
 
-직접 만든 표에도 가림을 적용했다. **원본을 가린다고 파생 표까지 안전한 것이 아니다.**
+Redaction is now applied to our own hand-built table too. **Redacting the
+source doesn't automatically make a derived table safe.**
 
-### 검증
+### Verification
 
-실기기 응답 두 건을 그대로 테스트로 옮겼다 — 51개(28 + 23). 전체 264개.
+Both real-device responses were transcribed directly into tests — 51 cases
+(28 + 23). 264 total.
 
-**합성 데이터로는 다섯 개 중 하나도 못 잡았다.** `supportedAirVolumes` 는 APK 에
-없어서 존재를 몰랐고, `configurable` 은 뜻을 반대로 알았고, `/air-sensor` 형태는
-짐작이었고, `additionalData` 의 자리별 의미는 상상할 수 없었다.
+**Synthetic data could not have caught a single one of these five.**
+`supportedAirVolumes` doesn't appear in the APK, so we had no way to know
+it existed; `configurable` was understood backwards; the `/air-sensor`
+shape was a guess; and the per-location meaning of `additionalData`
+couldn't have been imagined.
 
-### 그 밖에 확정된 것
+### Also confirmed along the way
 
-`Properties.data.did.reported` 경로가 맞았다. `idu` 필드가 실재한다(두 기기 모두 빈
-배열). 실외기 `modelCode 2000`·펌웨어 `17.00`, 실내기 `13.0`, 에어모니터 `35`·`12.00`.
-필터 4개(`type` 1·2·3·6). `sensor[]` 정수 `type` 의 범위로 뜻을 추정할 단서가
-생겼다(`type 6` = 400~9999 → CO₂). 자세한 것은 개발 노트에 있다.
+The `Properties.data.did.reported` path was correct. The `idu` field does
+exist (an empty array on both devices). Outdoor unit `modelCode
+2000`/firmware `17.00`, indoor unit `13.0`, air monitor `35`/`12.00`. 4
+filters (`type` 1, 2, 3, 6). Got a lead for inferring `sensor[]`'s integer
+`type` meaning from its range (`type 6` = 400-9999 → CO2). Details are in
+the dev notes.
 
 ## v0.7.7 — 2026-07-30
 
-**환기청정 엔티티가 하나도 안 생기던 버그를 고쳤다.** 먼저 나온 통합은 다 뜨는데
-우리만 안 뜬다는 제보가 결정적 단서였다.
+**Fixed a bug where not a single ventilation-purifier entity was ever
+created.** The decisive clue was a report that every other prior
+integration showed the device, ours alone didn't.
 
-### 원인 — 기기를 통째로 포기했다
+### Cause — we abandoned the whole device
 
-`AironeDevice.parse` 가 이렇게 되어 있었다.
+`AironeDevice.parse` looked like this.
 
 ```python
 controller = did.get("roomController")
 if not isinstance(controller, dict):
-    return None          # ← 여기서 기기가 사라진다
+    return None          # ← the device disappears right here
 ```
 
-능력 메타데이터(`did`)가 없으면 **`None` 을 돌려주고 아무것도 만들지 않았다.**
-등록 직후처럼 기기가 아직 `did` 를 올리지 않은 시점이 있는데, 그 사용자는 엔티티를
-하나도 못 본다.
+When capability metadata (`did`) was missing, we **returned `None` and
+built nothing at all.** There's a window — right after registration, for
+instance — where a device hasn't uploaded its `did` yet, and a user in
+that window saw zero entities.
 
-먼저 나온 통합은 같은 자리에서 **기기를 무조건 만든다.**
+Prior integrations, at the same point, **create the device unconditionally.**
 
 ```python
-modes = self._extract_modes(raw_device)   # 없으면 빈 tuple
-return NavienDevice(...)                  # 그래도 만든다
+modes = self._extract_modes(raw_device)   # empty tuple if absent
+return NavienDevice(...)                  # created anyway
 ```
 
-**그쪽이 맞았다.** 「무엇을 고를 수 있는지 모른다」와 「기기가 없다」는 다른 얘기다.
-전원·운전 상태·오류는 상태 응답에서 오므로 메타데이터가 없어도 쓸 수 있다.
+**They had it right.** "We don't know what can be selected" and "there is
+no device" are different statements. Power, running state, and errors come
+from the state response, so they're usable even without metadata.
 
-### 고친 결과
+### The fix's effect
 
-| | 전 | 후 |
+| | before | after |
 | --- | --- | --- |
-| `did` 없음 | **엔티티 0개** | 전원 · 운전 상태 · 오류 코드 · 오류 |
-| `roomController` 만 없음 | **엔티티 0개** | 위 + 필터 사용률(실외기 정보에서) |
-| 운전 모드 · 풍량 · 목표 습도 | — | 서버가 알려줄 때만 (그대로) |
-| 공기질 | **안 생김** | `/air-sensor` 응답대로 생김 |
+| no `did` | **0 entities** | power · running state · error code · error |
+| only `roomController` missing | **0 entities** | the above + filter usage
+(from outdoor-unit info) |
+| operating mode / fan speed / target humidity | — | only when the server
+provides it (unchanged) |
+| air quality | **never created** | created based on the `/air-sensor`
+response |
 
-기기 등록을 포기하는 조건은 **`deviceId` 나 `deviceSeq` 가 없을 때 하나뿐**이다.
-그건 기기를 특정할 수 없어 정말로 만들 수 없다.
+There's now exactly **one** condition for giving up on registering a
+device: missing `deviceId` or `deviceSeq`. That genuinely can't be
+created, since the device can't be identified.
 
-### 「구세대」와 「값을 못 읽음」을 갈랐다
+### Separated "older generation" from "couldn't read the value"
 
-`modelCode` 를 숫자로 못 읽을 때 「구세대 통신을 씁니다」로 뭉개고 있었다.
-**모르는 것과 구세대인 것은 다르다.** 따로 로그를 남긴다.
+When `modelCode` couldn't be read as a number, this had been blurred into
+"using older-generation communication." **Not knowing and being
+older-generation are different things.** These are now logged separately.
 
-### 왜 놓쳤나
+### Why we missed it
 
-먼저 나온 통합을 대조할 때 **엔티티 목록과 제어 기능만 봤다.** 「기기를 언제
-만들지 않는가」는 표에 넣지 않았다. 기능 대조표가 다 채워져 있어도 **그 앞단에서
-기기가 사라지면 전부 무의미하다.**
+When comparing against prior integrations, **we only looked at the entity
+list and control features.** "When does the device not get created at
+all" never made it into that comparison table. Even a fully filled-out
+feature comparison is **meaningless if the device disappears one step
+earlier.**
 
-합성 데이터 213개 통과. 이 경로에 회귀 테스트 17개를 붙였다.
+213 synthetic test cases pass. 17 regression tests were added for this
+path.
 
 ## v0.7.6 — 2026-07-30
 
-**환기청정 엔티티가 안 생긴다는 제보가 들어왔다.** 원인을 한 번에 잡을 수 있게
-고쳤다.
+**A report came in that no ventilation-purifier entities were being
+created.** Fixed it so the cause can be pinned down in one pass next time.
 
-### `serviceCode` 가 문자열로 와도 받는다
+### Now accepts `serviceCode` even when it arrives as a string
 
 ```python
 service_code = raw.get("serviceCode")
 if service_code not in SUPPORTED_SERVICE_CODES:   # (200, 300)
 ```
 
-매트 응답은 `"serviceCode": 200` 정수다. **에어원도 그럴 거라 단정한 것이 잘못이다.**
-문자열 `"300"` 으로 오면 이 비교가 조용히 실패하고, 기기가 통째로
-「지원하지 않음」으로 빠진다. 정수로 바꿔 비교한다.
+A mat's response carries `"serviceCode": 200` as an integer. **Assuming
+Airone would do the same was the mistake.** If it arrives as the string
+`"300"`, this comparison silently fails and the whole device drops into
+"unsupported." Now compared as an integer instead.
 
-`modelCode` 는 매트에서 이미 문자열(`"257"`)로 오는 것을 봤고 처리하고 있었다.
-같은 응답 안에서 타입이 섞여 있으니 `serviceCode` 도 의심해야 했다.
+We'd already seen `modelCode` arrive as a string from mats
+(`"257"`) and were handling it. Since types are mixed within the very same
+response, `serviceCode` should have been suspected too.
 
-### 건너뛸 때 **무엇을 봤는지** 남긴다
+### Logs **what was actually seen** on a skip
 
-기존 로그는 「능력 메타데이터가 없습니다」였다. 제보를 받아도 **어디를 봐야 하는지
-알 수 없다.** 이제 응답의 키 구조를 함께 남긴다.
+The existing log had just said "no capability metadata." Even with a
+report in hand, **there was no way to know where to look.** It now
+includes the response's key structure alongside it.
 
 ```
 능력 메타데이터를 찾지 못해 엔티티를 만들지 않습니다
@@ -1797,83 +2118,102 @@ if service_code not in SUPPORTED_SERVICE_CODES:   # (200, 300)
  'registry': {'attributes': {...}}})
 ```
 
-경로가 다르면 그 자리에서 드러난다. **키 이름만 담고 값은 담지 않는다** — 별칭에
-가족 이름이 들어가고 기기ID 도 흘러서는 안 된다. 테스트로 확인했다.
+A different path shows up right there. **Only key names are captured,
+never values** — a nickname could contain a family member's name, and a
+device ID must never leak through here either. Confirmed by a test.
 
-### 엔티티가 안 생기는 경로는 셋뿐이다
+### There are only three paths where an entity fails to get created
 
-| 경로 | 로그 |
+| path | log |
 | --- | --- |
-| `serviceCode` 가 200·300 이 아님 | 「…는 건너뜁니다」 |
-| 능력 메타데이터를 못 찾음 | 위 새 로그 (키 구조 포함) |
-| `modelCode < 1000` (구세대) | 「구세대 통신을 씁니다」 |
+| `serviceCode` is neither 200 nor 300 | "…skipping" |
+| capability metadata not found | the new log above (with key structure) |
+| `modelCode < 1000` (older generation) | "using older-generation
+communication" |
 
-**셋 다 이유를 남긴다.** 조용히 사라지는 경로는 없다.
+**All three now leave a reason behind.** No path disappears silently.
 
-합성 데이터 194개 통과. 실기기 검증은 여전히 0개다.
+194 synthetic test cases pass. Real-device verification is still at 0.
 
 ## v0.7.5 — 2026-07-30
 
-**먼저 나온 통합을 최신(0.1.8)으로 다시 대조했다.** 앞서 본 것은 0.1.2 였고 그 뒤로
-여섯 버전이 지나 있었다. 낡은 대조였다.
+**Compared against the prior integration again, this time at its current
+version (0.1.8).** The earlier comparison had been against 0.1.2, six
+versions behind. That comparison was stale.
 
-### 센서 이름 별칭을 넓혔다
+### Widened sensor name aliases
 
-그쪽이 0.1.8 에서 별칭을 크게 늘렸다. 우리가 안 받던 이름들이 있다.
+That project added a large number of aliases in 0.1.8. Some names we
+weren't accepting:
 
-`air_quality` · `air_quality_score` · `airquality` · `totalairquality` → 종합 공기질
-`radonStageValue` · `radonConcentration` (+`_` 형태) → 라돈
-`voc` · `t_voc` → 휘발성유기화합물
-`pm1_0` · `pm2_5` · 대소문자만 다른 표준 이름 → 각 미세먼지
-`co2Value` · `carbonDioxide` → 이산화탄소
+`air_quality` · `air_quality_score` · `airquality` · `totalairquality` →
+overall air quality
+`radonStageValue` · `radonConcentration` (and `_`-separated forms) → radon
+`voc` · `t_voc` → volatile organic compounds
+`pm1_0` · `pm2_5` · standard names differing only in case → each
+particulate sensor
+`co2Value` · `carbonDioxide` → carbon dioxide
 
-**키를 기계적으로 정규화하지 않았다.** 구분기호를 지우면 `pm1.0` 이 `pm10` 이 되어
-**다른 센서와 충돌한다** — PM1.0 과 PM10 은 별개 항목이다. 규칙 대신 명시 표로 뒀고,
-회귀 테스트를 붙였다.
+**Keys are not normalized mechanically.** Stripping separators would turn
+`pm1.0` into `pm10`, **colliding with a different sensor** — PM1.0 and
+PM10 are separate readings. Kept as an explicit table instead of a rule,
+with a regression test attached.
 
-### `running` 을 참/거짓·문자열로 와도 읽는다
+### `running` is now also read as a boolean or a string
 
-정수로 온다는 것은 확인했다. 다만 그쪽이 `("running", "isRun", "state", "power")`
-네 키를 세 군데에서 더듬도록 바꿨다 — **값의 형태가 갈릴 수 있다는 신호**로 읽었다.
+We'd already confirmed it arrives as an integer. But that project changed
+to probing three spots across four keys (`"running", "isRun", "state",
+"power"`) — read as **a signal that the value's shape can vary.**
 
-- 참/거짓 → 운전/정지
-- `on` `run` `running` `true` `y` `yes` / `off` `stop` `stopped` `false` `n` `no` /
-  `away` `out`
-- `0` → 정지 (서버가 쓰는 값은 1/2/3 이지만, 0 이 와도 「알 수 없음」보다 「정지」가 맞다)
+- boolean → running/stopped
+- `on` `run` `running` `true` `y` `yes` / `off` `stop` `stopped` `false`
+  `n` `no` / `away` `out`
+- `0` → stopped (the server itself uses 1/2/3, but even if 0 arrives,
+  "stopped" is a better read than "unknown")
 
-**읽기만 넓혔다.** 보낼 때는 여전히 정수만 쓴다.
+**Only reading was widened.** Sending still uses integers exclusively.
 
-그쪽이 추가한 `isRun` · `state` · `power` 키는 **따라가지 않았다.** APK 의
-`RoomControllerStatus` 에 없는 필드다. 근거 없는 자리를 더듬는 것과 값의 형태를
-너그럽게 받는 것은 다르다.
+The `isRun`, `state`, and `power` keys that project added were **not
+followed.** They're fields absent from the APK's
+`RoomControllerStatus`. Probing an unfounded location is different from
+being lenient about a value's shape.
 
-### 따라갈 필요가 없던 것
+### What didn't need to be followed
 
-| 그쪽 0.1.8 | 우리 |
+| their 0.1.8 | ours |
 | --- | --- |
-| `modelCode` 화이트리스트에 `1900` 추가 + 모델명 정규식 | **`>= 1000` 범위 판정.** 처음부터 더 넓다 |
-| 에어모니터 `"34": "NAA-30DM"` 하드코딩 | 모델명을 코드에 넣지 않는다. 서버가 준 `modelCode` 를 보여준다 |
-| 진단에 `all_devices` 추가 | 이미 원본을 전부 담고 있다 |
-| 진단에 `idu` 필드 | APK 에 없는 필드다. 우리 진단은 원본을 통째로 담으므로 실제로 오면 그대로 보인다 |
+| added `1900` to the `modelCode` whitelist + a model-name regex | **a
+`>= 1000` range check.** Already broader from the start |
+| hard-coded air monitor `"34": "NAA-30DM"` | model names aren't hard-coded
+— shows the `modelCode` the server sent, as-is |
+| added `all_devices` to diagnostics | we already carry the full raw
+payload |
+| added an `idu` field to diagnostics | absent from the APK. Our
+diagnostics carries the raw payload wholesale, so if it does arrive it
+already shows up as-is |
 
-`1900` 을 뒤늦게 추가한 것이 화이트리스트 방식의 대가다. 그 사이 `NRT-530S3`
-사용자는 「아예 안불러져옵니다」를 겪었다.
+Having to add `1900` after the fact is the cost of a whitelist approach.
+In the meantime, an `NRT-530S3` user hit "it doesn't load at all."
 
-합성 데이터 194개 통과. 실기기 검증은 여전히 0개다.
+194 synthetic test cases pass. Real-device verification is still at 0.
 
 ## v0.7.4 — 2026-07-30
 
-**`running` 을 방 컨트롤러에서 못 읽으면 실외기에서 읽는다.**
+**When `running` can't be read from the room controller, it's now read
+from the outdoor unit.**
 
-`RoomControllerStatus` 와 `OduStatus` **둘 다** `running` 을 가진다. 방 컨트롤러
-쪽만 보다가 그 필드가 비어 오는 기기를 만나면 전원 스위치가 영구히
-`알 수 없음` 이 된다 — **값이 있는데 안 읽는 셈이다.**
+**Both** `RoomControllerStatus` and `OduStatus` carry a `running` field.
+Only ever looking at the room controller meant a device that reports this
+field empty there left the power switch permanently `unknown` — **the
+value existed, we just weren't reading it.**
 
-방 컨트롤러를 먼저 본다. 사용자가 만지는 것이 그쪽이다.
+The room controller is still checked first — that's the one the user
+actually touches.
 
-### 왜 지금 고쳤나
+### Why fix this now
 
-먼저 나온 통합의 `running` 처리를 다시 봤다. 세 군데를 더듬는다.
+Went back and looked at how the prior integration handles `running`. It
+probes three spots.
 
 ```python
 running = status.get("running")
@@ -1881,818 +2221,1020 @@ if running is None: running = room_controller.get("running")
 if running is None: running = room_controller.get("state")
 ```
 
-**위치를 확신하지 못한다는 신호다.** `room_controller.state` 는 APK 에 없는
-필드라 따라가지 않았지만, 실외기 `running` 은 `OduStatus` 에 실제로 있다.
-APK 근거가 있는 쪽만 폴백으로 넣었다.
+**That's a signal they weren't confident where it lives either.**
+`room_controller.state` is a field absent from the APK, so it wasn't
+followed, but the outdoor unit's `running` genuinely exists in
+`OduStatus`. Only the fallback with APK grounding was added.
 
-### 전원 값 매핑은 그대로 둔다
+### Left the power-value mapping unchanged
 
-그쪽도 `1 = 운전` 을 쓴다(`"running": 1 if power else 2`,
-`state["power"] = int(running) == 1`). 우리와 같다.
+That project also uses `1 = running` (`"running": 1 if power else 2`,
+`state["power"] = int(running) == 1`) — the same as us.
 
-**다만 이것을 검증 근거로 쓰지 않는다.** 둘 다 같은 APK 상수
-(`OPERATION_STATUS_ON_V2_1MODEL = 1`)에서 나왔을 것이므로, 서로 어긋나지 않는다는
-사실만 확인된 것이다. **같이 틀렸을 수도 있다.**
+**But this isn't treated as verification.** Both likely came from the same
+APK constant (`OPERATION_STATUS_ON_V2_1MODEL = 1`), so all this confirms
+is that the two don't contradict each other. **We could both be wrong
+together.**
 
-그쪽 사용자가 「전원은 상태반영이 잘 안되고 있는것 같습니다」라고 한 원인은
-매핑이 아니라 **낙관적 갱신 120초**(`OPTIMISTIC_STATE_TTL`)일 가능성이 크다.
-기기가 거부하면 「됐다가 되돌아간다」가 된다. 우리는 그 대신 3초 뒤 실제 상태를
-다시 읽는다(v0.7.0).
+A user of that project reporting 「전원은 상태반영이 잘 안되고 있는것 같습니다」
+is more likely caused by **the 120-second optimistic-update window**
+(`OPTIMISTIC_STATE_TTL`) than by the mapping. If the device rejects the
+command, that produces "it worked, then reverted." We instead re-read the
+real state 3 seconds later (v0.7.0).
 
-합성 데이터 179개 통과. 실기기 검증은 여전히 0개다.
+179 synthetic test cases pass. Real-device verification is still at 0.
 
 ## v0.7.3 — 2026-07-30
 
-**README 를 절반으로 줄이고 틀린 내용 세 곳을 고쳤다.** 코드 변경은 없다.
+**Cut the README roughly in half and corrected three inaccuracies.** No
+code changes.
 
-286줄이 되어 아무도 끝까지 읽지 않을 문서가 됐다. 204줄로 줄이고 대제목마다
-구분선을 넣었다.
+It had grown to 286 lines, past the point anyone would read to the end.
+Trimmed to 204 lines, with a divider added under every top-level heading.
 
-### 틀린 내용
+### Inaccuracies
 
-| 위치 | 잘못 | 고침 |
+| location | wrong | corrected |
 | --- | --- | --- |
-| 개발자용 CLI | **「조회 전용」** | `control`·`airone-control`·`airone-status` 는 **실기기에 명령을 보낸다.** `--yes` 없이는 본문만 출력한다 |
-| 언제 반영되나 | 「주기적 조회는 15분」 | 에어원이 있으면 5분이다. 수치를 빼고 「즉시 반영」만 남겼다 |
-| 무엇이 되나 | 환기청정 「`NRT-530S3`·`NRT-530Z3` **확인됨**」 | 확인한 것은 **신형이라는 사실**뿐이고 그 기기에서 동작하는지는 모른다 |
+| developer CLI | **"read-only"** | `control`, `airone-control`, and
+`airone-status` **send commands to the real device.** Without `--yes`
+they only print the body |
+| when it applies | "periodic polling is 15 minutes" | it's 5 minutes if
+an Airone device is present. Removed the number and kept only "applies
+immediately" |
+| what works | ventilation-purifier "`NRT-530S3`/`NRT-530Z3` **confirmed**"
+| what's actually confirmed is only **that it's a current-generation
+model**; whether it works on that specific device is unknown |
 
-「조회 전용」은 위험한 오류였다. 그 말을 믿고 `control` 을 돌리면 매트가 실제로 켜진다.
+"Read-only" was a dangerous error. Believing it and running `control`
+actually turns a mat on.
 
-### 빠져 있던 것
+### What was missing
 
-- **환기청정 모델 목록** — 앱 기기추가 화면의 `NRT530 (3W)` · `NRT/NRZ530` ·
-  `NRT-30` · `NRT-21D` · `NRT-20D` · `NTR-10PW`
-- **v0.4.x 마이그레이션 절차** — 넣었다가 **다시 뺐다.** 저장소를 공개한 날 안에
-  domain 을 바꿨고 설치 수가 0이라, 올라올 사람이 없다. 없는 상황을 설명하는 문단은
-  읽는 사람을 헷갈리게 한다
+- **Ventilation-purifier model list** — `NRT530 (3W)`, `NRT/NRZ530`,
+  `NRT-30`, `NRT-21D`, `NRT-20D`, `NTR-10PW` from the app's add-device
+  screen
+- **v0.4.x migration steps** — added, then **removed again.** The domain
+  changed within the same day the repository went public, and install
+  count was 0, so there's no one left to migrate. A paragraph explaining a
+  situation that doesn't exist only confuses the reader
 
-  실측으로 확인한 것은 남긴다 — **HACS 는 domain 이 바뀌어도 구 폴더를 지우지 않는다.**
-  통계정보의 `custom_components` 에 `navien_smart 0.4.6` 과
-  `navien_smarthome 0.7.2` 가 둘 다 잡혔다. 남으면 통합 추가 목록에 같은 이름이 둘
-  뜨고, 구 폴더도 `config_flow` 가 있어 잘못 고르면 옛 버전이 올라온다.
-  **다음에 domain 을 바꿀 일이 생기면 이걸 먼저 안내해야 한다**
+  What real measurement confirmed is kept — **HACS doesn't delete the old
+  folder when the domain changes.** Diagnostics' `custom_components`
+  showed both `navien_smart 0.4.6` and `navien_smarthome 0.7.2` at once.
+  Leaving both around shows the same integration twice in the add list,
+  and the old folder still has a `config_flow`, so picking the wrong one
+  pulls up the old version. **The next time the domain changes, this
+  needs to be documented up front**
 
-### 줄인 것
+### What was trimmed
 
-설계 이유를 길게 적어둔 절들을 한두 줄로 줄였다 — 단계형에 슬라이더를 쓰지 않은 이유,
-사계절 냉방 비활성, 가족 계정, 로컬 제어 불가. **왜 그렇게 했는지는 이 문서에 남기고
-README 는 결론만 말한다.**
+Sections with long design rationale were cut to a line or two — why
+stepped models don't use a slider, why four-season cooling is disabled,
+family accounts, no local control. **The reasoning stays in this
+document; the README states only the conclusion.**
 
 ## v0.7.2 — 2026-07-30
 
-**라돈 단위 `Bq/㎥` 를 되살렸다. v0.7.1 에서 TVOC 와 같이 묶어 걷어낸 것이 잘못이었다.**
+**Restored the radon unit `Bq/㎥`. Removing it alongside TVOC in v0.7.1 was
+a mistake.**
 
-증거 수준이 다른 둘을 한 규칙으로 처리했다.
+Two items with different levels of evidence had been handled by one rule.
 
-| | 단위 후보 | 판단 |
+| | candidate units | decision |
 | --- | --- | --- |
-| **라돈** | `Bq/㎥` 뿐 | **붙인다.** 국내 실내공기질 기준이 전부 이 단위다(다중이용시설·학교 148 Bq/㎥). `pCi/L` 은 미국만 쓴다. 국내 판매 기기가 라돈을 숫자로 주면 Bq/㎥ 다 |
-| **TVOC** | `㎍/㎥`(기준 500) · `ppb`(센서 관행) · 지수(0~500) | **비운다.** 관측값 70 이 셋 다에 맞아떨어져 동전 던지기다 |
+| **radon** | `Bq/㎥` only | **attach it.** Every domestic indoor-air-quality
+standard uses this unit (148 Bq/㎥ for multi-use facilities and schools).
+`pCi/L` is US-only. If a device sold domestically reports radon as a
+number, it's Bq/㎥ |
+| **TVOC** | `㎍/㎥` (standard 500), `ppb` (common sensor convention), or an
+index (0-500) | **leave it blank.** An observed value of 70 fits all
+three, a coin flip |
 
-앱에 단위 문자열이 없다는 것은 **앱이 등급으로 보여주기 때문**이고, 값에 단위가
-없다는 뜻이 아니다. 라돈은 후보가 하나뿐이라 "모른다" 가 아니라 "안다" 에 가깝다.
+The absence of a unit string in the app is **because the app displays a
+grade**, not because the value itself has no unit. Radon has exactly one
+candidate, so this is closer to "known" than "unknown."
 
-### 근거 없이 붙은 단위를 밖에서 볼 수 있게 했다
+### Made units attached without hard evidence visible from outside
 
-앱에서 뽑지 않고 판단으로 정한 단위는 표시해 둔다.
+A unit set by judgment rather than pulled from the app is now flagged.
 
-- 라돈 센서 속성에 `unit_inferred: true`
-- 통계정보에 `air_sensor_units` — 항목별 단위·판단 여부·원본 값·등급
+- `unit_inferred: true` on the radon sensor's attributes
+- `air_sensor_units` in diagnostics — per-item unit, whether it was
+  inferred, the raw value, and the grade
 
-틀렸다는 제보가 오면 바로 고칠 수 있다. **판단으로 넣은 값을 확정처럼 숨기지
-않는다.**
+A report that it's wrong can now be fixed immediately. **A value entered
+by judgment is not hidden behind the appearance of certainty.**
 
 ## v0.7.1 — 2026-07-30
 
-**v0.7.0 에서 붙인 라돈 단위 `Bq/㎥` 를 걷어냈다. 근거가 없었다.**
+**Removed the radon unit `Bq/㎥` added in v0.7.0. It had no basis.**
 
-먼저 나온 통합이 `Bq/m3` 를 쓰고 국제 표준도 그것이라 따라 넣었다. 그런데
-**앱에는 근거가 없다.**
+We'd followed the prior integration's use of `Bq/m3`, backed by the
+international standard using the same unit. But **the app itself gives no
+grounding for it.**
 
-dex 전수 검색 결과 앱이 쓰는 공기질 단위 문자열은 **`"ppm"` 과 `"㎍/㎥"` 둘뿐이다.**
-라돈·TVOC·종합 공기질에는 단위를 쓰지 않는다. 기기 벽면 화면도 등급으로만 보여주고,
-라돈 설정은 「라돈 관리 단계」라는 상대적 강도로만 다룬다.
+A full search of the dex found the app uses exactly **two** air-quality
+unit strings: **`"ppm"` and `"㎍/㎥"`.** Radon, TVOC, and overall air
+quality carry no unit at all. The device's own wall display shows only a
+grade too, and radon settings are handled purely as a relative intensity
+called "radon management level."
 
-**라돈은 발암물질이고 국내 실내 기준이 148 Bq/㎥ 다.** 단위를 잘못 붙이면 사용자가
-건강 판단을 틀리게 한다. 그럴듯한 추측을 넣는 것보다 비워 두는 쪽이 옳다.
+**Radon is a carcinogen, and the domestic indoor standard is 148 Bq/㎥.**
+Attaching the wrong unit can lead a user to a wrong health judgment.
+Leaving it blank is the right call here, over a plausible-sounding guess.
 
-세 센서의 등급은 `grade` 속성에 그대로 있다 — 기기 화면과 같은 값이다.
+The grade for all three sensors is still kept in the `grade` attribute —
+matching what the device's own screen shows.
 
-### 기기 화면으로 확인한 것
+### Confirmed from the device's own screen
 
-벽면 룸컨트롤러 화면을 봤다. `통합공기질 78`, `PM1.0 좋음`, `PM2.5 좋음`,
-`CO2 좋음`, `TVOC 좋음`, `자동운전-자동`.
+Looked at the wall room-controller's screen. It showed `통합공기질 78`,
+`PM1.0 좋음`, `PM2.5 좋음`, `CO2 좋음`, `TVOC 좋음`, `자동운전-자동`.
 
-- **`총합 78` 은 숫자다** — v0.7.0 에서 점수로 고친 것이 맞다
-- **`자동운전-자동` 은 모드와 풍량을 붙여 보여준다** — 축을 나눈 것이 맞다
-- **이 화면이 TVOC 를 등급으로 보여주는 것은 값의 유무와 무관하다.** 같은 화면의
-  PM1.0·PM2.5 도 등급만 나오는데, 그 둘은 숫자가 있는 것이 확실하다
-  (에어모니터 화면 `5.0 ug/m3`). **표시 방식일 뿐이다**
+- **`총합 78` is a number** — confirming that fixing it to a score in
+  v0.7.0 was correct
+- **`자동운전-자동` shows mode and fan speed joined together** — confirming
+  that splitting them into separate axes was correct
+- **This screen showing TVOC as a grade has nothing to do with whether the
+  value itself exists.** The same screen also shows only a grade for
+  PM1.0 and PM2.5, and those two are confirmed to carry numeric values
+  (the air monitor's own screen shows `5.0 ug/m3`). **It's purely a
+  display choice**
 
 ## v0.7.0 — 2026-07-30
 
-**먼저 나온 에어원 통합을 코드까지 전수 대조했다.** 사용자 불만이 나온 지점을
-전부 확인하고, 우리가 뒤졌던 것 넷을 고쳤다.
+**Compared the prior Airone integration against ours down to the code
+level.** Checked every point where its users had complained, and fixed
+four things we ourselves had gotten wrong.
 
-### 운전 모드와 풍량을 앱과 같은 축으로 다시 잘랐다 — 내 설계 오류
+### Re-split operating mode and fan speed along the same axes as the app —
+### a design mistake on our side
 
-터보·절전·기저를 **운전 모드 목록에** 넣고 있었다. 그래서 목록이 14개까지 늘고,
-풍량만 바꾸려는 사람이 모드 목록을 뒤져야 했다.
+Turbo, eco, and basal had been placed **in the operating-mode list.** That
+grew the list to 14 entries, forcing anyone who just wanted to change fan
+speed to dig through the mode list.
 
-앱은 두 축을 이렇게 나눈다 (`AironeModeCode.labelFor` 의 첫째·둘째 칸).
+The app splits these into two axes (columns one and two of
+`AironeModeCode.labelFor`).
 
-| 축 | 들어가는 것 |
+| axis | contains |
 | --- | --- |
-| 운전 모드 | 자동운전 · 환기 · 제습 · 청정 · 요리 · 바이패스 · 환기제습 · **숙면** |
-| 풍량 | 미풍 · 약풍 · 강풍 · 자동 · **터보** · **절전** · **기저** |
+| operating mode | 자동운전 · 환기 · 제습 · 청정 · 요리 · 바이패스 · 환기제습 ·
+**숙면** |
+| fan speed | 미풍 · 약풍 · 강풍 · 자동 · **터보** · **절전** · **기저** |
 
-실기기(NRT-530Z3) 기준 모드 목록이 **14개에서 8개로** 줄고, 터보·절전이 풍량으로
-옮겨갔다. 숙면만 앱과 같이 모드 쪽에 남긴다 — 앱도 별도 버튼이다.
+On a real device (NRT-530Z3) the mode list shrank **from 14 to 8**, with
+turbo and eco moving to fan speed. Only sleep stays on the mode side, like
+the app — it's a separate button there too.
 
-서버가 어떤 모드에 `option 1` 을 안 주고 터보만 줘도 그 모드는 목록에 남는다.
+Even if the server doesn't give `option 1` for a given mode and only gives
+turbo, that mode still stays in the list.
 
-### 에어모니터를 별도 기기로 만든다
+### The air monitor is now a separate device
 
-공기질 센서가 붙는 에어모니터(실측 `NAA-21DM`)를 **별도 기기**로 만들고
-`via_device` 로 본체에 매달았다. 본체 카드에 센서 9개를 몰아넣으면 읽기 어렵다.
+The air monitor that carries the air-quality sensors (confirmed on a real
+`NAA-21DM`) is now created as **a separate device**, hung off the main
+unit via `via_device`. Cramming 9 sensors onto the main unit's card made
+it hard to read.
 
-모델명을 코드에 적지 않았다 — 서버가 주는 `modelCode` 를 보여준다.
+The model name isn't hard-coded — it shows the `modelCode` the server
+sends.
 
-### 공기질 센서를 제대로 만들었다
+### Built the air-quality sensors properly
 
-- **`device_class` 를 붙였다** — PM1/PM2.5/PM10/CO₂/온도/습도. HA 가 아이콘·
-  히스토리 그래프·단위 변환을 알아서 한다
-- **라돈 단위 `Bq/㎥`** — 앱에 문자열이 없어 국제 표준을 썼다. 표시용이고 제어에
-  쓰이지 않는다
-- **센서 키 별칭** — 서버가 `radonValue`·`PM2.5`·`airQualityScore` 처럼 다른 이름을
-  줘도 같은 센서로 모은다
-- **TVOC 단위는 안 붙였다.** ppb 인지 ㎍/㎥ 인지 지수인지 갈린다.
-  **틀린 단위는 없는 단위보다 나쁘다**
+- **Attached `device_class`** — PM1/PM2.5/PM10/CO2/temperature/humidity.
+  HA handles the icon, history graph, and unit conversion on its own
+- **Radon unit `Bq/㎥`** — the app has no string for it, so we used the
+  international standard. Display-only, never used in control
+- **Sensor key aliases** — the same sensor is grouped together even when
+  the server names it differently, e.g. `radonValue`, `PM2.5`,
+  `airQualityScore`
+- **No unit attached for TVOC.** It could be ppb, ㎍/㎥, or an index — no
+  way to tell. **A wrong unit is worse than no unit**
 
-### 목표 습도를 5단위로
+### Target humidity moves in steps of 5
 
-앱의 −/+ 버튼이 5씩 움직인다 (`setProgress(getProgress() ± 5)`). 서버는 간격을
-주지 않으므로 앱을 따른다. 자동화가 임의 값을 넣으면 5의 배수로 맞춘 뒤 서버 범위로
-자른다.
+The app's −/+ buttons move by 5 (`setProgress(getProgress() ± 5)`). The
+server doesn't specify a step, so we follow the app. If an automation
+sends an arbitrary value, it's rounded to a multiple of 5 and then clamped
+to the server's range.
 
-### 「전원 상태 반영이 안 된다」 — 낙관적 갱신 대신 재조회
+### "Power state doesn't reflect" — re-query instead of an optimistic update
 
-먼저 나온 통합은 명령 직후 UI 를 먼저 바꾸고 120초간 유지한다. 기기가 거부하면
-사용자는 **「됐다가 되돌아간다」** 를 겪는다 — 실패가 성공처럼 보인다.
+The prior integration updates the UI first, right after a command, and
+holds that for 120 seconds. If the device rejects it, the user experiences
+**"it worked, then reverted"** — a failure that looked like success.
 
-우리는 UI 를 먼저 바꾸지 않는다. 대신 **3초 뒤 실제 상태를 다시 물어본다.**
-기기가 스스로 올려주면 그게 먼저 도착하고, 안 올려도 이 한 번으로 따라잡는다.
-매트에서 같은 이유로 낙관적 갱신을 안 했다.
+We don't update the UI first. Instead, **we ask for the real state again
+3 seconds later.** If the device reports on its own first, that arrives
+sooner; if not, this single follow-up catches up. Mats skip optimistic
+updates for the same reason.
 
-### 대조 결과
+### Comparison results
 
-| 항목 | 먼저 나온 통합 | 우리 |
+| item | prior integration | ours |
 | --- | --- | --- |
-| 지원 모델 | `1901` 하나만 화이트리스트 | **`modelCode >= 1000` 전부** |
-| 운전 모드 | 하드코딩 8조합 | **서버 `mode[]`** |
-| 풍량 축 | airVolume + option | 동일 |
-| 목표 습도 | 5단위 | 5단위 + 서버 min/max 검증 |
-| 공기질 | 9종 | 9종 + 별칭 + `device_class` |
-| 에어모니터 | 별도 기기 | 동일 |
-| 운전 상태 · 오류 · 필터 | 없음 | **있음** |
-| 명령 후 | 낙관적 120초 | **3초 뒤 실제 재조회** |
-| 실시간 | `cloud_polling` | **`cloud_push`** |
-| CLI 검증 도구 | 없음 | **있음** |
+| supported models | whitelist of just `1901` | **all of `modelCode >=
+1000`** |
+| operating mode | hard-coded 8 combinations | **the server's `mode[]`** |
+| fan-speed axis | airVolume + option | same |
+| target humidity | steps of 5 | steps of 5 + validated against the
+server's min/max |
+| air quality | 9 kinds | 9 kinds + aliases + `device_class` |
+| air monitor | separate device | same |
+| running state / error / filter | absent | **present** |
+| after a command | optimistic for 120s | **real re-query 3 seconds
+later** |
+| real-time | `cloud_polling` | **`cloud_push`** |
+| CLI verification tool | absent | **present** |
 
-**그쪽 제어 기능 5개(전원·모드·풍량·습도·매트온도)를 하나도 빠뜨리지 않았다.**
+**None of their 5 control features (power, mode, fan speed, humidity, mat
+temperature) were missed.**
 
-`1901` 화이트리스트가 실제 피해를 냈다 — `NRT-530S3`(1900) 사용자가
-"아예 안불러져옵니다" 를 겪었다. 우리는 범위 판정이라 잡는다.
+The `1901` whitelist caused real harm — an `NRT-530S3` (1900) user hit
+"it doesn't load at all." We catch this because ours is a range check.
 
-### 검증
+### Verification
 
-합성 데이터 175개 통과 (앞선 147개 + 축 재설계 30개, 중복 정리 반영).
-**실기기 검증은 여전히 0개다.**
+175 synthetic test cases pass (147 prior + 30 for the axis redesign,
+duplicates cleaned up). **Real-device verification is still at 0.**
 
-### 커뮤니티 댓글로 확정된 것들
+### Confirmed through community comments
 
-**실기기 사실 몇 가지가 커뮤니티 댓글로 확정됐다.** 우리 기기가 아니지만 값이
-화면에 찍혀 있어 근거가 된다.
+**A few real-device facts were confirmed through community comments.**
+Not our own devices, but the values shown on screen there are still
+evidence.
 
-#### 공기질 값을 문자열로 뒀던 것을 숫자로 고쳤다 — 내 오류
+#### Air-quality values had been stored as strings — switched to numeric —
+#### a mistake on our side
 
-`tvoc`·`radon`·`total` 이 "등급만 온다" 고 판단했다. **틀렸다.**
+We had concluded `tvoc`, `radon`, and `total` "only ever arrive as a
+grade." **Wrong.**
 
-실기기 화면에 `Air Quality Score 82.0`, `TVOC 70.0` 이 숫자로 찍혔고, 다른
-사용자는 "라돈수치도 잘 뜹니다" 라고 적었다.
+A real device's screen showed `Air Quality Score 82.0` and `TVOC 70.0` as
+numbers, and another user wrote "라돈수치도 잘 뜹니다" (radon numbers also show
+up fine).
 
-내가 근거로 삼은 `getValueText` 는 **표시 함수**였다. 앱이 등급으로 보여주기로 정한
-것이지 값이 비어 있는 게 아니다. **UI 코드에서 데이터 유무를 추론하면 이렇게 틀린다.**
+The `getValueText` function I'd relied on was **a display function.** The
+app chooses to show it as a grade — the value itself isn't absent.
+**Inferring whether data exists from UI code leads to exactly this kind of
+mistake.**
 
-이제 첫 값을 보고 정한다 — 숫자로 읽히면 숫자 센서(그래프가 그려진다), 아니면
-문자열. 등급은 두 경우 다 `grade` 속성에 남긴다.
+Now decided from the first value seen — if it reads as a number, it
+becomes a numeric sensor (with a graph); otherwise a string. The grade is
+kept as a `grade` attribute in both cases.
 
-단위는 여전히 모른다(라돈 Bq/㎥, tvoc ppb 로 짐작될 뿐). **추측해 붙이지 않고
-숫자만 낸다.** `total` 은 등급이 아니라 0~100 점수다.
+The unit is still unknown (radon is guessed at Bq/㎥, tvoc at ppb only).
+**We don't guess and attach one — we output the bare number.** `total` is
+a 0-100 score, not a grade.
 
-#### 운전 모드 이름을 앱 제어화면 표기로 맞췄다
+#### Matched operating-mode names to the app's control-screen wording
 
-`AironeModeCode` 의 하드코딩 문자열을 썼는데, 그건 빠른모드용 약칭이었다.
-제어화면은 `strings.xml` 의 다른 항목을 쓴다.
+We had used the hard-coded strings from `AironeModeCode`, which turned out
+to be the short labels used for quick mode. The control screen uses
+different entries from `strings.xml`.
 
-| 전 | 후 |
+| before | after |
 | --- | --- |
 | 자동 | **자동운전** |
 | 환기 · 터보 | **환기 터보** |
 | 제습 · 절전 | **제습 절전** |
 
-배기(5) · 음압환기(18) 이름도 채웠다. 서버가 그 모드를 주는 기기가 있으면
-숫자가 아니라 이름으로 보인다.
+Also filled in names for exhaust (5) and negative-pressure ventilation
+(18). Any device whose server sends those modes now shows a name instead
+of a bare number.
 
-#### 확인된 것 — 고칠 필요가 없었다
+#### Confirmed — nothing needed fixing here
 
-| 커뮤니티 지적 | 우리 쪽 |
+| community report | our side |
 | --- | --- |
-| `NRT-530S3 (1900)` 이 아예 안 불러진다 | **잡는다.** 모델 화이트리스트가 아니라 `modelCode >= 1000` 범위 판정이다 |
-| 모드 목록에 "몇 개 빠진 것 같습니다" | **빠질 수 없다.** 서버 `mode[]` 를 쓴다 |
-| 풍량이 터보·절전만 뜬다 | 전열교환기는 풍량 단계가 없다. 터보·절전은 `(mode, option)` 조합이라 **운전 모드 목록에** 들어간다 — 앱과 같다 |
-| 로컬 포트가 다 닫혀 있다 | 우리가 실측으로 확정한 것과 일치한다 |
+| `NRT-530S3 (1900)` doesn't load at all | **caught.** Not a model
+whitelist — a `modelCode >= 1000` range check |
+| mode list "seems to be missing a few entries" | **can't happen.** We use
+the server's `mode[]` |
+| fan speed only shows turbo/eco | an energy-recovery ventilator has no
+fan-speed steps. Turbo and eco are `(mode, option)` combinations, so they
+land **in the operating-mode list** — matching the app |
+| local ports are all closed | matches what we confirmed by real
+measurement |
 
-실기기 modelCode 세 개를 확보했다 — `NRT-530Z3` 1901, `NRT-530S3` 1900,
-에어모니터 `NAA-21DM` 35.
+Confirmed three real-device modelCodes — `NRT-530Z3` 1901, `NRT-530S3`
+1900, air monitor `NAA-21DM` 35.
 
 ## v0.6.0 — 2026-07-30
 
-**환기청정(에어원) 지원을 넣었다. 실기기 검증은 못 했다.**
+**Added ventilation-purifier (Airone) support. Could not verify against a
+real device.**
 
-집에 에어원이 없다. 규약은 앱에서 전부 뽑았지만 **한 번도 보내본 적이 없다.**
-그 사실을 숨기지 않고 세 곳에 적었다 — README 표, 설치 로그 경고, `운전 상태`
-엔티티의 `verified_on_hardware: false` 속성.
+We don't have an Airone device at home. The protocol was pulled entirely
+from the app, but **it has never actually been sent to one.** That fact is
+stated openly in three places — the README table, an install-time log
+warning, and the `verified_on_hardware: false` attribute on the running
+state entity.
 
-### 만드는 엔티티
+### Entities created
 
-| 엔티티 | 도메인 | 만드는 조건 |
+| entity | domain | created when |
 | --- | --- | --- |
-| 전원 | `switch` | 항상 |
-| 운전 모드 | `select` | 서버가 고를 수 있는 조합을 알려줄 때 |
-| 풍량 | `select` | 지금 조합에서 두 개 이상 고를 수 있을 때 |
-| 목표 습도 | `number` | 서버가 습도 범위를 알려줄 때 |
-| 운전 상태 · 오류 코드 | `sensor` | 항상 |
-| 공기질 | `sensor` | 서버가 값을 주는 항목마다 |
-| 필터 사용률 | `sensor` | 실외기가 알려주는 필터마다 |
-| 오류 | `binary_sensor` | 항상 |
+| power | `switch` | always |
+| operating mode | `select` | when the server tells us which combinations
+are selectable |
+| fan speed | `select` | when two or more options exist for the current
+combination |
+| target humidity | `number` | when the server tells us a humidity range |
+| running state / error code | `sensor` | always |
+| air quality | `sensor` | for every item the server provides a value for |
+| filter usage | `sensor` | for every filter the outdoor unit reports |
+| error | `binary_sensor` | always |
 
-### 모델 표를 코드에 넣지 않았다
+### No model table hard-coded into the code
 
-매트에서 통한 방식을 그대로 썼다. 기기목록 응답의
-`Properties.data.did.reported.roomController.mode` 가 **그 기기가 지원하는
-운전 조합 전체**를 알려준다. 선택 항목을 여기서만 만든다.
+We reused the approach that worked for mats. In the device-list response,
+`Properties.data.did.reported.roomController.mode` reports **the complete
+set of operating combinations that specific device supports.** Selectable
+options are built only from this.
 
-- `configurable: false` 인 조합은 목록에 넣지 않는다
-- 습도 범위도 `additionalData` 의 `min`/`max` 를 쓴다. 숫자를 코드에 적지 않았다
-- 서버가 `mode` 를 안 주면 모드 선택을 **만들지 않고** 로그에 이유를 남긴다
+- A combination with `configurable: false` isn't added to the list
+- The humidity range also comes from `additionalData`'s `min`/`max` —
+  never a hard-coded number
+- If the server doesn't send `mode`, the mode selector simply **isn't
+  created**, with the reason logged
 
-### 구형은 건너뛴다
+### Older-generation models are skipped
 
-앱 코드에 `modelCode < 1000` 분기가 있다. 이 하나로 토픽과 페이로드 봉투가
-전부 갈린다.
+The app's code has a `modelCode < 1000` branch. That single check changes
+the topic and the payload envelope entirely.
 
-| | 구형 | 신형 |
+| | older generation | current generation |
 | --- | --- | --- |
-| 토픽 | `cmd/rc/{modelCode}/…` | `cmd/rc/v2/{modelCode}/…` |
-| 페이로드 자리 | `request` | `state.desired` |
-| `running` 값 | 운전이 **2** | 운전이 **1** |
+| topic | `cmd/rc/{modelCode}/…` | `cmd/rc/v2/{modelCode}/…` |
+| payload location | `request` | `state.desired` |
+| `running` value | running is **2** | running is **1** |
 
-**같은 코드로 둘 다 쏘면 전원이 뒤집힌다.** 신형만 다루고, 구형은 알아보고
-건너뛰며 로그에 이유를 남긴다.
+**Sending both through the same code path would flip power on and off
+backwards.** We only handle current-generation devices; an older one is
+recognized and skipped, with the reason logged.
 
-### 모르는 값은 보내지 않는다
+### We don't send a value we don't recognize
 
-`ModeDid.airVolume` 이 단일값인지 비트마스크인지 확인하지 못했다. 그래서
-**확인된 표(1~6)에 없는 값은 버린다.** 비트마스크였다면 `15` 같은 값이 오는데,
-그걸 그대로 쏘면 기기가 어떻게 반응할지 모른다.
+We couldn't confirm whether `ModeDid.airVolume` is a single value or a
+bitmask. So **any value absent from the confirmed table (1-6) is
+discarded.** If it turns out to be a bitmask, a value like `15` could
+arrive, and sending that through unchanged risks an unknown device
+reaction.
 
-`tvoc` 와 `radon` 은 앱도 숫자를 보여주지 않는다 — 등급만 온다. 숫자를 만들어
-붙이지 않고 등급 문자열로 둔다.
+`tvoc` and `radon` aren't shown as numbers by the app either — only a
+grade arrives. We don't manufacture a number and attach it; the grade
+stays a string.
 
-### CLI 명령 3개
+### Three CLI commands
 
-HA 에 넣기 전에 하나씩 확인할 수 있어야 제보가 쓸모 있다.
+For a report to be useful, someone needs to be able to check things one at
+a time before ever touching HA.
 
 ```bash
-python3 tools/navien_cli.py airone-modes   --device-seq N   # 지원 조합 표. 아무것도 안 보냄
-python3 tools/navien_cli.py airone-status  --device-seq N   # 상태 요청 + 공기질
+python3 tools/navien_cli.py airone-modes   --device-seq N   # supported combination table. sends nothing
+python3 tools/navien_cli.py airone-status  --device-seq N   # state request + air quality
 python3 tools/navien_cli.py airone-control --device-seq N --mode 9 --humidity 55
 ```
 
-`airone-control` 은 **서버가 알려준 조합에 없는 값을 거부한다.** `--yes` 없이는
-보낼 본문만 출력하고 끝난다.
+`airone-control` **rejects a value absent from the server-reported
+combinations.** Without `--yes` it only prints the body it would send and
+stops there.
 
-### 검증한 것과 못 한 것
+### What's verified and what isn't
 
-합성 데이터로 92개를 확인했다 — 모델 파싱·조합 도출·페이로드 생성 41개, 봉투
-10개, MQTT 파서와 매트 회귀 16개, CLI 가드 25개.
+92 cases confirmed with synthetic data — 41 for model parsing, combination
+derivation, and payload generation; 10 for the envelope; 16 for the MQTT
+parser and mat regressions; 25 for CLI guards.
 
-**실기기 검증은 0개다.** 그래서 이슈 양식을 「제보해 주시면 만들겠습니다」에서
-「됐는지 안 됐는지 알려 주세요」로 바꿨다.
+**Real-device verification: 0.** For that reason, the issue template was
+changed from "send a report and we'll build it" to "please tell us whether
+this worked or not."
 
-### 매트 쪽 변경
+### Changes on the mat side
 
-- MQTT 구독 와일드카드를 `+` 에서 `#` 로 바꿨다. 앱이 쓰는 형식이고
-  (`HomeViewModel` 의 `/{접두사}/#`), 에어원 응답이 한 단계 더 깊게 올 수 있다.
-  `#` 는 `+` 를 포함하므로 매트 동작은 그대로다
-- 그 외 매트 코드는 건드리지 않았다. 검증이 끝난 경로를 보존하는 것이 우선이다
+- Changed the MQTT subscription wildcard from `+` to `#`. This matches
+  what the app uses (`HomeViewModel`'s `/{prefix}/#`), and an Airone
+  response can arrive one level deeper. `#` is a superset of `+`, so mat
+  behavior is unchanged
+- Nothing else on the mat side was touched. Preserving an already-verified
+  path takes priority
 
 ## v0.5.0 — 2026-07-30
 
-**통합 식별자(domain)를 `navien_smart` → `navien_smarthome` 으로 바꿨다.**
+**Changed the integration identifier (domain) from `navien_smart` to
+`navien_smarthome`.**
 
-식별자가 바뀌면 HA 는 이전 설정을 이어받지 못한다. **기존 사용자는 아래 순서를
-그대로 따라야 한다.**
+When the identifier changes, HA can't carry over the previous config
+entry. **Existing users must follow these steps exactly.**
 
 1. 설정 → 기기 및 서비스 → 「Navien Smart」 → ⋮ → **삭제**
-2. HACS 에서 이 통합을 **재설치** (업데이트가 아니라 재설치)
-3. **HA 재시작**
-4. 설정 → 기기 및 서비스 → 통합 추가 → 「Navien Smart」 → 아이디·비밀번호 입력
+2. **Reinstall** this integration through HACS (reinstall, not update)
+3. **Restart HA**
+4. 설정 → 기기 및 서비스 → 통합 추가 → 「Navien Smart」 → enter your ID and
+   password
 
-3번 이후 `custom_components/navien_smart/` 폴더가 남아 있으면 지운다. HACS 가
-자동으로 정리하지만 남는 경우가 있다.
+After step 3, delete the `custom_components/navien_smart/` folder if it's
+still there. HACS cleans it up automatically most of the time, but it can
+be left behind.
 
-기기·엔티티는 다시 만들어진다. **엔티티 ID 는 기기 이름에서 생기므로 이전과
-같지만**, 자동화에서 쓰고 있었다면 재등록 후 한 번 확인하는 편이 안전하다.
+Devices and entities are recreated. **Entity IDs are derived from the
+device name, so they stay the same as before**, but if you had automations
+depending on them, it's safer to check once after re-registering.
 
-기능 변경은 없다.
+No functional changes.
 
 ## v0.4.6 — 2026-07-30
 
-**최소 Home Assistant 버전을 2025.2 로 올렸다.** 공개 전 점검에서 잡았다.
+**Raised the minimum Home Assistant version to 2025.2.** Caught during a
+pre-release check.
 
-`hacs.json` 이 `2024.12.0` 을 요구한다고 선언했는데 코드는 그보다 새 API 를 쓴다.
+`hacs.json` declared a requirement of `2024.12.0`, but the code uses newer
+APIs than that.
 
-| API | 사용 | 도입 |
+| API | used at | introduced in |
 | --- | --- | --- |
-| `AddConfigEntryEntitiesCallback` | 10곳 | HA 2025.2 |
+| `AddConfigEntryEntitiesCallback` | 10 places | HA 2025.2 |
 | `_get_reauth_entry`, `data_updates` | config flow | HA 2024.11 |
 | `model_id` (DeviceInfo) | entity | HA 2024.8 |
 
-HA 2024.12 사용자가 설치하면 `ImportError` 로 통합이 올라오지 않고, 사용자는 원인을
-알 수 없는 traceback 만 본다.
+A user on HA 2024.12 installing this would hit an `ImportError` that
+prevents the integration from loading at all, seeing only an
+unexplainable traceback.
 
-**HACS 가 설치 전에 거르는 것이 옳은 실패 방식이다.** 「HA 2025.2 이상 필요」라고
-보여주고 설치를 막는다. README 설치 절에도 명시했다.
+**Having HACS filter this out before install is the right kind of
+failure.** It now shows "requires HA 2025.2 or later" and blocks
+installation. Also stated explicitly in the README's install section.
 
-`2025.2.0` 은 보수적으로 잡은 값이다. `AddConfigEntryEntitiesCallback` 의 정확한
-도입 버전을 확인하지 못했으므로, 낮게 잡아 깨지는 것보다 높게 잡아 막는 쪽을 택했다.
+`2025.2.0` is a conservative choice. We couldn't pin down the exact
+version `AddConfigEntryEntitiesCallback` was introduced in, so we chose
+to set the floor high and block rather than set it low and break.
 
 ## v0.4.5 — 2026-07-30
 
-**「진단」이라는 말을 사용자에게 보이는 곳에서 전부 없앴다.**
+**Removed the word "진단" (diagnostics) everywhere it was visible to
+users.**
 
-v0.4.3 에서 메뉴 이름을 `통계정보 다운로드` 로 고치면서 「원문은 Download
-diagnostics 이고 버전에 따라 진단 정보 다운로드 로 보일 수도 있습니다」를 병기했다.
-번역이 바뀔 경우를 대비한 것인데, **그 병기 자체가 헷갈리게 만들었다.**
+v0.4.3 had renamed the menu item to `통계정보 다운로드` and added a note
+alongside it — "the original label is Download diagnostics, and depending
+on your HA version it may show as 진단 정보 다운로드 instead." That was
+meant to cover a possible translation mismatch, but **the note itself was
+what caused the confusion.**
 
-사용자는 HA 화면에 있는 이름만 알면 된다. 「통계정보」와 「진단」을 같이 보여주면
-같은 것인지 다른 것인지 고민하게 된다.
+A user only needs to know the name that appears on the HA screen. Showing
+"통계정보" and "진단" together makes them wonder whether these are the same
+thing or different things.
 
-- README — 「진단 파일」을 「통계정보 파일」로. 번역 안내 문단 삭제
-- 이슈 폼 4개 — 항목 이름 `진단 정보` → `통계정보 파일`. 번역 안내 삭제
-- `coordinator.py` 로그 — `'통계정보 다운로드'(진단 파일)` 에서 괄호 제거
+- README — changed "진단 파일" to "통계정보 파일." Removed the translation
+  note paragraph
+- 4 issue forms — field name changed from `진단 정보` to `통계정보 파일`.
+  Removed the translation note
+- `coordinator.py` log — removed the parenthetical `(진단 파일)` from
+  `'통계정보 다운로드'(진단 파일)`
 
-코드 주석의 「진단」은 그대로 뒀다. 사용자에게 보이지 않고, HA 의 diagnostics 기능을
-가리키는 개발자용 표현이다.
+"진단" was left as-is in code comments — it's never shown to users there,
+and it's a developer-facing term referring to HA's diagnostics feature.
 
 ## v0.4.4 — 2026-07-30
 
-**제보 안내를 사용자 말로 바꿨다.** 개발자 용어를 요구하고 있었다.
+**Reworded the reporting instructions into plain user language.** They had
+been demanding developer vocabulary.
 
-### 무엇이 문제였나
+### What was wrong
 
-사계절 안내가 이랬다.
+The four-season instructions read like this.
 
-> 사계절 매트를 쓰신다면 **`운전 상태` 센서의 속성**을 이슈에 붙여 주세요.
-> `season` 과 `cool_control` 이 들어 있습니다.
+> If you use a four-season mat, please attach **the `운전 상태` sensor's
+> attributes** to your issue. It contains `season` and `cool_control`.
 
-사용자에게 **엔티티 속성을 뒤지게** 하고 있었다. 그런데 **진단 파일에 이미 그 값이
-다 들어 있다** (`diagnostics.py` 의 `_entity_view` 가 `season`, `cool_control`,
-`is_cooling` 을 담는다).
+This made users **dig through entity attributes.** But **the diagnostics
+file already contains that same value** (`diagnostics.py`'s `_entity_view`
+already carries `season`, `cool_control`, and `is_cooling`).
 
-진단 파일 하나만 받으면 되는데 불필요한 단계를 요구한 셈이다. 제보 문턱을 낮추려고
-만든 진단 기능인데 안내가 그걸 무의미하게 만들고 있었다.
+Downloading a single diagnostics file was all that was actually needed,
+yet the instructions demanded an unnecessary extra step. Diagnostics
+exists precisely to lower the bar for reporting, and the instructions were
+making that pointless.
 
-### 고친 곳
+### What was fixed
 
-- README 사계절 절 — "냉방으로 켜두신 상태에서 진단 파일을 받아 제보해 주세요" 로 바꿨다.
-  냉방으로 켜둬야 하는 이유만 남기고 나머지는 뺐다
-- `coordinator.py` 사계절 로그 — `coolControl=...` 원본값을 사용자에게 들이밀던 것을
-  제보 방법 안내로 바꿨다
-- 이슈 폼 3개 — `report_wanted_devices`, `entities[].season` 같은 JSON 경로 언급을
-  "파일 안에 다 들어 있습니다. 따로 찾아보실 것은 없습니다" 로 바꿨다
+- README's four-season section — reworded to "please leave it running in
+  cooling and send us the diagnostics file." Kept only the reason for
+  leaving it in cooling and dropped the rest
+- `coordinator.py`'s four-season log — replaced showing the raw
+  `coolControl=...` value to the user with instructions on how to report
+- 3 issue forms — replaced mentions of JSON paths like
+  `report_wanted_devices`, `entities[].season` with "it's all in the
+  file. There's nothing you need to look up separately"
 
-### 원칙
+### The principle
 
-**사용자가 알아야 할 것은 「어디를 눌러 파일을 받는지」 하나뿐이다.**
-파일 안의 구조는 받는 쪽이 읽으면 된다.
+**The one thing a user needs to know is where to click to get the file.**
+The structure inside it is for whoever reads the report to work out.
 
 ## v0.4.3 — 2026-07-30
 
-**진단 파일 받는 메뉴 이름이 틀렸다.** 안내 문구를 고쳤다.
+**The menu name for downloading the diagnostics file was wrong.** Fixed
+the instructions.
 
-`진단 정보 다운로드` 라고 적었는데 HA 한국어 화면에는 **`통계정보 다운로드`** 로
-나온다. 원문이 `Download diagnostics` 인데 번역이 「통계」로 되어 있다.
+We had written `진단 정보 다운로드`, but HA's Korean-language screen
+actually shows **`통계정보 다운로드`.** The original English label is
+`Download diagnostics`, and the translation renders it as "통계" (statistics).
 
-사용자가 「진단」을 찾다가 못 찾는다. 제보를 받으려고 만든 안내가 정작 제보를
-막고 있었다.
+A user looking for "진단" (diagnostics) couldn't find it. Instructions
+meant to make reporting easier were instead blocking reports.
 
-7군데를 고쳤다 — README, 이슈 폼 4개, `coordinator.py` 로그, `diagnostics.py` 주석.
+Fixed in 7 places — README, 4 issue forms, the `coordinator.py` log, and a
+`diagnostics.py` comment.
 
-**두 이름을 같이 적었다.** HA 번역은 버전마다 바뀔 수 있으므로 한쪽만 쓰면 다시
-어긋난다. 「통계정보 다운로드」를 앞에 두고, 원문과 다른 표기 가능성을 함께 안내한다.
+**Both names are now shown together.** HA's translation can change from
+version to version, so relying on only one risks drifting out of sync
+again. `통계정보 다운로드` is listed first, alongside a note that the
+wording may differ from the original English label.
 
 ## v0.4.2 — 2026-07-30
 
-README 에 **모델별 지원 표**를 넣었다. 코드 변경은 없다.
+Added a **per-model support table** to the README. No code changes.
 
-사용자가 자기 모델명으로 검색하므로 목록이 있는 게 낫다. 앱 `기기 추가` 화면의
-숙면매트 전체를 옮겼다.
+Users search by their own model name, so having a full list helps. Copied
+the entire heated-mat list from the app's `기기 추가` (add device) screen.
 
-### 블루투스 전용 모델은 지원하지 않는다 — 확정
+### Bluetooth-only models are confirmed unsupported
 
-앱 카탈로그의 `숙면매트 온수 (Bluetooth)` 계열(`EQM530`~`EQM571`, `EQH20/40DN`)은
-**폰과 BLE 로 직접 통신하고 클라우드를 거치지 않는다.**
+The app catalog's `숙면매트 온수 (Bluetooth)` line (`EQM530`-`EQM571`,
+`EQH20/40DN`) **talks directly to the phone over BLE and never goes
+through the cloud.**
 
-APK 근거:
+Evidence from the APK:
 
 ```
-STX_BLE = 178                          BLE 프레임 시작 바이트
-MATE_BT_DEVICE_CONTROL_POWER_ON = 1    BLE 페이로드 값
-HOT_WATER_MAT_PREFIX = "KDO"           구형 BLE 접두사
+STX_BLE = 178                          BLE frame start byte
+MATE_BT_DEVICE_CONTROL_POWER_ON = 1    BLE payload value
+HOT_WATER_MAT_PREFIX = "KDO"           older-generation BLE prefix
 ```
 
-HA 는 폰이 아니므로 붙을 방법이 없다. **앞으로도 지원 계획이 없다.**
+HA isn't a phone, so there's no way to connect to these. **No plan to
+support them going forward.**
 
-### 표기를 세 단계로 나눴다
+### Split the table into three confidence levels
 
-- **검증 완료** — EME-500 싱글·더블. 실기기로 조회·수신·제어·0단계 전환까지 확인
-- **될 것으로 봅니다** — 통합이 모델별 표를 쓰지 않고 서버 값으로 동작하므로
-  구조적으로는 되지만 실기기 확인은 없다
-- **안 됩니다** — 블루투스 전용
+- **Confirmed** — EME-500 single and double zone. Confirmed on a real
+  device down to querying, receiving, controlling, and switching to step 0
+- **Expected to work** — the integration doesn't hard-code a per-model
+  table and runs off server-provided values, so this should work
+  structurally, but no real-device confirmation exists
+- **Doesn't work** — Bluetooth-only
 
-"유사 기기면 다 된다" 고 쓰지 않았다. 한 계열(BLE)이 통째로 안 되기 때문이다.
+We didn't write "any similar device works," because one entire line (BLE)
+doesn't work at all.
 
-### 남은 모호함
+### One ambiguity left unresolved
 
-`EQM551` 이 앱의 Wi-Fi 목록과 Bluetooth 목록에 **둘 다** 있다. 같은 번호로 두 종류가
-있는 것인지 앱이 편의상 양쪽에 넣은 것인지 확인하지 못했다. README 에 그대로 적고
-제보를 요청했다.
+`EQM551` appears in **both** the app's Wi-Fi list and its Bluetooth list.
+We couldn't confirm whether this is two different devices sharing a number
+or the app listing it under both for convenience. Noted as-is in the
+README with a request for reports.
 
 ## v0.4.1 — 2026-07-30
 
-**기기 화면에 펌웨어·모델·일련번호를 표시한다.**
+**The device page now shows firmware, model, and serial number.**
 
-서버가 주는 값을 HA 기기 정보에 연결했다.
+Wired server-provided values into HA's device info.
 
-| 표시 | 출처 | 실측 (EME-500) |
+| field | source | observed value (EME-500) |
 | --- | --- | --- |
-| 모델 | `model` + `modelType` | `EME-500 (카본)` |
-| 모델 ID | `modelCode` | `257` |
-| 펌웨어 | `mcu.version` + `wifi.version` | `14.0.0 (Wi-Fi 5.1.100)` |
-| 일련번호 | `deviceId` | 기기별 고유값 |
+| model | `model` + `modelType` | `EME-500 (카본)` |
+| model ID | `modelCode` | `257` |
+| firmware | `mcu.version` + `wifi.version` | `14.0.0 (Wi-Fi 5.1.100)` |
+| serial number | `deviceId` | unique per device |
 
-**펌웨어가 둘인데 HA 에는 칸이 하나다.** 매트 본체(MCU)와 Wi-Fi 모듈이 각자
-펌웨어를 가진다. 한 줄로 합쳐 넣었다.
+**There are two firmware versions, but HA has only one field for it.** The
+mat's main body (MCU) and the Wi-Fi module each carry their own firmware.
+Combined into a single line.
 
-**Wi-Fi 펌웨어를 「하드웨어」 칸에 넣지 않았다.** HA 가 그 칸을 하드웨어 리비전으로
-표시하므로 펌웨어를 넣으면 거짓 정보가 된다. 서버는 하드웨어 리비전을 주지 않아서
-그 칸은 비워 둔다.
+**Wi-Fi firmware was not placed in the "hardware" field.** HA displays
+that field as a hardware revision, so putting firmware there would be
+misleading. The server doesn't provide a hardware revision, so that field
+is left blank.
 
-버전 정보를 주지 않는 응답에서는 펌웨어 칸이 비고, 나머지는 그대로 표시된다.
+For a response that doesn't include version info, the firmware field is
+blank while the rest still display normally.
 
-### 넣지 않은 것
+### What wasn't added
 
-`deviceId` 앞 12자리가 기기 MAC 으로 보인다 (`AABBCCDDEEFF` + `0001` ↔ ARP
-`aa:bb:cc:dd:ee:ff`). HA 에 MAC 으로 등록하면 라우터·DHCP 통합과 연결되지만
-**넣지 않았다.**
+The first 12 characters of `deviceId` appear to be the device's MAC
+address (`AABBCCDDEEFF` + `0001` matching the ARP entry
+`aa:bb:cc:dd:ee:ff`). Registering it as a MAC in HA would link it to
+router/DHCP integrations, but **it was not added.**
 
-대응을 기기 한 대에서만 확인했고, 잘못된 MAC 을 등록하면 HA 기기 목록에서
-**다른 기기와 병합**된다. 되돌리기 번거로운 부작용이라 근거 한 건으로는 넣지 않는다.
+This correspondence was only confirmed on one device, and registering a
+wrong MAC would cause HA to **merge it with a different device** in the
+device list. That's an annoying side effect to undo, so one piece of
+evidence isn't enough to justify adding it.
 
 ## v0.4.0 — 2026-07-30
 
-**단계 제어를 슬라이더(`number`)에서 선택 목록(`select`)으로 바꿨다.**
-엔티티가 교체되므로 파괴적 변경이다.
+**Changed step control from a slider (`number`) to a selection list
+(`select`).** This is a breaking change since the entity itself is
+replaced.
 
-### 왜
+### Why
 
-`number` 슬라이더는 세 군데가 어긋났다.
+The `number` slider was wrong in three ways.
 
-- **조준해야 한다.** 좁은 카드 행에서 8칸을 끌면 3을 노렸는데 4가 된다.
-  난방 기기에서 한 칸 오버슈트는 그냥 넘길 일이 아니다
-- **눈금에 이름을 못 붙인다.** 앱은 맨 왼쪽을 `운전 대기` 라 부르는데 `0 단계` 로 보였다
-- **0을 설정할 수 없었다.** 서버가 `rangeMin: 1` 로 주므로 최소값이 1이었다.
-  기기는 0을 보고하니 **표시는 되는데 설정이 안 되는** 상태였다
+- **It requires precision.** Dragging across 8 positions in a narrow card
+  row means aiming for 3 and landing on 4. On a heating device, a
+  one-step overshoot isn't something to shrug off
+- **A tick mark can't carry a name.** The app calls the leftmost position
+  `운전 대기` (standby), but it showed as `0 단계` (step 0)
+- **0 couldn't actually be set.** The server sends `rangeMin: 1`, so the
+  minimum was 1. Since the device does report 0, this left it **visible
+  but unsettable**
 
-단계를 `climate` 로 만들지 않은 이유("단계는 온도가 아니다")와 같은 논리다.
-**단계는 연속량도 아니다.** 9개의 이산 상태이고 그중 0은 숫자가 아니라 상태다.
+Same logic as the reason step control was never modeled as `climate`
+("a step isn't a temperature"). **A step isn't a continuous quantity
+either.** It's 9 discrete states, and 0 among them is a state, not a
+number.
 
-### 0단계 = 운전 대기 — 실측 확정
+### Step 0 = standby — confirmed by real measurement
 
-앱에서 우측을 0단계로 내리고 shadow 를 관찰했다.
+Lowered the right side to step 0 in the app and watched the shadow.
 
 ```
 12:11:34  right = {level: 1, enable: True}
 12:16:26  right = {level: 0, enable: False}
 ```
 
-**`level 0` 과 `enable false` 가 함께 움직인다.** 그래서 `운전 대기` 를 고르면
-둘을 같이 보낸다. 별도 스위치를 만들 필요가 없었다.
+**`level 0` and `enable false` move together.** So selecting `운전 대기`
+now sends both at once. No need for a separate switch entity.
 
-`select` 옵션: `운전 대기`, `1단계` … `8단계`
+`select` options: `운전 대기`, `1단계` … `8단계`
 
-**한쪽만 운전 대기로 둘 수 있다.** 앱과 달리 기기 전원을 끌 필요가 없다.
+**One side alone can be set to standby.** Unlike the app, there's no need
+to turn the whole device off.
 
-### 구현 중 잡은 버그
+### A bug caught during implementation
 
-첫 구현은 `level 0 → enable false` 규칙을 **모든 구역에** 적용했다.
-좌측을 대기로 내리면 우측 `enable` 까지 덮어써서 **같이 꺼졌다.**
+The first implementation applied the `level 0 → enable false` rule to
+**every zone.** Lowering the left side to standby also overwrote the right
+side's `enable`, **turning it off too.**
 
-`zone in changes` 조건을 넣어 **바꾸는 구역에만** 적용하도록 고쳤다.
-세 가지 조합으로 반대쪽 보존을 검증했다.
+Fixed by adding a `zone in changes` condition so it only applies **to the
+zone actually being changed.** Verified the other side stays untouched
+across three combinations.
 
-### 숫자 이력은 사라진다
+### Numeric history is lost
 
-`select` 상태는 문자열이라 그래프·장기 통계가 안 된다. 대신 `level` 값을 엔티티
-속성으로 남겨 자동화·템플릿에서 숫자로 쓸 수 있게 했다.
+`select` state is a string, so no graphs or long-term statistics. The
+`level` value is instead kept as an entity attribute, so automations and
+templates can still use it as a number.
 
-그래프가 필요해지면 읽기 전용 숫자 `sensor` 를 따로 추가한다. 미리 만들지 않는다.
+If a graph turns out to be needed later, a separate read-only numeric
+`sensor` will be added then — not preemptively.
 
-### 업데이트 후
+### After updating
 
-`number.*_단계` 엔티티가 사라지고 `select.*_단계` 가 생긴다. 대시보드에 넣어 두셨다면
-카드를 다시 지정해야 한다. 남은 옛 엔티티는 설정 → 기기에서 정리할 수 있다.
+The `number.*_단계` entities disappear and `select.*_단계` ones appear. If
+you had these on a dashboard, the cards will need to be reassigned. Any
+leftover old entities can be cleaned up from Settings → Devices.
 
 ## v0.3.3 — 2026-07-30
 
-**v0.3.2 의 대기 시간 안내가 틀렸다. 고쳤다.** 코드 변경은 없다.
+**The wait-time note in v0.3.2 was wrong. Corrected.** No code changes.
 
-"보통 1분 안, 관측 최대 1분 30초" 라고 적었는데, 실제로는 **1.4초**다.
-HA 에서 두 번 측정했다.
+We had written "usually under a minute, observed max 1 minute 30 seconds,"
+but the actual figure is **1.4 seconds.** Measured twice in HA.
 
-| 회차 | 구독 시작 | reported 수신 | 걸린 시간 |
+| run | subscription started | `reported` received | elapsed |
 | --- | --- | --- | --- |
-| 1차 | 11:55:30.838 | 11:55:32.211 | 1.373초 |
-| 2차 | 11:56:50.804 | 11:56:52.152 | 1.348초 |
+| 1st | 11:55:30.838 | 11:55:32.211 | 1.373s |
+| 2nd | 11:56:50.804 | 11:56:52.152 | 1.348s |
 
-### 93초는 어디서 나왔나
+### Where did the 93 seconds come from
 
-v0.3.0 을 켠 직후 관측한 값인데, **다른 이벤트를 잘못 귀속시킨 것이었다.**
+That figure was observed right after turning on v0.3.0, but **it had
+attributed a different event to the wrong cause.**
 
-11:40:58 에 초기 상태를 요청했고 11:42:31 에 값이 도착했다. 그래서 93초로 봤다.
-그런데 그 사이 CLI 로 같은 기기에 세 번 시험을 했고, 11:42:31 에 온 것은 그중
-하나의 응답이었다. **11:40:58 의 요청은 응답이 오지 않았거나 유실됐다.**
+The initial state was requested at 11:40:58, and a value arrived at
+11:42:31 — so it was read as 93 seconds. But in between, the same device
+had been tested three times over the CLI, and what arrived at 11:42:31
+was the response to one of those. **The 11:40:58 request either never got
+a response, or it was lost.**
 
-당시 `clientId` 가 `homeSeq` 였고 지금은 `userSeq` 다. A/B 로는 둘 다 구독이 됐으니
-그것이 원인이라고 단정할 수 없다. 재현하지 못했으므로 원인 미확인으로 남긴다.
+At the time, `clientId` used `homeSeq`; it now uses `userSeq`. An A/B test
+showed both subscribed successfully, so that can't be pinned down as the
+cause either. Since it couldn't be reproduced, this stays an unconfirmed
+cause.
 
-### 그래서 안 하기로 한 것
+### What we decided not to do, as a result
 
-- **`RestoreEntity` 를 넣지 않는다.** 1.4초를 때우려고 옛 값을 보여줄 이유가 없다.
-  HA 가 꺼진 사이 누가 조작했으면 틀린 값을 보여주는 대가가 따른다
-- **`devices/{deviceSeq}/log` 조사를 하지 않는다.** 초기 상태를 빨리 얻으려던
-  목적이었는데 해결할 문제가 없어졌다
+- **Not adding `RestoreEntity`.** There's no reason to show a stale value
+  to paper over 1.4 seconds. If someone operated the device while HA was
+  off, that comes with the cost of showing a wrong value
+- **Not investigating `devices/{deviceSeq}/log`.** The goal had been to
+  get initial state faster, and there's no longer a problem left to solve
 
-측정 없이 대책을 세우면 필요 없는 코드가 늘어난다.
+Building a countermeasure without measuring first just adds unnecessary
+code.
 
 ## v0.3.2 — 2026-07-30
 
-재시작 직후 값이 비는 이유를 문서에 적고, 디버깅을 돕는 로그를 넣었다.
-동작이 바뀐 것은 없다.
+Documented why values are empty right after a restart, and added logging
+to help debug it. No behavior changed.
 
-### 왜 재시작 직후에 비어 있나 — 조사 결과
+### Why it's empty right after restart — investigation results
 
-값이 안 오는 게 아니라 **기기 응답을 기다리는 시간**이었다. HA 에서 관측한 한 번은
-요청부터 도착까지 **93초**였고, CLI 시험에서는 30초 안에 왔다. 편차가 있어 README 에는
-"보통 1분 안, 관측 최대 1분 30초" 로 적었다.
+Values weren't failing to arrive — this was **the time spent waiting for
+the device to respond.** One observation in HA measured **93 seconds**
+from request to arrival, while CLI tests got a response within 30
+seconds. Given the variance, the README says "usually under a minute,
+observed max 1 minute 30 seconds."
 
-빠른 경로가 있는지 시험했으나 막혀 있었다.
+Tested whether a faster path exists — it's blocked.
 
 ```
 $aws/things/{deviceId}/shadow/name/status/get
 → rejected: {"code":404,"message":"No shadow exists with name: 'status'"}
 ```
 
-**shadow 가 사용자 계정에 없다.** 기기는 자기 전용 AWS 계정에 보고하고, 나비엔이
-그걸 사용자 계정 토픽으로 중계한다. 저장된 상태를 직접 읽을 방법이 없으므로,
-기기를 깨워 보고를 받는 것이 유일한 경로다.
+**There is no shadow on the user's account.** The device reports to its
+own dedicated AWS account, and Navien relays that onto the user account's
+topic. There's no way to read the stored state directly — waking the
+device and waiting for its report is the only path.
 
-같은 요청을 반복해도 매번 응답하는 것은 확인했다 — 재시작마다 새로 요청해도 된다.
+Confirmed that repeating the same request gets a response every time — a
+fresh request on every restart is fine.
 
-### clientId 를 앱 형식에 맞췄다
+### Matched `clientId` to the app's format
 
-`{uuid}-U{homeSeq}` 로 보내고 있었다. 앱은 `{uuid}-U{userSeq}` 를 쓴다.
-A/B 로 확인했을 때 둘 다 구독은 됐지만, 서버가 나중에 clientId 를 검사하게 되면
-앱과 다른 쪽이 먼저 막힌다.
+We had been sending `{uuid}-U{homeSeq}`. The app uses
+`{uuid}-U{userSeq}`. An A/B check showed both subscribe successfully for
+now, but if the server ever starts validating clientId, the one that
+diverges from the app would be the first to break.
 
-### 수신 로그를 넣었다
+### Added receive logging
 
-받은 이벤트와 **버린 이벤트**를 모두 debug 로 남긴다. 이게 없어서 "상태가 안 온다" 와
-"와도 버린다" 를 구별하지 못해 원인 찾기가 길어졌다.
+Both received events and **discarded events** are now logged at debug
+level. Without this, there was no way to tell "state never arrives" apart
+from "it arrives but gets discarded," which had been dragging out root
+cause investigations.
 
 ## v0.3.1 — 2026-07-30
 
-`운전 상태` 센서가 예외로 죽던 문제를 고쳤다.
+Fixed the `운전 상태` sensor crashing with an exception.
 
 ```
 ValueError: Sensor sensor.xxx_unjeon_sangtae is providing enum options,
 but is missing the enum device class
 ```
 
-`_attr_options` 를 넣고 `device_class = ENUM` 을 붙이지 않았다. HA 가 상태를 문자열로
-만드는 단계에서 예외를 던져 이 센서만 값이 비었다.
+We had set `_attr_options` without attaching `device_class = ENUM`. HA
+threw an exception at the step where it turns state into a string, so
+only this sensor ended up with an empty value.
 
-**`options` 를 없애는 쪽으로 고쳤다.** ENUM 을 붙이는 방법도 있지만 ENUM 은 값이
-반드시 목록 안에 있어야 하고, `운전 상태` 는 모르는 모드에 `알 수 없음(N)` 을
-돌려준다. 나비엔이 새 모드를 추가하는 날 이 센서가 다시 죽는다. 목록을 닫을 수 없는
-값에는 ENUM 을 쓰지 않는다.
+**Fixed by removing `options` instead.** Attaching `ENUM` was also an
+option, but ENUM requires the value to always be within the declared list,
+and `운전 상태` returns `알 수 없음(N)` for an unrecognized mode. This
+sensor would crash again the day Navien adds a new mode. ENUM isn't used
+for a value whose list of possibilities can't be closed.
 
-v0.3.0 의 나머지 수정은 실기기로 확인했다 — 좌 2단계 / 우 4단계가 HA 에 그대로
-들어왔고 실제 매트 값과 일치했다.
+The rest of v0.3.0's fixes were confirmed on a real device — left step 2 /
+right step 4 came through into HA exactly as-is, matching the mat's actual
+values.
 
 ## v0.3.0 — 2026-07-30
 
-**HA 에서 처음 돌려보고 찾은 버그 세 개를 고쳤다.** v0.2.3 까지는 엔티티가 생기기만
-하고 상태가 계속 `상태 알 수 없음` 이었다.
+**Fixed three bugs found the first time this was actually run in HA.**
+Through v0.2.3, entities were created but their state stayed permanently
+`상태 알 수 없음` (state unknown).
 
-### MQTT 가 붙자마자 스스로 끊고 재접속을 반복했다
+### MQTT disconnected itself and reconnected in a loop right after connecting
 
-`_async_run` 이 이렇게 되어 있었다.
+`_async_run` looked like this.
 
 ```python
-await self._async_connect_once()               # connect() 는 CONNACK 전에 반환
-while not self._stopping and self.connected:   # connected 가 아직 False
+await self._async_connect_once()               # connect() returns before CONNACK
+while not self._stopping and self.connected:   # connected is still False
 ```
 
-`paho` 의 `connect()` 는 CONNACK 을 기다리지 않는다. 그래서 감시 루프가 즉시
-빠져나가 방금 만든 연결을 끊고, 5초 뒤 다시 붙고, 또 끊었다. 상태가 도착할 틈이
-없었다.
+`paho`'s `connect()` doesn't wait for the CONNACK. So the watch loop
+exited immediately, tearing down the connection just made, reconnecting 5
+seconds later, and disconnecting again. There was never a window for
+state to arrive.
 
-CONNACK 을 기다린 뒤 감시 루프에 들어가게 했다 (최대 15초, 초과하면 재시도).
+Now waits for the CONNACK before entering the watch loop (up to 15
+seconds, retrying if it times out).
 
-### 초기 상태를 가져오지 않았다
+### Initial state was never fetched
 
-**shadow 이벤트는 변화가 있을 때만 온다.** 구독만 해두면 아무 조작이 없는 동안
-상태가 영원히 비어 있다.
+**Shadow events only arrive when something changes.** Subscribing alone
+leaves state empty forever as long as nothing is operated.
 
-구독이 붙은 뒤 켜져 있는 기기에 **제어 필드 없이 `event.modelCode` 만** 보낸다.
-그러면 기기가 현재 상태를 `reported` 로 올린다. 앱도 같은 방식을 쓴다.
-설정을 바꾸지 않는다 — 보낼 값이 없기 때문이다.
+Once the subscription is up, we now send **only `event.modelCode`, with
+no control field**, to any device that's on. The device then reports its
+current state as `reported`. The app uses the same approach. This doesn't
+change any setting — there's no value being sent to change.
 
-꺼져 있는 기기에는 보내지 않는다. 응답하지 않고 shadow 에만 쌓인다.
+Nothing is sent to a device that's off. It won't respond; it just queues
+in the shadow.
 
-### 이벤트 루프를 막았다
+### Blocked the event loop
 
-`ssl.create_default_context()` 가 인증서를 디스크에서 읽어 HA 의 이벤트 루프를
-막았다. HA 가 경고를 냈다. HA 가 부팅 때 만들어 캐시해 둔
-`homeassistant.util.ssl.get_default_context()` 로 바꿨다.
+`ssl.create_default_context()` reads certificates from disk, which
+blocked HA's event loop. HA logged a warning about it. Switched to
+`homeassistant.util.ssl.get_default_context()`, which HA builds and
+caches at boot.
 
 ## v0.2.3 — 2026-07-30
 
-세션 제약 안내를 고쳤다. 동작 변화는 없다.
+Fixed the session-limitation instructions. No behavior change.
 
-v0.2.1 은 **"HA 전용 계정을 하나 더 만드세요"** 를 권장으로 앞세웠다. 그런데
-나비엔은 계정 생성에 **본인인증**을 요구한다 (`auth/start-self-auth`,
-`auth/self-auth`). 실명·휴대폰에 묶이므로 **혼자 쓰는 사용자는 계정을 늘릴 수 없다.**
-대부분이 막히는 방법을 권장으로 놓았던 셈이다.
+v0.2.1 had led with **"create a second, HA-only account"** as the
+recommendation. But Navien requires **identity verification** to create
+an account (`auth/start-self-auth`, `auth/self-auth`) — tied to a real
+name and phone number, meaning **a single user genuinely can't create a
+second account.** The recommendation had been a path blocked for most
+people.
 
-순서를 뒤집었다.
+Reversed the order.
 
-1. **동작을 먼저 알린다** — 세션이 하나라 앱과 HA 가 서로 밀어낸다. 통합이 자동
-   재로그인하므로 쓰는 데 큰 지장은 없고, 앱을 보는 동안 HA 갱신이 멈추는 것이
-   유일한 체감 불편이다
-2. **가족 계정은 불편할 때의 선택으로** 내렸다. 본인인증이 필요하다는 점을 명시했다
+1. **State the actual behavior first** — since there's only one session,
+   the app and HA push each other out. The integration automatically
+   re-logs-in, so this doesn't get in the way much in practice; the only
+   noticeable inconvenience is that HA updates pause while the app is open
+2. **Demoted the family account to an option for when that's
+   inconvenient**, with the identity-verification requirement stated
+   explicitly
 
 ## v0.2.2 — 2026-07-30
 
-아이콘 형태를 바꿨다. 동작 변화는 없다.
+Changed the icon's shape. No behavior change.
 
-v0.2.1 의 아이콘은 나비엔 앱 아이콘의 대각 쐐기와 남색을 그대로 가져와서
-**나비엔 공식 자산처럼 보였다.** 걷어냈다.
+v0.2.1's icon reused the Navien app icon's diagonal wedge and navy color
+directly, which **made it look like an official Navien asset.** Removed.
 
 | | v0.2.1 | v0.2.2 |
 | --- | --- | --- |
-| 형태 | 둥근 사각형 + 남색 대각 쐐기 | **집 실루엣** (미로 통합과 동일) |
-| 색 | 주황 + 남색 | **주황 하나** |
-| 워드마크 | 남색 | 잉크(`#111827`) |
+| shape | rounded square + navy diagonal wedge | **house silhouette**
+(matching the Miro integration) |
+| color | orange + navy | **orange alone** |
+| wordmark | navy | ink (`#111827`) |
 
-커뮤니티 통합 마크임이 형태에서 드러나야 한다. 색만 나비엔 주황을 쓰고 구성은
-기존 미로 통합과 같게 맞췄다 — 같은 사람이 만든 것임도 함께 드러난다.
+A community integration's mark needs to read as such from its shape
+alone. Only the Navien orange was kept as the color, and the composition
+was matched to the existing Miro integration — which also makes it
+visible that the same person made both.
 
-`#0F2F6E` 남색은 참고용으로만 스크립트에 남겨두고 마크에는 쓰지 않는다.
+The navy `#0F2F6E` is kept in the script for reference only, never used in
+the mark itself.
 
 ## v0.2.1 — 2026-07-30
 
-아이콘과 문서. 동작 변화는 없다.
+Icon and documentation. No behavior change.
 
-### 아이콘
+### Icon
 
-`custom_components/navien_smart/brand/` 에 8개 파일을 넣었다. HA 2026.3+ 는 통합이
-직접 제공한다 — `home-assistant/brands` 는 커스텀 통합 아이콘을 더 이상 받지 않는다.
+Added 8 files under `custom_components/navien_smart/brand/`. HA 2026.3+
+serves this directly from the integration — `home-assistant/brands` no
+longer accepts custom-integration icons.
 
-색은 추측하지 않았다. **앱 아이콘 픽셀에서 뽑았다** — 주황 `#F48400`, 남색 `#0F2F6E`.
-나비엔 로고를 베끼지 않고 같은 두 색으로 원본 마크를 만들었다.
+The colors weren't guessed. **They were pulled from the app icon's actual
+pixels** — orange `#F48400`, navy `#0F2F6E`. Navien's logo wasn't copied;
+an original mark was built using those same two colors.
 
-다크 변형은 색을 조정했다. 남색 쐐기가 어두운 배경에 묻히므로 밝게 올렸다
-(`#2A5AAA`), 주황은 과하게 튀어 한 단계 낮췄다 (`#FF9412`).
+The dark variant adjusts the colors. The navy wedge got lost against a
+dark background, so it was brightened (`#2A5AAA`); the orange stood out
+too aggressively, so it was toned down one notch (`#FF9412`).
 
-### 문서 — 로컬 제어와 세션 제약
+### Documentation — local control and session limits
 
-두 가지를 실측으로 확인해 README 에 적었다.
+Confirmed two things by real measurement and documented them in the
+README.
 
-**로컬(랜) 제어는 불가능하다.** 매트의 TCP 1~65535 전 범위에 열린 포트가 없다.
-앱에도 직결 코드가 없다 — 프레임 프로토콜 상수(`STX_WIFI`)가 남아 있으나 쓰이지
-않고, UDP 코드(포트 48899)는 환기청정 기기 등록 전용이다. 기기는 순수 클라이언트로
-자기 전용 클라우드 엔드포인트로만 연결한다.
+**Local (LAN) control is impossible.** No open port anywhere across the
+mat's full TCP 1-65535 range. The app itself has no direct-connect code
+either — a frame protocol constant (`STX_WIFI`) still exists but is
+unused, and the UDP code (port 48899) is dedicated to
+ventilation-purifier device registration only. The device is a pure
+client that only ever connects out to its own dedicated cloud endpoint.
 
-**계정당 세션이 하나다.** 두 번 로그인해 확인했다 — 나중 토큰이 발급되면 앞 토큰이
-`404` 로 죽는다.
+**There's exactly one session per account.** Confirmed by logging in
+twice — once a later token is issued, the earlier one dies with a `404`.
 
-다만 **해법이 있다.** 나비엔은 가족 공유를 제공한다(`/home/{homeSeq}/invite` 등).
-HA 전용 계정을 따로 만들어 초대하면 폰 앱과 충돌하지 않는다. 초대받은 계정이
-제어까지 되는지는 확인하지 못해 그렇게 적었다.
+There is, however, **a workaround.** Navien offers family sharing
+(`/home/{homeSeq}/invite`, etc.). Creating a separate HA-only account and
+inviting it avoids conflicting with the phone app. Whether an invited
+account can actually control the device wasn't confirmed, and the README
+states that plainly.
 
 ## v0.2.0 — 2026-07-30
 
-**온도로 동작하는 매트에 온도조절기(`climate`)를 추가했다.**
+**Added a thermostat (`climate`) entity for mats that operate on
+temperature.**
 
-v0.1.0 은 문서와 코드가 어긋나 있었다. README 는 온도형 매트가 지원된다고 적었는데
-`climate` 플랫폼이 아예 없어서, 온도형 기기는 전원 스위치와 센서만 생기고 **온도를
-조절할 방법이 없었다.**
+v0.1.0 had a mismatch between documentation and code. The README stated
+temperature-based mats were supported, but the `climate` platform didn't
+exist at all — a temperature-based device only got a power switch and
+sensors, with **no way to actually adjust the temperature.**
 
-### 달라진 것
+### What changed
 
-| 기기가 쓰는 방식 | v0.1.0 | v0.2.0 |
+| control scheme the device uses | v0.1.0 | v0.2.0 |
 | --- | --- | --- |
-| 온도 (0.5도 단위) | 제어 없음 | **`climate` 서모스탯** |
-| 단계 (1~8) | `number` 슬라이더 | 그대로 |
+| temperature (0.5-degree steps) | no control | **`climate` thermostat** |
+| step (1-8) | `number` slider | unchanged |
 
-온도형은 서버가 `temperature.current` 를 함께 주므로 서모스탯 카드의 현재 온도 칸이
-채워진다. 단계형은 현재값이 오지 않아 `number` 를 유지한다.
+For temperature-based devices, the server also sends
+`temperature.current`, so the thermostat card's current-temperature field
+is populated. Step-based devices don't report a current value, so they
+keep the `number` entity.
 
-`climate` 의 켜기/끄기는 구역별 `heater.<zone>.enable` 을 쓴다. 기기 전원은 별도
-스위치가 담당하므로, 더블 매트에서 한쪽만 끌 수 있다.
+`climate`'s on/off uses the per-zone `heater.<zone>.enable`. Device power
+is handled by a separate switch, so only one side of a double mat can be
+turned off.
 
-### 여전히 미검증
+### Still unverified
 
-**온도형 매트가 없어 `climate` 를 실기기로 확인하지 못했다.** 특히 `enable: false`
-전송은 검증하지 않았다 — `enable: true` 는 단계형으로 확인했다.
-온도형을 쓰신다면 제보를 부탁한다.
+**No temperature-based mat was on hand, so `climate` couldn't be confirmed
+on a real device.** In particular, sending `enable: false` wasn't
+verified — only `enable: true` was confirmed, and only on a step-based
+model. If you use a temperature-based mat, a report would help.
 
-### 문서
+### Documentation
 
-- README 의 엔티티 표에 축별 분기를 명시했다. 무조건 단계 슬라이더로 읽히던 문장을 고쳤다
-- 지원 표를 모델 계열(카본/온수)에서 **동작 방식(단계/온도)** 기준으로 바꿨다.
-  카본이 단계, 온수가 온도인 경우가 많지만 모델명으로 단정할 수 없고 서버 값이 정한다
+- The README's entity table now states the branching by control axis
+  explicitly, fixing wording that had read as "always a step slider"
+- Changed the support table from grouping by model line
+  (carbon/hot-water) to **grouping by control scheme (step/temperature)**.
+  Carbon models are usually step-based and hot-water models
+  temperature-based, but this can't be assumed from the model name — the
+  server's value decides it
 
 ## v0.1.0 — 2026-07-30
 
-첫 릴리스. **숙면매트만 지원한다.**
+First release. **Only heated mats are supported.**
 
-### 되는 것
+### What works
 
-- 숙면매트 카본(단계형) — 실기기 EME-500 싱글·더블 2대로 검증
-- 숙면매트 온수(온도형) — 코드 경로는 확정했으나 실기기 미검증
-- 숙면매트 사계절 — **난방만.** 냉방 중에는 제어를 비활성으로 둔다
+- Carbon (step-based) heated mats — confirmed on 2 real devices, EME-500
+  single and double
+- Hot-water (temperature-based) heated mats — the code path is settled,
+  but unconfirmed on a real device
+- Four-season heated mats — **heating only.** Control is left disabled
+  while in cooling mode
 
-엔티티: 전원(`switch`), 난방 단계(`number`), 운전 상태·오류 코드(`sensor`),
-고온경고·오류(`binary_sensor`).
+Entities: power (`switch`), heating step (`number`), running state and
+error code (`sensor`), high-temperature warning and error
+(`binary_sensor`).
 
-### 왜 이렇게 만들었나
+### Why it was built this way
 
-**단계를 `climate` 로 붙이지 않았다.** 카본 매트는 1~8단계로 동작하고 서버가
-현재 온도를 주지 않는다. `climate` 로 만들면 "3단계"가 "3도"로 보이고 현재 온도
-칸이 영구히 빈다. `number` 슬라이더로 노출한다.
+**Step wasn't modeled as `climate`.** Carbon mats operate on steps 1-8,
+and the server doesn't provide a current temperature. Modeling it as
+`climate` would show "step 3" as "3 degrees," and the current-temperature
+field would sit permanently empty. Exposed as a `number` slider instead.
 
-**폴링 주기가 15분이다.** 짧을 필요가 없다. 기기가 상태를 스스로 서버에 올리는
-것을 실측으로 확인했다 — 리모컨 조작 12건이 모두 즉시 도착했다. 주기 조회는
-재접속 후 초기 동기화 용도다.
+**The poll interval is 15 minutes.** No need for it to be shorter. Real
+measurement confirmed the device reports state to the server on its own —
+all 12 remote-control operations tested arrived immediately. Periodic
+polling exists only to sync up after a reconnect.
 
-**서버가 알려주는 기능만 만든다.** `functions` 에 없는 기능은 엔티티를 만들지
-않는다. 실기기 EME-500 은 `lockMode` 가 없어 잠금 엔티티가 생기지 않는다.
-선행 자료는 이 필드를 필수로 다뤄서 해당 모델에서 동작하지 않는다.
+**Only features the server declares are created.** A feature absent from
+`functions` gets no entity. The real EME-500 device has no `lockMode`, so
+no lock entity is created for it. Prior reference material treated this
+field as mandatory, which doesn't work on this model.
 
-**모르는 값에는 명령을 보내지 않는다.** 제어 축은 서버의 `heatControl.unit` 이
-정한다. 확인된 값은 `1.0L`(단계, 1 간격)과 `0.5C`(온도, 0.5도 간격) 둘뿐이다.
-그 외 값이 오면 제어 엔티티를 만들지 않고 로그를 남긴다.
+**No command is sent for a value we don't recognize.** The control axis
+is determined by the server's `heatControl.unit`. Only two values are
+confirmed: `1.0L` (step, increments of 1) and `0.5C` (temperature,
+increments of 0.5 degrees). Any other value skips creating the control
+entity, with the case logged.
 
-**고온경고로 값을 자르지 않는다.** 서버의 `safeValue`(카본 실측 4단계)는 앱에서도
-경고 표시일 뿐 상한이 아니다. 1~8 전부 열고 `binary_sensor` 로만 알린다.
+**Values aren't clamped by the high-temperature warning.** The server's
+`safeValue` (confirmed as step 4 on carbon) is only a warning indicator in
+the app too, not an upper bound. The full 1-8 range stays open, and only a
+`binary_sensor` flags it.
 
-### 안 되는 것
+### What doesn't work
 
-- 환기청정(에어원), 보일러 — **제보를 받는다.** 진단 파일에 원본이 담긴다
-- 월패드·로비폰, 상업용 SCADA — 서버 체계가 달라 범위가 아니다
-- 매트의 수면모드·예약·이온케어·UV살균·빠른난방 — 명령 이름과 값 표는 확보했으나
-  전송을 검증하지 않아 넣지 않았다
+- Ventilation-purifiers (Airone), boilers — **reports are welcome.** The
+  diagnostics file carries the raw data
+- Wall pads/lobby phones, commercial SCADA — out of scope, different
+  server architecture
+- Mat sleep mode, scheduling, ion care, UV sterilization, quick heating —
+  command names and value tables were gathered, but sending them was
+  never verified, so they weren't added
 
-### 알려진 제약
+### Known limitations
 
-**계정당 세션이 하나다.** 나비엔 앱을 열면 HA 세션이 끊긴다. 통합이 자동으로
-다시 로그인하지만, 그 순간 반대로 앱이 밀려난다. 서버 쪽 제약이라 우회할 수 없다.
+**There's exactly one session per account.** Opening the Navien app drops
+the HA session. The integration automatically logs back in, but at that
+moment the app gets pushed out instead. This is a server-side constraint
+with no workaround.
 
-**실시간 상태는 MQTT 로만 온다.** REST 로는 등록 시점 정보만 받을 수 있어,
-MQTT 가 끊기면 상태가 멈춘다. 재접속은 5초부터 최대 5분까지 늘려가며 시도한다.
+**Real-time state only arrives over MQTT.** REST only returns
+registration-time information, so state stops updating if MQTT
+disconnects. Reconnection is retried with a backoff starting at 5 seconds
+and growing to a maximum of 5 minutes.

@@ -1,19 +1,23 @@
-"""필터 센서는 사용률이 아니라 잔량이다 (PR #18).
+"""The filter sensor reports life remaining, not usage (PR #18).
 
-기여자가 실기기에서 앱과 대조했다 — 센서 `87`, 앱 「필터 87% 남음」, 사용량 13%.
+A contributor compared it against the app on a real device — sensor `87`, app "필터 87%
+남음", usage 13%.
 
-**앱 코드로 독립 확인했다.** 필터 관리 화면이 퍼센트를 문구로 바꾸는 규칙이다.
+**Independently confirmed from the app code**, in the rule its filter-management screen uses
+to turn a percentage into text:
 
     v >= 76        「필터가 충분하네요!」
     41 <= v < 76   「아직은 여유있네요!」
     11 <= v < 41   「곧 필터를 교체해야 해요!」
     v < 11         「필터를 교체해 주세요!」
 
-**값이 높을수록 「충분」, 낮을수록 「교체」.** 사용률이라면 정확히 반대여야 한다.
-실기기 대조와 앱 동작이 서로 독립적으로 같은 결론을 낸다.
+**Higher means "plenty left" and lower means "replace it".** For a usage figure it would be
+exactly the other way around. The real-device comparison and the app behaviour reach the
+same conclusion independently.
 
-값을 뒤집지 않은 것도 맞다 — 처음부터 잔량이었으므로 **쌓인 기록이 이미 옳다.**
-`100 - x` 로 바꾸면 이 변경을 경계로 같은 숫자가 정반대 뜻이 된다.
+Leaving the value uninverted is also right: it was the remaining life from the start, so
+**the history already stored is correct.** Switching to `100 - x` would make the same number
+mean the opposite on either side of that change.
 """
 
 from __future__ import annotations
@@ -30,46 +34,46 @@ AIRONE = source("airone.py")
 README = (ROOT / "README.md").read_text("utf-8")
 
 
-r.section("이름이 잔량이다")
+r.section("the name says remaining")
 
-r.ok("필터 잔량" in SENSOR, "필터가 하나면 「필터 잔량」")
-r.ok('f"필터 {index + 1} 잔량"' in SENSOR, "여러 개면 「필터 N 잔량」")
-r.ok("사용률" not in SENSOR, "sensor.py 에 「사용률」이 안 남았다")
-r.ok("사용률" not in AIRONE, "airone.py 에도 안 남았다")
-r.ok("필터 잔량" in README, "README 엔티티 표도 맞다")
+r.ok("필터 잔량" in SENSOR, "one filter is named 필터 잔량")
+r.ok('f"필터 {index + 1} 잔량"' in SENSOR, "several are named 필터 N 잔량")
+r.ok("사용률" not in SENSOR, "no usage-rate wording left in sensor.py")
+r.ok("사용률" not in AIRONE, "none left in airone.py either")
+r.ok("필터 잔량" in README, "the README entity table agrees")
 
 
-r.section("값은 그대로 — 뒤집지 않는다")
+r.section("the value passes through uninverted")
 
 device = make_airone(filters=[87, 42])
-r.ok(device.filters[0]["percent"] == 87, "87 이 87 로 그대로 온다")
-r.ok(device.filters[1]["percent"] == 42, "두 번째도 그대로")
-r.ok("100 -" not in SENSOR and "100-" not in SENSOR, "어디서도 100 에서 빼지 않는다")
-r.ok('"percent"' in AIRONE, "진단 키 이름을 안 바꿨다 — 출력 형식이 유지된다")
+r.ok(device.filters[0]["percent"] == 87, "87 arrives as 87")
+r.ok(device.filters[1]["percent"] == 42, "so does the second one")
+r.ok("100 -" not in SENSOR and "100-" not in SENSOR, "nothing subtracts from 100 anywhere")
+r.ok('"percent"' in AIRONE, "the diagnostics key name is unchanged, so the format holds")
 
 
-r.section("값이 안 오면 비운다 — 0 으로 채우지 않는다")
+r.section("a missing value stays empty rather than becoming 0")
 
-# 실외기가 필터 4개를 선언하고 일부만 값을 보내는 기기가 있다(제보 확인).
-# 없는 값을 0 으로 채우면 「교체하세요」로 읽혀 거짓이 된다.
+# Some devices declare four filters on the outdoor unit and send values for only some of them
+# (confirmed by a report). Filling a missing value with 0 reads as "replace it" and is false.
 partial = make_airone(filters=[87, None, None, None])
-r.ok(len(partial.filters) == 4, "선언된 개수만큼 자리를 만든다")
-r.ok(partial.filters[1]["percent"] is None, "안 온 값은 None 이다")
+r.ok(len(partial.filters) == 4, "as many slots as were declared")
+r.ok(partial.filters[1]["percent"] is None, "a value that did not arrive is None")
 
 
-r.section("엔티티가 안 갈린다 — 기존 기록이 이어진다")
+r.section("the entity is unchanged, so existing history continues")
 
 r.ok(
     'f"{device.device_id}_filter_{index}"' in SENSOR,
-    "unique_id 를 안 건드렸다 — 엔티티가 새로 생기지 않는다",
+    "unique_id is untouched, so no new entity is created",
 )
 r.ok(
     "_attr_has_entity_name" in source("entity.py"),
-    "표시 이름만 바뀌고 entity_id 는 유지된다",
+    "only the display name changes; the entity_id holds",
 )
 
 
-r.section("근거를 코드에 남겼다")
+r.section("the reasoning is recorded in the code")
 
 cls = next(
     node
@@ -77,9 +81,9 @@ cls = next(
     if isinstance(node, ast.ClassDef) and node.name == "AironeFilterSensor"
 )
 doc = ast.get_docstring(cls) or ""
-r.ok("잔량" in doc, "잔량이라고 적었다")
-r.ok("usage.percent" in doc, "필드 이름과 뜻이 반대라는 것을 적었다")
-r.ok("87" in doc, "실기기 대조 값을 적었다")
+r.ok("remaining" in doc, "it says remaining")
+r.ok("usage.percent" in doc, "it records that the field name means the opposite")
+r.ok("87" in doc, "it records the value compared on a real device")
 
 
 sys.exit(r.finish())

@@ -1,15 +1,16 @@
-"""AWS IoT MQTT-over-WebSocket 구독.
+"""AWS IoT MQTT-over-WebSocket subscription.
 
-기기가 상태를 스스로 올린다 — 실측 확인. 그래서 폴링 대신 이 구독이 주 경로다.
+Devices push their own state — confirmed on a real device — so this subscription, not
+polling, is the primary path.
 
-매트·에어원·보일러는 검증된 각자 파서로 상태를 반영한다. 보일러 `smarttok` 은
-확인된 상태만 읽고, 공개 진단에는 식별값을 제거한 패킷 구조만 남긴다. 보일러
-명령은 보내지 않는다.
+Mats, Airone units and boilers each apply state through their own verified parser. The
+boiler `smarttok` path reads only confirmed fields and leaves nothing but a de-identified
+packet shape in public diagnostics. No boiler command is ever sent.
 
-매트는 한 번의 변화에 shadow 이벤트가 최대 세 종류 오는데
-**`/update/accepted` 중 `state.reported` 를 가진 것만** 쓴다. 나머지(`/delta`,
-`/documents`, 그리고 `reported` 없는 `/accepted`)를 반영하면 HA 가 기기보다
-앞서 나간다.
+A single change on a mat produces up to three kinds of shadow event, and **only
+`/update/accepted` messages carrying `state.reported`** are used. Applying the others
+(`/delta`, `/documents`, and `/accepted` without `reported`) would put HA ahead of the
+device.
 """
 
 from __future__ import annotations
@@ -44,38 +45,41 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# **두 가지를 받는다.**
+# **Two things are received.**
 #
-#   /update/accepted  기기가 상태를 올렸을 때
-#   /get/accepted     우리가 섀도우에 저장된 문서를 요청했을 때
+#   /update/accepted  the device pushed its state
+#   /get/accepted     we asked for the document stored in the shadow
 #
-# 후자는 붙인 직후 한 번 쓴다. 기기가 꺼져 있어도 서버가 답하므로,
-# 이게 없으면 기기가 스스로 뭔가 보낼 때까지 상태가 비어 있다.
+# The second is used once, right after connecting. The server answers even when the device
+# is off, and without it the state stays empty until the device sends something by itself.
 _ACCEPTED_SUFFIXES = ("/update/accepted", "/get/accepted")
 _RECONNECT_DELAYS = (5, 15, 30, 60, 120, 300)
-# 이만큼 붙어 있었으면 「제대로 붙었다」로 보고 백오프를 처음으로 되돌린다.
-# CONNACK 만으로 되돌리면 안 된다 — 붙자마자 끊기는 상황에서 영원히 첫 칸(5초)에
-# 머문다. 계정당 세션이 하나뿐이라 사용자가 앱을 열어두면 실제로 그렇게 된다.
+# Staying connected this long counts as a real connection and resets the backoff. CONNACK
+# alone must not reset it: when the link drops immediately after connecting, that would sit
+# on the first delay (5s) forever — which really happens, because the account allows one
+# session and the user may have the app open.
 _STABLE_CONNECTION_SECONDS = 60.0
 
-# 에어원 메시지를 매트 메시지와 가르는 기준. 앱도 구독 토픽 문자열로 판별한다
-# (`HomeViewModel` 의 `/airone/#` / `/mate/#` 분기).
+# How an Airone message is told apart from a mat message. The app decides the same way,
+# from the subscription topic string (the `/airone/#` and `/mate/#` branches in
+# `HomeViewModel`).
 AIRONE_PREFIX = "airone"
 
 
 def _uri_encode(value: str) -> str:
-    """SigV4 정규화 인코딩. unreserved 문자만 남긴다.
+    """SigV4 canonical encoding, keeping only unreserved characters.
 
-    `X-Amz-Credential` 의 '/' 가 `%2F` 로 가야 한다. `urlencode` 기본값은 '/' 를
-    살려두므로 서명이 깨진다.
+    The '/' in `X-Amz-Credential` has to go out as `%2F`; `urlencode` leaves '/' intact by
+    default, which breaks the signature.
     """
     return urllib.parse.quote(value, safe="-_.~")
 
 
 def build_signed_ws_path(creds: AwsCredentials, region: str = IOT_REGION) -> str:
-    """AWS IoT WebSocket 용 SigV4 사전서명 경로를 만든다.
+    """Build the SigV4 pre-signed path for the AWS IoT WebSocket.
 
-    보안 토큰은 **서명 계산 뒤에** 붙인다. AWS IoT 규칙이다.
+    The security token is appended **after** the signature is computed. That is AWS IoT's
+    rule.
     """
     now = datetime.datetime.now(datetime.timezone.utc)
     amzdate = now.strftime("%Y%m%dT%H%M%SZ")
@@ -125,13 +129,13 @@ def build_signed_ws_path(creds: AwsCredentials, region: str = IOT_REGION) -> str
 
 
 def extract_reported(payload: bytes, topic: str) -> tuple[str, dict[str, Any]] | None:
-    """쓸 이벤트만 통과시킨다.
+    """Let through only the events worth using.
 
-    통과 조건이 두 겹이다 — shadow 토픽이 `/update/accepted` 나 `/get/accepted`
-    이고, `state.reported` 가 있어야 한다. 반환값은 `(deviceId, reported)`.
+    Two conditions have to hold: the shadow topic is `/update/accepted` or `/get/accepted`,
+    and `state.reported` is present. Returns `(deviceId, reported)`.
 
-    `/get/accepted` 응답에는 `desired` 와 `metadata` 도 함께 온다. **`reported`
-    만 읽는다** — `desired` 는 「보낸 값」이지 기기가 확인한 값이 아니다.
+    A `/get/accepted` response also carries `desired` and `metadata`. **Only `reported` is
+    read** — `desired` is what was sent, not what the device confirmed.
     """
     try:
         event = json.loads(payload)
@@ -146,12 +150,12 @@ def extract_reported(payload: bytes, topic: str) -> tuple[str, dict[str, Any]] |
     state = ((event.get("payload") or {}).get("state")) or {}
     reported = state.get("reported")
     if not isinstance(reported, dict):
-        # 명령이 shadow 에 막 들어간 시점의 이벤트다. 기기는 아직 모른다.
+        # This event fires when the command lands in the shadow. The device does not know yet.
         return None
 
     device_id = (reported.get("info") or {}).get("deviceId")
     if not device_id:
-        # 토픽 마지막 조각이 deviceId 다 — `{homeSeq}/mate/{deviceId}`.
+        # The last topic segment is the deviceId — `{homeSeq}/mate/{deviceId}`.
         device_id = topic.rsplit("/", 1)[-1]
     if not device_id:
         return None
@@ -161,10 +165,10 @@ def extract_reported(payload: bytes, topic: str) -> tuple[str, dict[str, Any]] |
 def extract_airone_reported(
     payload: bytes, topic: str, stats: dict[str, Any] | None = None
 ) -> tuple[str, dict[str, Any]] | None:
-    """에어원 상태 메시지에서 `reported` 를 꺼낸다.
+    """Pull `reported` out of an Airone state message.
 
-    매트와 봉투가 다르다 — shadow 가 아니므로 `/update/accepted` 도 없고,
-    `state` 한 겹도 없다. `{topic, payload: {reported: {...}}}` 형태다
+    The envelope differs from a mat: this is not a shadow, so there is no `/update/accepted`
+    and no `state` wrapper. The shape is `{topic, payload: {reported: {...}}}`
     (`AironeGetStatus.AironeStatusEachRoom`).
     """
     try:
@@ -180,23 +184,24 @@ def extract_airone_reported(
     inner = event.get("payload")
     reported = inner.get("reported") if isinstance(inner, dict) else None
     if reported is None and isinstance(inner, dict):
-        # 구세대는 `reported` 겹이 없는 평평한 프레임이다.
+        # The older generation sends a flat frame with no `reported` wrapper.
         reported = normalize_legacy_status(inner)
         if reported is not None:
             _bump(stats, "legacy_normalized")
     if not isinstance(reported, dict):
-        # 명령을 접수했다는 응답일 수 있다. 상태가 아니면 쓰지 않는다.
+        # This may be an acknowledgement of a command. If it is not state, it is not used.
         _bump(stats, "dropped_no_reported")
         return None
-    # `idu`(실내기)도 받는다. 올인원 룸콘은 룸콘과 실내기가 한 덩어리라 상태를
-    # 이쪽으로 올릴 가능성이 있다 — `did` 에 이 필드가 실재한다.
-    # 값을 해석하지는 않는다. 받아서 진단에 담아 어떤 모양인지 보고 판단한다.
+    # `idu` (indoor unit) is accepted too. On an all-in-one room controller the controller
+    # and the indoor unit are one assembly, so state may well arrive here — the field really
+    # does exist in `did`. The values are not interpreted: they are captured into diagnostics
+    # so their shape can be judged first.
     if not any(
         key in reported for key in ("roomController", "odu", "airMonitor", "idu")
     ):
-        # **조용히 버리지 않는다.** 이걸 DEBUG 로 두었더니 기본 설치에서 아무 흔적이
-        # 남지 않아, 상태가 안 오는 원인을 제보로도 가릴 수 없었다.
-        # 키 이름만 남긴다 — 값은 남기지 않는다.
+        # **Never discarded silently.** As DEBUG this left no trace on a default install, so
+        # a report could not tell us why state was not arriving. Only key names are logged,
+        # never values.
         _LOGGER.warning(
             "에어원 상태 메시지의 모양을 알지 못해 쓰지 못했습니다 "
             "(topic 끝=%s, 최상위 키=%s). 이 로그를 이슈에 붙여 주시면 "
@@ -209,7 +214,7 @@ def extract_airone_reported(
             stats["last_unknown_shape_keys"] = sorted(reported)
         return None
 
-    # `{homeSeq}/airone/{deviceId}` 의 마지막 조각이 기기목록의 deviceId 다.
+    # The last segment of `{homeSeq}/airone/{deviceId}` is the deviceId from the device list.
     device_id = topic.rsplit("/", 1)[-1]
     if not device_id or device_id == AIRONE_PREFIX:
         controller = reported.get("roomController")
@@ -223,12 +228,13 @@ def extract_airone_reported(
 
 
 def normalize_legacy_status(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """구세대 평평한 상태 프레임을 신형 `reported` 모양으로 옮긴다.
+    """Translate an older flat status frame into the newer `reported` shape.
 
-    **가장자리에서만 바꾼다.** 모델과 엔티티는 신형 어휘 하나만 알면 되도록
-    두는 편이, 세대마다 분기를 심는 것보다 검증된 신형 경로를 덜 흔든다.
+    **Translated only at the edge.** Leaving the models and entities to know a single, newer
+    vocabulary disturbs the verified newer path far less than branching on generation
+    throughout.
 
-    설정값을 읽는다 — 이유는 `LEGACY_STATUS_TO_CONTROLLER` 위의 표 참조.
+    It reads the setpoints — see the table above `LEGACY_STATUS_TO_CONTROLLER` for why.
     """
     if "isRunning" not in payload:
         return None
@@ -245,14 +251,16 @@ def normalize_legacy_status(payload: dict[str, Any]) -> dict[str, Any] | None:
     if error_code is not None:
         controller["error"] = {"code": error_code}
 
-    # 실외기가 실제로 하는 일. 제어 상태로 쓰지 않고 진단에서만 본다 —
-    # 조건에 따라 수시로 바뀌므로 이걸 모드로 읽으면 표시가 요동친다.
+    # What the outdoor unit is actually doing. Kept to diagnostics rather than used as
+    # control state: it changes constantly with conditions, and reading it as the mode would
+    # make the display jitter.
     actual = {key: payload[key] for key in LEGACY_ACTUAL_FIELDS if key in payload}
     reported: dict[str, Any] = {"roomController": controller}
     if actual:
         reported["legacyActual"] = actual
 
-    # 신형에 없는 값들. 해석해서 제어에 쓰지 않고 진단으로만 내보낸다.
+    # Values with no counterpart in the newer protocol. Exported to diagnostics only, never
+    # interpreted for control.
     extras = {
         key: payload[field]
         for field, (key, _label, _table) in LEGACY_EXTRA_FIELDS.items()
@@ -264,10 +272,11 @@ def normalize_legacy_status(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _bump(stats: dict[str, Any] | None, key: str) -> None:
-    """집계만 올린다. 값은 담지 않는다.
+    """Counters only; no values.
 
-    「안 온다」와 「와서 버린다」를 **로그 없이 통계정보만으로** 가리기 위한 것이다.
-    로그를 켜서 붙여 달라고 하면 회신율이 크게 떨어진다.
+    This exists so "nothing arrives" can be told from "it arrives and is discarded"
+    **from the diagnostics download alone, with no logging**. Asking a user to turn logging
+    on and attach it cuts the response rate sharply.
     """
     if stats is None:
         return
@@ -275,7 +284,7 @@ def _bump(stats: dict[str, Any] | None, key: str) -> None:
 
 
 class NavienSmartMqtt:
-    """구독 전용 MQTT 클라이언트. 발행하지 않는다 (제어는 REST 로 간다)."""
+    """Subscribe-only MQTT client. It never publishes — control goes over REST."""
 
     def __init__(
         self,
@@ -291,7 +300,7 @@ class NavienSmartMqtt:
         on_boiler_observation: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._hass = hass
-        # 수신·폐기 집계. 개인정보는 없다 — 개수와 키 이름뿐이다.
+        # Received and discarded counters. Nothing personal — counts and key names only.
         self.stats: dict[str, Any] = {}
         self._home_seq = home_seq
         self._user_seq = user_seq
@@ -301,7 +310,8 @@ class NavienSmartMqtt:
         self._on_airone_reported = on_airone_reported
         self._on_boiler_reported = on_boiler_reported
         self._on_boiler_observation = on_boiler_observation
-        # 구독이 붙은 뒤에 초기 상태를 요청해야 한다. 순서가 뒤바뀌면 응답을 놓친다.
+        # The initial state must be requested after the subscription is in place; reversed,
+        # the response is missed.
         self._on_subscribed = on_subscribed
         self._client_id = ""
         self._client: Any = None
@@ -312,13 +322,13 @@ class NavienSmartMqtt:
 
     @property
     def topics(self) -> list[str]:
-        # 앱과 같은 `#` 를 쓴다 (`HomeViewModel` 이 `/{prefix}/#` 로 구독한다).
-        # 에어원 응답이 한 단계 더 깊게 올 수 있어 `+` 로는 놓친다.
+        # The same `#` the app uses (`HomeViewModel` subscribes to `/{prefix}/#`). An Airone
+        # response can arrive one level deeper, which `+` would miss.
         return [f"{self._home_seq}/{prefix}/#" for prefix in sorted(self._prefixes)]
 
     @property
     def client_id(self) -> str:
-        """접속 중인 MQTT clientId. 에어원 제어 봉투에 넣어야 한다."""
+        """The MQTT clientId currently in use. It has to go into the Airone control envelope."""
         return self._client_id
 
     async def async_start(self) -> None:
@@ -352,31 +362,32 @@ class NavienSmartMqtt:
             client.loop_stop()
 
     async def _async_run(self) -> None:
-        """접속을 유지한다. 끊기면 자격증명을 새로 받아 다시 붙는다."""
+        """Keep the connection up, fetching fresh credentials and reconnecting after a drop."""
         while not self._stopping:
             try:
                 await self._async_connect_once()
-                # `connect()` 는 CONNACK 전에 반환한다. 여기서 기다리지 않으면
-                # 아래 감시 루프가 `connected=False` 를 보고 즉시 빠져나가
-                # 방금 만든 연결을 스스로 끊고 재접속을 반복한다.
+                # `connect()` returns before CONNACK. Without waiting here, the watch loop
+                # below sees `connected=False`, leaves at once, and tears down the connection
+                # it just made — reconnecting forever.
                 await self._async_wait_connected()
                 connected_at = time.monotonic()
 
-                # 구독이 붙은 뒤 초기 상태를 요청한다. shadow 이벤트는 변화가
-                # 있을 때만 오므로, 이걸 안 하면 아무 조작이 없는 동안 상태가
-                # 영원히 비어 있다.
+                # Request the initial state once subscribed. Shadow events only fire on a
+                # change, so without this the state stays empty for as long as nobody touches
+                # the device.
                 if self._on_subscribed is not None:
                     await self._on_subscribed()
 
-                # 접속이 살아 있는 동안은 paho 스레드가 일한다. 끊김만 감시한다.
+                # While the connection holds, the paho thread does the work; only the drop
+                # is watched for here.
                 while not self._stopping and self.connected:
                     await asyncio.sleep(5)
                     if time.monotonic() - connected_at >= _STABLE_CONNECTION_SECONDS:
-                        # 여기까지 버텼으면 다음 끊김은 새 사건으로 센다.
+                        # Having lasted this long, the next drop counts as a new incident.
                         self._attempt = 0
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # noqa: BLE001 - 어떤 실패든 재시도로 흡수한다
+            except Exception as err:  # noqa: BLE001 - any failure is absorbed into a retry
                 _LOGGER.warning("MQTT 접속 실패: %s", err)
 
             if self._stopping:
@@ -388,7 +399,7 @@ class NavienSmartMqtt:
             await asyncio.sleep(delay)
 
     async def _async_wait_connected(self, timeout: float = 15.0) -> None:
-        """CONNACK 을 기다린다. `_on_connect` 콜백이 `connected` 를 세운다."""
+        """Wait for CONNACK. The `_on_connect` callback is what sets `connected`."""
         deadline = timeout
         while deadline > 0:
             if self._stopping or self.connected:
@@ -402,13 +413,13 @@ class NavienSmartMqtt:
         if creds is None:
             raise RuntimeError("AWS 자격증명을 받지 못했습니다.")
 
-        import paho.mqtt.client as mqtt  # 지연 임포트 — HA 부팅을 막지 않는다
+        import paho.mqtt.client as mqtt  # deferred import so HA startup is not blocked
 
-        # 앱이 쓰는 형식과 맞춘다 — `{uuid}-U{userSeq}`.
-        # `homeSeq` 를 쓰던 것을 고쳤다. A/B 로 확인했을 때 둘 다 구독은 됐지만,
-        # 서버 정책이 나중에 clientId 를 보게 되면 앱과 다른 쪽이 먼저 막힌다.
+        # Matches the format the app uses — `{uuid}-U{userSeq}`. This was corrected from
+        # `homeSeq`. An A/B check showed both subscribe fine, but if server policy ever starts
+        # inspecting the clientId, whichever differs from the app gets blocked first.
         client_id = f"{uuid.uuid4()}-U{self._user_seq}"
-        # 에어원 제어 봉투에 이 값을 넣어야 서버가 응답을 되돌린다.
+        # This value has to go into the Airone control envelope for the server to answer.
         self._client_id = client_id
         try:
             client = mqtt.Client(
@@ -422,8 +433,8 @@ class NavienSmartMqtt:
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
         client.on_message = self._on_message
-        # `ssl.create_default_context()` 는 인증서를 디스크에서 읽어 이벤트 루프를
-        # 막는다. HA 가 부팅 때 만들어 캐시해 둔 컨텍스트를 쓴다.
+        # `ssl.create_default_context()` reads certificates from disk and blocks the event
+        # loop. Use the context HA builds and caches at startup instead.
         client.tls_set_context(get_default_context())
         client.ws_set_options(path=build_signed_ws_path(creds))
 
@@ -435,7 +446,7 @@ class NavienSmartMqtt:
         client.connect(IOT_ENDPOINT, 443, keepalive=60)
         client.loop_start()
 
-    # -- paho 콜백. 별도 스레드에서 불린다 --------------------------------
+    # -- paho callbacks, invoked on a separate thread ----------------------
 
     def _on_connect(self, client: Any, _userdata: Any, _flags: Any, reason: Any, *_: Any) -> None:
         code = getattr(reason, "value", reason)
@@ -452,8 +463,8 @@ class NavienSmartMqtt:
         _LOGGER.debug("MQTT 연결이 끊겼습니다 %s", args[:1])
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
-        # 구독 토픽으로 갈린다 — 앱도 같은 방식이다. 봉투가 완전히 달라서
-        # 한 파서로 둘 다 다루면 한쪽이 조용히 버려진다.
+        # Split by subscription topic, the way the app does it. The envelopes differ
+        # completely, and one parser for both would silently drop one of them.
         if f"/{BOILER_TOPIC_PREFIX}/" in message.topic:
             _bump(self.stats, "boiler_received")
             self._handle_boiler_message(message)
@@ -466,8 +477,8 @@ class NavienSmartMqtt:
         _bump(self.stats, "mate_received")
         result = extract_reported(message.payload, message.topic)
         if result is None:
-            # 버린 이벤트도 남긴다. 이게 없어서 "상태가 안 온다" 와 "와도 버린다" 를
-            # 구별하지 못해 디버깅이 길어졌다.
+            # Discarded events are logged too. Without this, "no state arrives" could not be
+            # told from "it arrives and is dropped", which dragged out debugging.
             _LOGGER.debug("MQTT 이벤트 무시 (reported 없음): %s", message.topic)
             _bump(self.stats, "mate_dropped_no_reported")
             return
@@ -477,11 +488,11 @@ class NavienSmartMqtt:
             device_id,
             reported.get("heater"),
         )
-        # paho 스레드에서 HA 상태를 직접 건드리면 안 된다.
+        # HA state must never be touched directly from the paho thread.
         self._hass.loop.call_soon_threadsafe(self._on_reported, device_id, reported)
 
     def _handle_boiler_message(self, message: Any) -> None:
-        """상태는 기기에 반영하고, 공개 진단에는 안전한 구조만 넘긴다."""
+        """Apply the state to the device and hand public diagnostics only a safe structure."""
         observation = observe_boiler_message(message.payload, message.topic)
         _bump(self.stats, f"boiler_{observation['encoding']}")
         if self._on_boiler_observation is not None:

@@ -1,18 +1,19 @@
-"""보일러 가스 사용량을 Home Assistant 장기 통계로 옮긴다.
+"""Move the boiler's gas usage into Home Assistant long-term statistics.
 
-센서 하나만 두면 **HA 가 켜져 있던 시간만** 기록된다. 재시작·정전·통합 오류로
-비는 구간은 영영 채워지지 않고, 달이 바뀌는 순간을 놓치면 그 달치가 통째로
-사라진다.
+A plain sensor would record **only the time HA was running**. Gaps from restarts, power
+cuts, or integration errors would never fill in, and missing the moment a month rolls over
+would lose that whole month.
 
-그럴 필요가 없다. 가스 조회 응답 한 번에 앱의 가스 사용량 화면이 그리는 자료가
-**전부** 들어 있다 — 일별 두 달치와 월별 두 해치다. 그래서 조회할 때마다 그
-기간의 통계를 통째로 다시 써넣는다. 같은 시각의 행은 덮어써지므로 HA 가 며칠
-꺼져 있었어도 다음 조회 한 번에 스스로 메워지고, 나비엔이 값을 나중에 고쳐도
-따라간다. 우리가 보관한 값이 아니라 **서버가 지금 말하는 값**이 언제나 정답이다.
+None of that is necessary. One gas query returns **everything** the app's gas-usage screen
+draws: two months of daily figures and two years of monthly ones. So every query rewrites
+the statistics for that whole span. Rows at the same timestamp are overwritten, so HA can
+be off for days and still repair itself on the next query, and it follows along when Navien
+corrects a figure after the fact. **What the server says now** is always the truth, not what
+we stored.
 
-`sensor` 엔티티가 아니라 외부 통계로 넣는 이유는 두 가지다. 첫째, 엔티티에는
-과거 시각의 값을 넣을 수 없다. 둘째, 상태 이력(states)은 `purge_keep_days` 가
-지나면 지워지지만 통계는 지워지지 않는다.
+These go in as external statistics rather than a `sensor` entity for two reasons. An entity
+cannot take a value at a past timestamp; and state history is purged once `purge_keep_days`
+passes, while statistics are not.
 """
 
 from __future__ import annotations
@@ -36,11 +37,12 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# 앞 누적을 찾을 때 되짚어 볼 구간. 가까운 곳부터 본다 — 대개 바로 앞 달에
-# 있으므로 첫 번째에서 끝난다. 마지막 칸은 「그보다 앞은 없다」로 본다.
+# Look-back windows used to find the preceding cumulative sum, nearest first — it is usually
+# in the month just before, so the search normally ends on the first one. The last window
+# means "there is nothing earlier than this".
 _BASELINE_LOOKBACK_DAYS: tuple[int, ...] = (40, 400, 1200)
 
-# 앱의 가스 사용량 화면이 나누는 것과 같은 세 갈래다.
+# The same three splits the app's gas-usage screen shows.
 GAS_STATISTIC_KINDS: dict[str, str] = {
     "total": "가스 사용량",
     "heating": "난방 가스 사용량",
@@ -49,9 +51,10 @@ GAS_STATISTIC_KINDS: dict[str, str] = {
 
 
 def statistic_id(device: BoilerDevice, kind: str) -> str:
-    """``navien_smarthome:boiler_<기기>_gas_total`` 형태의 통계 ID.
+    """A statistic id of the form ``navien_smarthome:boiler_<device>_gas_total``.
 
-    통계 ID 는 entity_id 와 같은 문자만 쓸 수 있어서 소문자와 밑줄만 남긴다.
+    Statistic ids accept the same characters as an entity_id, so only lower case and
+    underscores survive.
     """
     safe = "".join(ch if ch.isalnum() else "_" for ch in device.device_id.lower())
     return f"{DOMAIN}:boiler_{safe}_gas_{kind}"
@@ -78,30 +81,31 @@ def _value(bucket: GasUsageBucket, kind: str) -> float:
 
 
 def _start(bucket: GasUsageBucket) -> datetime:
-    """그 칸이 시작하는 현지 자정. 통계 행은 정시에만 놓을 수 있다."""
+    """Local midnight at which the bucket starts. A statistics row can only sit on the hour."""
     return dt_util.start_of_local_day(bucket.start)
 
 
 async def _async_baseline(
     hass: HomeAssistant, stat_id: str, first_start: datetime
 ) -> float:
-    """이번에 다시 쓸 구간 **직전까지의 누적값**.
+    """The cumulative total **up to just before** the span being rewritten.
 
-    통계의 ``sum`` 은 시리즈 전체에 걸친 누적이라 앞을 잘라내면 뒤가 전부
-    어긋난다. 서버가 주는 범위는 해가 바뀌면 앞쪽이 빠지므로, 이미 저장된
-    값에서 그때까지의 누적을 되찾아 이어 붙인다.
+    A statistics ``sum`` accumulates across the whole series, so cutting the front off throws
+    everything after it out of line. The range the server returns loses its front as the year
+    turns, so the running total up to that point is recovered from what is already stored and
+    spliced back on.
 
-    **두 가지를 순서대로 본다.**
+    **Two things are checked, in order.**
 
-    1. `first_start` 자리에 이미 행이 있으면 그것을 쓴다. ``sum`` 은 그 칸까지
-       **포함한** 누적이므로 그 칸의 사용량을 빼야 직전까지의 누적이 된다.
-    2. 없으면 **그보다 앞의 마지막 행**의 ``sum`` 을 쓴다. 그 자리에 행이
-       없는 경우가 실제로 있다 — 그 달에 사용량이 아예 없었으면 서버가 행을
-       주지 않는다. 예전에는 이때 0 을 돌려줬는데, 그러면 2년치 시리즈가
-       통째로 0 부터 다시 쌓여 **경계에 거대한 음수 사용량**이 그려진다.
-       HA 는 ``sum`` 의 차분으로 사용량을 계산하기 때문이다.
+    1. If a row already sits at `first_start`, use it. Its ``sum`` **includes** that bucket,
+       so that bucket's usage has to be subtracted to get the total up to just before it.
+    2. Otherwise use the ``sum`` of **the last row before that point**. There really are
+       cases with no row there: if a month had no usage at all, the server sends no row for
+       it. This used to return 0, which restarted a two-year series from zero and drew a
+       **huge negative usage at the boundary**, because HA derives usage from differences in
+       ``sum``.
 
-    둘 다 없으면 처음 넣는 것이므로 0 이 맞다.
+    With neither available this is the first write, so 0 is correct.
     """
     rows = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
@@ -120,18 +124,18 @@ async def _async_baseline(
             continue
         return float(total) - float(state)
 
-    # 그 자리에 행이 없다. 앞쪽에서 마지막으로 저장된 누적을 이어받는다.
+    # No row there. Carry on from the last cumulative total stored before it.
     return await _async_last_sum_before(hass, stat_id, first_start)
 
 
 async def _async_last_sum_before(
     hass: HomeAssistant, stat_id: str, start: datetime
 ) -> float:
-    """``start`` **직전까지** 저장된 마지막 누적값. 없으면 0.
+    """The last cumulative total stored **before** ``start``, or 0 if there is none.
 
-    범위 전체를 훑지 않는다 — `statistics_during_period` 에 시작을 주지 않으면
-    저장된 처음부터 읽는데, 우리는 마지막 한 줄만 필요하다. 그래서 뒤에서부터
-    구간을 넓혀 가며 찾고, 못 찾으면 처음 넣는 것으로 본다.
+    This does not scan the whole range: given no start, `statistics_during_period` reads from
+    the very beginning of what is stored, while only the last row is needed. So the search
+    widens backwards window by window, and finding nothing means this is the first write.
     """
     for days in _BASELINE_LOOKBACK_DAYS:
         rows = await get_instance(hass).async_add_executor_job(
@@ -153,7 +157,7 @@ async def _async_last_sum_before(
 async def async_import_gas_statistics(
     hass: HomeAssistant, device: BoilerDevice
 ) -> int:
-    """서버가 준 가스 이력을 장기 통계에 반영하고 넣은 칸 수를 돌려준다."""
+    """Apply the gas history the server returned to long-term statistics; return the bucket count."""
     buckets = device.gas_history()
     if not buckets:
         return 0

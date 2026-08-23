@@ -1,10 +1,11 @@
-"""에어원 목표 습도와 NR-67D 보일러 설정온도.
+"""Airone target humidity and NR-67D boiler setpoints.
 
-제습·환기제습에서만 쓴다. **범위를 코드에 적지 않는다** — 서버가 운전 조합마다
-`additionalData` 의 `min`/`max` 를 알려주므로 그것만 쓴다. 안 알려주면 만들지 않는다.
+Humidity is used only in dehumidify and ventilating-dehumidify. **The range is never
+hard-coded** — the server reports `min`/`max` in `additionalData` for each operating
+combination, and that is the only source. If it reports none, no entity is created.
 
-습도는 단계와 달리 진짜 연속량이라 슬라이더가 맞다 (매트 단계를 `select` 로 바꾼
-이유와 반대 방향이다).
+Unlike a step, humidity is a genuinely continuous quantity, so a slider fits — the
+opposite of the reasoning that turned mat steps into `select`.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ async def async_setup_entry(
     entities: list[NumberEntity] = [
         AironeHumidityNumber(coordinator, device)
         for device in coordinator.airone.values()
-        # 어떤 조합에서든 서버가 습도 범위를 알려줄 때만 만든다.
+        # Created only when the server reports a humidity range for some combination.
         if any(mode.wants_humidity for mode in device.modes)
     ]
     for device in coordinator.boilers.values():
@@ -53,7 +54,8 @@ _BOILER_NUMBER_NAMES = {
 
 
 class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
-    """NR-67D 설정온도. 히팅 여부와 관계없이 서버 허용 범위 안에서 제어한다."""
+    """An NR-67D setpoint, controlled inside the server's allowed range whether or not
+    the boiler is currently heating."""
 
     _attr_device_class = NumberDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -73,16 +75,16 @@ class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
         bounds = device.temperature_bounds(kind)
         if bounds is None:
             raise ValueError(f"{kind} 설정온도 범위가 없습니다")
-        # 시작할 때 본 범위. 기기가 사라진 순간에도 슬라이더가 모양을 잃지
-        # 않도록 남겨 두고, 평소에는 아래 속성이 지금 값을 쓴다.
+        # The range seen at startup. Kept so the slider does not lose its shape the moment
+        # the device disappears; normally the property below uses the current range.
         self._fallback_bounds = bounds
 
     def _bounds(self) -> tuple[float, float]:
-        """**지금** 서버가 말하는 범위.
+        """The range the server reports **now**.
 
-        시작할 때 한 번 읽어 고정하면, 서버가 범위를 바꿨을 때 슬라이더는
-        옛 범위를 그대로 보여준다. 사용자는 움직이는데 명령은 거부되는
-        상태가 된다 — `build_temperature_payload` 가 다시 검증하기 때문이다.
+        Reading it once at startup and freezing it would leave the slider showing the old
+        range after the server changes it: the user moves the slider and the command is
+        rejected, because `build_temperature_payload` validates it again.
         """
         device = self.device
         if device is None:
@@ -136,20 +138,22 @@ class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
 
 
 class AironeHumidityNumber(AironeEntity, NumberEntity):
-    """제습 목표 습도(%)."""
+    """Dehumidify target humidity, in percent."""
 
     _attr_name = "희망습도"
     _attr_icon = "mdi:water-percent"
     _attr_native_unit_of_measurement = "%"
-    # 앱의 −/+ 버튼이 5씩 움직인다. 서버는 간격을 주지 않으므로 앱을 따른다.
+    # The app's −/+ buttons move in steps of 5. The server never reports a step, so follow
+    # the app.
     _attr_native_step = AIRONE_HUMIDITY_STEP
     _attr_mode = NumberMode.SLIDER
 
     def __init__(self, coordinator: NavienSmartCoordinator, device: AironeDevice) -> None:
         super().__init__(coordinator, device)
         self._attr_unique_id = f"{device.device_id}_humidity"
-        # 슬라이더 눈금은 만들어질 때 한 번 정해진다. 서버가 알려준 범위를 모두
-        # 감싸는 폭으로 잡고, 지금 조합에서 벗어난 값은 전송 단계에서 막는다.
+        # The slider bounds are fixed once, at creation. Take a span wide enough to cover
+        # every range the server reported, and reject values outside the current
+        # combination when the command is built.
         bounds = [
             (mode.humidity_min, mode.humidity_max)
             for mode in device.modes
@@ -167,7 +171,7 @@ class AironeHumidityNumber(AironeEntity, NumberEntity):
 
     @property
     def available(self) -> bool:
-        """제습 계열이 아니면 손을 뗀다. 앱도 그때만 습도를 보여준다."""
+        """Stay out of the way outside the dehumidify family — the app shows humidity only there."""
         return super().available and self._bounds is not None
 
     @property
@@ -192,8 +196,8 @@ class AironeHumidityNumber(AironeEntity, NumberEntity):
         bounds = self._bounds
         if bounds is None:
             return
-        # 슬라이더가 5단위여도 자동화는 임의 값을 넣을 수 있다. 5의 배수로 맞춘 뒤
-        # 서버가 알려준 범위로 자른다.
+        # The slider steps by 5, but an automation can send any value. Snap to a multiple
+        # of 5, then clamp to the range the server reported.
         stepped = int(round(value / AIRONE_HUMIDITY_STEP) * AIRONE_HUMIDITY_STEP)
         target = max(bounds[0], min(bounds[1], stepped))
         option = AIRONE_OPTION_NONE if device.option is None else device.option

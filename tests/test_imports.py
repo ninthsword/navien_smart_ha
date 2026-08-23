@@ -1,10 +1,10 @@
-"""모든 모듈이 실제로 import 되는가.
+"""Does every module actually import?
 
-**문법 검사로는 안 잡히는 것이 있다.** 지운 import 를 클래스 본문에서 계속
-참조한다든지, 상수 이름을 바꾸고 한 군데를 빠뜨린다든지 하는 것은 파일을
-실제로 불러봐야 나온다. 통합 전체가 설치 단계에서 죽는 종류의 실수다.
+**Some things a syntax check never catches.** Still referencing a deleted import from a
+class body, or renaming a constant and missing one use of it, only surface when the file is
+really loaded. Those are the mistakes that kill the whole integration during setup.
 
-가장 값싼 시험이면서 가장 자주 무언가를 잡는다.
+The cheapest test here, and the one that catches something most often.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from harness import SRC, Report
 
 r = Report()
 
-r.section("통합 모듈")
+r.section("integration modules")
 
 modules = sorted(path.stem for path in SRC.glob("*.py"))
 for name in modules:
@@ -24,20 +24,20 @@ for name in modules:
     try:
         importlib.import_module(target)
         r.ok(True, name)
-    except Exception as err:  # noqa: BLE001 — 무엇이 터지든 보고한다
+    except Exception as err:  # noqa: BLE001 — report whatever blows up
         r.ok(False, f"{name} — {type(err).__name__}: {err}")
 
 
-r.section("공개 도구")
+r.section("public tools")
 
-# 이슈 템플릿이 사용자에게 돌려보라고 안내하는 파일이라 항상 살아 있어야 한다.
+# The issue template tells users to run this file, so it always has to work.
 cli = SRC.parent.parent / "tools" / "navien_cli.py"
-r.ok(cli.exists(), "tools/navien_cli.py 가 있다")
+r.ok(cli.exists(), "tools/navien_cli.py exists")
 try:
     compile(cli.read_text("utf-8"), str(cli), "exec")
-    r.ok(True, "문법이 맞다")
+    r.ok(True, "syntax is valid")
 except SyntaxError as err:
-    r.ok(False, f"문법 오류 — {err}")
+    r.ok(False, f"syntax error — {err}")
 
 
 sys.exit(r.finish())

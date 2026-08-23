@@ -1,14 +1,16 @@
-"""에어원(환기청정) 기기 모델.
+"""Airone (ventilation and air purification) device model.
 
-매트와 **체계가 다르다.** 매트는 AWS shadow(`state.desired` / `state.reported`)를
-쓰지만 에어원은 `cmd/rc/v2/...` 토픽에 직접 주고받는다. 그래서 같은 클래스로
-묶지 않고 따로 둔다 — 검증이 끝난 매트 경로를 건드리지 않는 것이 우선이다.
+**The scheme differs from a mat.** A mat uses an AWS shadow (`state.desired` /
+`state.reported`), while Airone exchanges messages directly on `cmd/rc/v2/...` topics. So
+the two are kept in separate classes rather than merged — leaving the verified mat path
+undisturbed comes first.
 
-여기 있는 필드명과 값은 전부 앱에서 확인했다(`AironeConstants`, `PubSubData`,
-`ModeDid`, `RoomControllerStatus`). **상태·제어·목표 습도는 실기기 제보로
-확인됐다**(룸콘 분리형 1901, 올인원 룸콘 1900). 그 밖의 모델은 확인된 것이 없다.
+Every field name and value here was confirmed in the app (`AironeConstants`, `PubSubData`,
+`ModeDid`, `RoomControllerStatus`). **State, control and target humidity were confirmed by
+real-device reports** (split room controller 1901, all-in-one room controller 1900). Nothing
+is confirmed for any other model.
 
-값 체계를 모르는 항목은 채우지 않고 비워 둔다.
+Anything whose value scheme is unknown is left empty rather than filled in.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# 진단에 남길 기록 개수. 순서를 보는 것이 목적이라 길 필요가 없다.
+# How many records diagnostics keeps. The point is to see the ordering, so it need not be long.
 _LOG_KEEP = 8
 
 
@@ -64,27 +66,29 @@ def _dig(source: Any, *keys: str) -> Any:
 
 
 def _strip_capability_fields(incoming: dict[str, Any]) -> dict[str, Any]:
-    """상태 응답에 섞여 오는 **능력 서술자**를 걷어낸다.
+    """Strip the **capability descriptors** that arrive mixed into a status response.
 
-    `status` 요청에 기기가 **DID 문서 전체**로 답하는 경우가 있다. 그 안의
-    `roomController.mode` 는 지금 운전 모드(정수)가 아니라 **지원 조합 배열**이다.
-    그대로 겹쳐 쓰면 방금 받은 모드 번호를 배열이 덮어써서 모드가 사라진다.
+    A device sometimes answers a `status` request with **the whole DID document**. Inside it,
+    `roomController.mode` is not the current operating mode (an integer) but **an array of
+    supported combinations**. Merging that as-is lets the array overwrite the mode number
+    that just arrived, and the mode disappears.
 
-    제보(#12, `NRT-530Z3`)에서 그대로 보였다.
+    Report #12 (`NRT-530Z3`) shows exactly that:
 
-        mode: 4     ← change-mode 응답
-        mode: null  ← 9초 뒤 status 응답이 배열로 덮었다
+        mode: 4     <- change-mode response
+        mode: null  <- nine seconds later a status response overwrote it with an array
 
-    그 뒤로는 모드가 계속 비었고, 풍량 select 는 「고를 것이 없다」로 판단해
-    **`unavailable`** 이 됐다. 「기기가 죽은 것처럼 보인다」의 정체다.
+    From then on the mode stayed empty, and the fan-speed select concluded there was nothing
+    to choose and went **`unavailable`**. That is what "the device looks dead" really was.
 
-    능력 목록은 기기목록(REST)에서 이미 읽어 `modes` 로 들고 있다. 여기서는
-    버린다 — 상태만 남긴다.
+    The capability list has already been read from the REST device list and is held in
+    `modes`, so it is discarded here — only state survives.
 
-    **`additionalData` 도 같은 함정이다.** 상태로 올 때는 `value` 가 실린 목록인데
-    (`{"type": 3, "value": 40}`), DID 로 올 때는 범위표다
-    (`{"type": 1, "min": 0, "max": 4}`). 범위표가 덮으면 읽어둔 목표 습도가
-    사라진다. **값이 하나도 없는 목록이면 상태가 아니므로 버린다.**
+    **`additionalData` is the same trap.** As state it is a list carrying values
+    (`{"type": 3, "value": 40}`); in a DID document it is a table of ranges
+    (`{"type": 1, "min": 0, "max": 4}`). Letting the range table overwrite it loses the
+    target humidity already read. **A list with no values at all is not state and is
+    discarded.**
     """
     controller = incoming.get("roomController")
     if not isinstance(controller, dict):
@@ -120,8 +124,9 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-# `running` 이 정수로 오는 것은 확인했다. 다만 서버가 기기·펌웨어에 따라 참/거짓이나
-# 문자열로 줄 수도 있어 그때도 읽는다 — **읽기 쪽만 넓힌다.** 보낼 때는 정수만 쓴다.
+# `running` was confirmed to arrive as an integer. The server may still send a boolean or a
+# string depending on device and firmware, so those are read too — **only the reading side is
+# widened.** What goes out is always an integer.
 _RUNNING_TEXT: Final = {
     "on": AIRONE_RUN_ON, "run": AIRONE_RUN_ON, "running": AIRONE_RUN_ON,
     "true": AIRONE_RUN_ON, "y": AIRONE_RUN_ON, "yes": AIRONE_RUN_ON,
@@ -132,14 +137,14 @@ _RUNNING_TEXT: Final = {
 
 
 def _as_running(value: Any) -> int | None:
-    """운전 상태 값을 정수로. 참/거짓과 문자열도 받는다."""
+    """Coerce a running-state value to an integer, accepting booleans and strings too."""
     if value is None:
         return None
     if isinstance(value, bool):
         return AIRONE_RUN_ON if value else AIRONE_RUN_OFF
     if (number := _as_int(value)) is not None:
-        # 0 을 「정지」로 본다. 서버가 쓰는 것은 1/2/3 이지만 0 을 주는 기기가 있어도
-        # 「알 수 없음」보다 「정지」가 맞다 — 운전 중이면 1 이 온다.
+        # 0 is read as stopped. The server uses 1/2/3, but if some device sends 0, stopped is
+        # a better reading than unknown — a running device sends 1.
         return AIRONE_RUN_OFF if number == 0 else number
     if isinstance(value, str):
         return _RUNNING_TEXT.get(value.strip().lower())
@@ -147,10 +152,10 @@ def _as_running(value: Any) -> int | None:
 
 
 def as_number(value: Any) -> float | None:
-    """숫자로 읽히면 숫자, 아니면 None. 빈 문자열은 값이 없는 것으로 본다.
+    """A number if it reads as one, otherwise None. An empty string counts as no value.
 
-    공기질 값이 종류마다 숫자거나 문자열이라 판정이 필요하다 —
-    `tvoc`·`radon`·`total` 은 앱이 등급으로 **표시**하지만 숫자가 온다.
+    Air-quality values are numbers for some kinds and strings for others, so this decision is
+    needed — the app **displays** `tvoc`, `radon` and `total` as grades, but numbers arrive.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -170,7 +175,7 @@ def text_or_none(value: Any) -> str | None:
 
 
 def level_text(raw: dict[str, Any]) -> str | None:
-    """공기질 등급을 한국어로. 서버가 이미 한국어로 주면 그대로 쓴다."""
+    """Render an air-quality grade in Korean, passing through what the server already sends in Korean."""
     level = raw.get("level")
     if level is None or level == "":
         return None
@@ -191,26 +196,26 @@ def _version_text(current: Any) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class AironeMode:
-    """서버가 알려준 운전 조합 하나 (`ModeDid`).
+    """One operating combination the server declared (`ModeDid`).
 
-    `mode` 와 `option` 의 짝이 앱 화면의 버튼 하나에 대응한다. `air_volume` 은
-    **단일값인지 비트마스크인지 확인되지 않았다** — 그래서 알려진 표에 없는 값은
-    버린다 (명세 6-5).
+    A `mode` and `option` pair corresponds to one button on the app's screen. Whether
+    `air_volume` is **a single value or a bitmask was never confirmed**, so any value absent
+    from the known table is discarded (spec 6-5).
     """
 
     mode: int
     option: int
-    # 지금 값(또는 기본값)이다. **고를 수 있는 목록이 아니다** — 실기기 제보로
-    # 확인했다. 목록은 `supported_air_volumes` 다.
+    # The current value (or a default). **Not the list of choices** — confirmed by a
+    # real-device report. The list is `supported_air_volumes`.
     air_volume: int | None
-    # 서버가 이 조합에서 고를 수 있는 풍량을 알려준다 (`supportedAirVolumes`).
-    # APK 클래스에는 없던 필드다. 없으면 빈 tuple.
+    # The server declares which fan speeds this combination allows (`supportedAirVolumes`).
+    # The field does not exist in the APK classes. Absent, it is an empty tuple.
     supported_air_volumes: tuple[int, ...]
-    # **「이 모드를 고를 수 있는가」가 아니다.** 실기기 응답에서 `configurable: true`
-    # 인 항목은 정확히 `supportedAirVolumes` 나 `additionalData` 를 가진 것들이었다 —
-    # 즉 「이 모드 안에서 풍량·습도를 조절할 수 있는가」다.
-    # 자동운전·요리·숙면·터보·절전이 모두 false 로 오는데, 앱에서는 다 고를 수 있다.
-    # 그래서 모드 목록을 이 값으로 거르지 않는다. 진단용으로만 남긴다.
+    # **This does not mean "can this mode be selected".** In real-device responses the items
+    # with `configurable: true` were exactly those carrying `supportedAirVolumes` or
+    # `additionalData` — that is, "can fan speed or humidity be adjusted within this mode".
+    # Auto, cooking, sleep, turbo and saving all arrive as false, yet all are selectable in
+    # the app. So the mode list is never filtered by this value; it is kept for diagnostics.
     configurable: bool
     humidity_min: int | None
     humidity_max: int | None
@@ -246,7 +251,8 @@ class AironeMode:
         option = _as_int(raw.get("option"))
         wind = _as_int(raw.get("airVolume"))
         if wind is not None and wind not in AIRONE_WIND_NAMES:
-            # 실기기는 「해당 없음」에 0 을 준다. 확인된 표에 없는 값은 쓰지 않는다.
+            # A real device sends 0 for "not applicable". Values absent from the confirmed
+            # table are not used.
             _LOGGER.debug(
                 "에어원 airVolume %s 는 확인된 값이 아니라 무시합니다 (mode=%s)", wind, mode
             )
@@ -281,10 +287,11 @@ class AironeMode:
 
 @dataclass(frozen=True, slots=True)
 class AironeModeChoice:
-    """운전 모드 목록의 항목 하나.
+    """One entry in the operating-mode list.
 
-    앱은 모드와 풍량을 **다른 축**으로 다룬다. 터보·절전·기저는 풍량 쪽이고,
-    숙면만 예외로 모드 쪽이다 (`AironeModeCode.rawToUi`).
+    The app treats mode and fan speed as **separate axes**. Turbo, saving and baseline belong
+    to fan speed; sleep is the one exception that belongs to mode
+    (`AironeModeCode.rawToUi`).
     """
 
     mode: int
@@ -298,10 +305,10 @@ class AironeModeChoice:
 
 @dataclass(frozen=True, slots=True)
 class AironeFanChoice:
-    """풍량 목록의 항목 하나.
+    """One entry in the fan-speed list.
 
-    `option == 1` 이면 `airVolume` 이 풍량을 정하고, 그 밖이면 옵션 자체가
-    풍량을 대신한다 (터보·절전·기저). 앱 `labelFor` 와 같은 규칙이다.
+    With `option == 1` the `airVolume` decides the speed; otherwise the option itself stands
+    in for it (turbo, saving, baseline). This is the same rule as the app's `labelFor`.
     """
 
     option: int
@@ -311,7 +318,7 @@ class AironeFanChoice:
 
 @dataclass(slots=True)
 class AironeDevice:
-    """에어원 하나. `reported` 는 MQTT 로 들어올 때마다 갈린다."""
+    """One Airone unit. `reported` changes with every MQTT message that arrives."""
 
     device_seq: int
     device_id: str
@@ -319,27 +326,29 @@ class AironeDevice:
     model_code: str
     model_name: str
     nickname: str
-    # 토픽에 쓰는 식별자. `did.roomController.deviceId` 가 기기목록의 `deviceId` 와
-    # 다를 수 있어 따로 둔다.
+    # The identifier used in topics. `did.roomController.deviceId` can differ from the
+    # `deviceId` in the device list, so it is kept separately.
     physical_device_id: str
     zone_id: int | None
     modes: tuple[AironeMode, ...]
-    # 필터 **개수**는 메타데이터에서 온다. 잔량은 상태에서 오는데, 엔티티는
-    # MQTT 가 붙기 전에 만들어지므로 개수를 상태에서 읽으면 센서가 하나도 안 생긴다.
+    # The filter **count** comes from metadata. The remaining life comes from state, but the
+    # entities are created before MQTT connects, so reading the count from state would create
+    # no sensors at all.
     filter_types: tuple[int | None, ...]
-    # 공기모니터(에어모니터). 별도 기기로 등록되며 공기질 센서가 여기 붙어 있다.
-    # `modelCode` 가 1000 미만이지만(실측 NAA-21DM=35) **제어 대상이 아니라**
-    # 세대 판정과 무관하다. 지금은 공기질을 본체 기기에 붙이고, 이 정보는
-    # 진단에만 담아 제보로 판정한다 (명세 6-6).
+    # The air monitor. It registers as a separate device and carries the air-quality sensors.
+    # Its `modelCode` is below 1000 (observed: NAA-21DM = 35), but it **takes no commands**,
+    # so that says nothing about the protocol generation. For now air quality attaches to the
+    # main device and this information only goes into diagnostics, to be settled by a report
+    # (spec 6-6).
     air_monitors: tuple[dict[str, Any], ...]
-    # **기기가 「나는 이런 센서를 갖고 있다」고 스스로 밝힌 것.**
+    # **The device's own declaration of which sensors it has.**
     #
-    #   NRT-530S3 (모니터 없음)  roomController.sensor 에 표가 있다   ← 룸콘 내장
-    #   NRT-530Z3 (모니터 있음)  roomController.sensor 는 빈 배열이고
-    #                            airMonitor[].sensor 에 표가 있다     ← 별도 기기
+    #   NRT-530S3 (no monitor)   the table is in roomController.sensor  <- built into the RC
+    #   NRT-530Z3 (with monitor)  roomController.sensor is an empty array
+    #                             and the table is in airMonitor[].sensor  <- separate device
     #
-    # 둘 다 없는 기기도 있다 — 모니터를 안 산 전열교환기가 그렇다.
-    # 그 기기에 공기질을 물어보는 것은 헛일이다 (`wants_air_sensors`).
+    # Some devices have neither — a heat-recovery unit bought without a monitor, for one.
+    # Asking such a device about air quality is pointless (`wants_air_sensors`).
     declared_sensors: tuple[Any, ...] | None
     sensor_kinds: tuple[str, ...]
     rc_version: str | None
@@ -349,37 +358,39 @@ class AironeDevice:
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
     reported: dict[str, Any] = field(repr=False, default_factory=dict)
     air_sensors: dict[str, dict[str, Any]] = field(repr=False, default_factory=dict)
-    # 제습 모드를 벗어나면 기기가 습도를 더 이상 보고하지 않는다. 다시 제습으로
-    # 들어갈 때 이 값을 실어 보내지 않으면 **기기가 자기 최소값으로 되돌린다** —
-    # 실사용 제보로 확인했다(설정해두고 모드를 왕복하면 40% 로 초기화).
+    # Outside dehumidify mode the device stops reporting humidity. Re-entering dehumidify
+    # without sending this value back makes **the device fall back to its own minimum** —
+    # confirmed by a user report (set it, round-trip the mode, and it resets to 40%).
     last_humidity: int | None = field(repr=False, default=None)
-    # **무엇을 보냈고 무엇이 돌아왔는지** 짧게 남긴다. 값의 순서를 봐야 가릴 수
-    # 있는 문제가 있다 — 「모드를 바꿀 때 습도를 같이 보냈는데 기기가 되돌리는가」는
-    # 그 순간의 값만으로는 알 수 없다. 진단에 담아 제보 한 번으로 닫는다.
-    # 개인정보는 담지 않는다 — 모드 번호와 습도 값뿐이다.
+    # A short record of **what was sent and what came back**. Some questions can only be
+    # settled by seeing the order of values — whether the device reverts a humidity sent
+    # along with a mode change cannot be told from a single moment. Kept in diagnostics so one
+    # report closes it. Nothing personal — mode numbers and humidity values only.
     command_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
-    # **값이 멈춰도 흔적이 남게 한다.** 빈 응답으로 지우지 않기로 한 대가로
-    # 「갱신이 안 되는 것」과 「값이 안 바뀐 것」을 구별할 수 없게 됐다.
-    # 마지막으로 값이 실제로 바뀐 시점과, 헛돈 횟수를 센다.
+    # **Leave a trace even when the values freeze.** The price of not clearing on an empty
+    # response is that "the refresh is stuck" and "the value did not change" became
+    # indistinguishable. So the last time a value really changed, and how many polls came back
+    # identical, are both counted.
     air_sensor_stamp: float | None = field(repr=False, default=None)
     air_sensor_empty: int = field(repr=False, default=0)
     air_sensor_errors: int = field(repr=False, default=0)
     air_sensor_unchanged: int = field(repr=False, default=0)
-    # **한 번이라도 값이 온 공기질 종류.** 엔티티를 만들 때 쓴다.
+    # **Air-quality kinds that have ever produced a value.** Used when creating entities.
     #
-    # 값이 아니라 종류만 기억하는 이유가 있다. 세션 안에서는 빈 응답이 앞서 받은
-    # 값을 지우지 않게 겹쳐 쓰지만(`set_air_sensors`), 재시작하면 그 보호가
-    # 사라진다 — 엔티티는 시작할 때 딱 한 번 만들어지므로, 그 순간 서버가
-    # 온도·습도만 주면 **나머지 공기질 센서가 통째로 사라진다.** 에어모니터가
-    # 잠깐 빠진 채로 HA 를 재시작하면 CO₂ 이력이 거기서 끊긴다.
+    # There is a reason only the kinds are remembered, not the values. Within a session an
+    # empty response cannot erase what was already received (`set_air_sensors`), but a restart
+    # removes that protection: entities are created exactly once at startup, so if the server
+    # happens to send only temperature and humidity at that moment, **every other air-quality
+    # sensor disappears.** Restarting HA while the air monitor is briefly absent ends the CO2
+    # history right there.
     #
-    # 그래서 종류만 저장해 두고 다음 시작 때 되살린다. **값은 되살리지
-    # 않는다** — 며칠 지난 수치를 현재값처럼 보여주는 것이 「알 수 없음」보다
-    # 나쁘다. 엔티티만 있으면 값이 다시 올 때 그대로 이어진다.
+    # So the kinds are stored and restored on the next start. **The values are not restored**
+    # — showing a days-old number as if it were current is worse than unknown. With the
+    # entity in place, the history simply resumes when values return.
     known_sensor_kinds: tuple[str, ...] = field(repr=False, default=())
     humidity_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
 
-    # -- 생성 --------------------------------------------------------------
+    # -- construction ------------------------------------------------------
 
     @classmethod
     def parse(cls, raw: dict[str, Any]) -> AironeDevice | None:
@@ -389,8 +400,9 @@ class AironeDevice:
         if not device_id or device_seq is None or service_code is None:
             return None
 
-        # 구세대는 `did` 아래에 `state` 겹이 하나 더 있다 (실측: NRT-20DSW).
-        # 세대를 따지지 않고 있는 쪽을 쓴다 — 어느 세대든 한 곳에만 들어 있다.
+        # The older generation nests one more `state` layer under `did` (observed on an
+        # NRT-20DSW). Whichever one exists is used without checking the generation — either
+        # way it only appears in one place.
         did = (
             _dig(raw, "Properties", "data", "did", "reported")
             or _dig(raw, "Properties", "data", "did", "state", "reported")
@@ -398,12 +410,14 @@ class AironeDevice:
         )
         controller = did.get("roomController")
         if not isinstance(controller, dict):
-            # **기기를 포기하지 않는다.** 능력 메타데이터가 없으면 무엇을 고를 수
-            # 있는지 모를 뿐이고, 전원·운전상태·오류는 상태 응답에서 온다.
+            # **Never give up on the device.** Missing capability metadata only means the
+            # choices are unknown; power, running state and errors still come from the status
+            # response.
             #
-            # 등록 직후처럼 기기가 아직 `did` 를 올리지 않은 시점이 있다. 여기서
-            # `None` 을 돌려주면 그 사용자는 엔티티를 하나도 못 본다 —
-            # 「아무것도 안 뜬다」가 그것이다. 없는 것은 안 만들고, 있는 것은 만든다.
+            # There are moments — just after registration, say — when the device has not
+            # pushed its `did` yet. Returning `None` here would leave that user with no
+            # entities at all, which is what "nothing shows up" was. Build what exists and
+            # skip what does not.
             controller = {}
         odu = did.get("odu") if isinstance(did.get("odu"), dict) else {}
 
@@ -416,10 +430,10 @@ class AironeDevice:
             modes, raw.get("modelCode"), str(raw.get("modelName") or "")
         )
 
-        # **문자열로 올 수도 있다.** 매트는 `{"mainItem": ..., "side": {...}}` 인데
-        # 별칭을 안 나눠 쓰는 계정에서 그냥 이름 하나로 오는 경우를 배제할 근거가
-        # 없다. 그때 `.get` 을 부르면 통합 전체가 설정 단계에서 죽는다 —
-        # 기기 하나가 아니라 **전부** 안 보인다. 문자열이면 이름으로 쓴다.
+        # **This can arrive as a string.** A mat sends `{"mainItem": ..., "side": {...}}`,
+        # but nothing rules out an account that never split its nicknames sending a single
+        # name instead. Calling `.get` on that kills the whole integration during setup — not
+        # one device but **all** of them disappear. A plain string is used as the name.
         raw_nick = _dig(raw, "Properties", "nickName")
         nick = raw_nick if isinstance(raw_nick, dict) else {}
         nick_text = raw_nick.strip() if isinstance(raw_nick, str) else ""
@@ -457,7 +471,7 @@ class AironeDevice:
                 for item in did.get("airMonitor") or []
                 if isinstance(item, dict)
             ),
-            # **키가 아예 없으면 「없다」가 아니라 「모른다」다.** 그때는 물어본다.
+            # **A missing key means "unknown", not "absent".** In that case, ask.
             declared_sensors=(
                 tuple(controller["sensor"])
                 if isinstance(controller.get("sensor"), list)
@@ -473,38 +487,40 @@ class AironeDevice:
             raw=raw,
         )
 
-    # -- 상태 반영 ----------------------------------------------------------
+    # -- applying state ----------------------------------------------------
 
     @staticmethod
     def _legacy_modes(
         modes: tuple[AironeMode, ...], model_code: Any, model_name: str | None = None
     ) -> tuple[AironeMode, ...]:
-        """구세대 모드 목록을 앱과 같게 만든다.
+        """Build the older generation's mode list the way the app does.
 
-        **처음에는 DID 를 능력 목록으로 봤고 그것이 틀렸다.** 앱은 구세대에서
-        DID 를 아예 보지 않는다 — `modelCode < 1000` 이면
-        `loadlegacyModeDataFromFile()` 로 앱에 내장된 파일을 읽어 모드 목록으로 쓴다
-        (`AirOneControlViewModel`). 그 내용이 `LEGACY_MODE_DID` 다.
+        **Treating the DID as the capability list was the original mistake.** For the older
+        generation the app never looks at the DID at all: with `modelCode < 1000` it calls
+        `loadlegacyModeDataFromFile()` and uses a file bundled in the app as the mode list
+        (`AirOneControlViewModel`). That file's contents are `LEGACY_MODE_DID`.
 
-        확인 경로는 이랬다. 두 기기(`NRT-20DS`·`NRT-20DSW`)의 앱 화면에 모드가
-        여섯 개인데 DID 에는 그만큼이 없었다. **DID 로 목록을 만들면 앱보다 적게
-        나온다** — 자동운전과 요리가 빠졌다.
+        This is how it was found. Two devices (`NRT-20DS`, `NRT-20DSW`) showed six modes on
+        the app's screen while their DIDs held fewer. **Building the list from the DID gives
+        fewer modes than the app** — auto and cooking were missing.
 
-        그래서 앱 파일을 기준으로 하고 **DID 가 준 것을 위에 얹는다.** DID 항목은
-        그 기기의 실제 값이므로 기본 풍량 같은 것은 DID 쪽이 정확하다.
+        So the app's file is the baseline and **whatever the DID provides is layered on top.**
+        A DID entry is that device's actual value, so things like the default fan speed are
+        more accurate from the DID.
         """
         code = _as_int(model_code)
         if code is None or code >= AIRONE_V2_MIN_MODEL_CODE:
             return modes
 
-        # **풍량을 고를 수 있는지는 파일이 정한다.** 「option == 1 이면 고를 수
-        # 있다」로 짐작했다가 자동운전(12)과 요리(6)에서 틀렸다 — 둘 다
-        # `configurable: false` 인데 미풍·약풍·강풍을 만들고 있었다.
+        # **The file decides whether the fan speed is selectable.** Guessing that `option == 1`
+        # meant selectable was wrong for auto (12) and cooking (6): both are
+        # `configurable: false`, yet gentle, low and high were being offered.
         table = {(m, o): (vol, conf) for m, o, vol, conf in LEGACY_MODE_DID}
 
-        # **바이패스는 있다고 확인된 모델에만** (`LEGACY_BYPASS_MODEL_PREFIXES`).
-        # 모르는 모델에는 안 넣는다 — 없는데 보이면 누른 사용자가 기기를
-        # 되돌려야 하고, 있는데 안 보이는 것은 제보 한 줄로 넣으면 된다.
+        # **Bypass only for models confirmed to have it** (`LEGACY_BYPASS_MODEL_PREFIXES`).
+        # Unknown models do not get it: offering one that does not exist leaves the user who
+        # pressed it having to undo the device, while a missing one only needs a line in a
+        # report to add.
         plain = re.sub(r"[^A-Z0-9]", "", (model_name or "").upper())
         if not plain.startswith(LEGACY_BYPASS_MODEL_PREFIXES):
             table.pop((AIRONE_MODE_BYPASS, AIRONE_OPTION_NONE), None)
@@ -527,8 +543,9 @@ class AironeDevice:
                     humidity_max=None,
                 )
             )
-        # DID 가 준 조합에도 `supportedAirVolumes` 가 없다. **앱은 구세대에서 DID 를
-        # 아예 안 보므로** 파일이 아는 조합이면 파일 쪽 판단으로 덮는다.
+        # Combinations from the DID carry no `supportedAirVolumes` either. **Since the app
+        # ignores the DID entirely for this generation**, a combination the file knows about is
+        # overridden by the file's judgement.
         return tuple(
             (
                 item
@@ -549,39 +566,40 @@ class AironeDevice:
         )
 
     def apply_reported(self, incoming: dict[str, Any]) -> None:
-        """들어온 상태를 **덮어쓰지 않고 겹쳐 쓴다.**
+        """Merge incoming state **rather than overwriting it.**
 
-        에어원은 명령마다 응답이 따로 오고 **그 응답이 부분적이다.** 전원을 켜면
-        `{"roomController": {"running": 1}}` 처럼 바뀐 것만 오거나, `odu` 만 오는
-        경우도 있다.
+        Airone answers each command separately and **those answers are partial.** Turning the
+        power on may return only what changed, as in `{"roomController": {"running": 1}}`, and
+        sometimes only `odu` arrives.
 
-        통째로 갈아끼우면 그때 `mode` · `option` · `airVolume` 이 사라지고, 심하면
-        `running` 까지 없어져 **전원이 「알 수 없음」으로 빠진다** — 실사용 제보로
-        확인했다.
+        Replacing the whole document loses `mode`, `option` and `airVolume`, and in the worst
+        case `running` as well, which drops **power into unknown** — confirmed by a user
+        report.
 
-        매트는 shadow 가 항상 전체를 주므로 이 처리가 필요 없다. 여기만 겹쳐 쓴다.
+        A mat needs none of this because its shadow always arrives complete. Only here does
+        state merge.
 
-        오래된 값이 남을 수 있다는 것은 감수한다. 기기가 어떤 항목을 더 이상 보내지
-        않으면 마지막 값이 남는다. **전부 「알 수 없음」이 되는 것보다 낫다.**
+        Stale values may survive, and that is accepted: when the device stops sending a field,
+        its last value remains. **It beats everything reading as unknown.**
         """
         incoming = _strip_capability_fields(incoming)
         merged: dict[str, Any] = dict(self.reported or {})
         for key, value in incoming.items():
             current = merged.get(key)
             if isinstance(value, dict) and isinstance(current, dict):
-                # `roomController` 안의 바뀐 항목만 갈아끼운다.
+                # Replace only the fields inside `roomController` that changed.
                 inner = dict(current)
                 inner.update(value)
                 merged[key] = inner
             else:
-                # 목록(`airMonitor`, `filter`)은 통째로 바꾼다. 부분 목록을 항목별로
-                # 섞으면 자리가 어긋난다.
+                # Lists (`airMonitor`, `filter`) are replaced wholesale. Merging a partial list
+                # item by item misaligns the positions.
                 merged[key] = value
         self.reported = merged
         self._note_humidity()
 
     def _note_humidity(self) -> None:
-        """관측된 목표 습도가 바뀌면 한 줄 남긴다. 같은 값은 쌓지 않는다."""
+        """Record one line when the observed target humidity changes; identical values are not stacked."""
         value = self.target_humidity
         entry = {"mode": self.mode, "option": self.option, "humidity": value}
         if self.humidity_log and {
@@ -592,7 +610,7 @@ class AironeDevice:
         del self.humidity_log[:-_LOG_KEEP]
 
     def note_command(self, command: str, desired: dict[str, Any] | None) -> None:
-        """보낸 명령을 한 줄 남긴다. 진단에서 순서를 보려면 이게 있어야 한다."""
+        """Record one line per command sent — without it diagnostics cannot show the ordering."""
         controller = (desired or {}).get("roomController") or {}
         extra = controller.get("additionalData")
         self.command_log.append(
@@ -602,29 +620,30 @@ class AironeDevice:
                 "option": controller.get("option"),
                 "airVolume": controller.get("airVolume"),
                 "running": controller.get("running"),
-                # 습도를 실어 보냈는지가 핵심이다.
+                # Whether a humidity was sent along is the point.
                 "humidity_sent": (extra or {}).get("value") if isinstance(extra, dict) else None,
                 "at": round(time.monotonic(), 1),
             }
         )
         del self.command_log[:-_LOG_KEEP]
 
-    # -- 세대 --------------------------------------------------------------
+    # -- generation --------------------------------------------------------
 
     @property
     def is_v2_generation(self) -> bool:
-        """V2.1 세대인가.
+        """Whether this is the V2.1 generation.
 
-        `modelCode < 1000` 은 봉투와 토픽이 전혀 달라(명세 6-5) 같은 코드로 못 쏜다.
+        With `modelCode < 1000` the envelope and topics differ completely (spec 6-5), so the
+        same code cannot address it.
         """
         code = _as_int(self.model_code)
         return code is not None and code >= AIRONE_V2_MIN_MODEL_CODE
 
-    # -- 상태 --------------------------------------------------------------
+    # -- state -------------------------------------------------------------
 
     @property
     def legacy_extras(self) -> dict[str, Any]:
-        """구세대만 싣는 값. 없으면 빈 사전."""
+        """Values only the older generation carries; an empty dict when absent."""
         value = (self.reported or {}).get("legacyExtras")
         return value if isinstance(value, dict) else {}
 
@@ -644,13 +663,13 @@ class AironeDevice:
 
     @property
     def running(self) -> int | None:
-        """운전 상태. 방 컨트롤러에 없으면 실외기에서 읽는다.
+        """Running state, falling back to the outdoor unit when the room controller has none.
 
-        `RoomControllerStatus` 와 `OduStatus` **둘 다** `running` 을 가진다. 방
-        컨트롤러 쪽만 보다가 그 필드가 비어 오는 기기를 만나면 전원 스위치가
-        영구히 `알 수 없음` 이 된다 — 값이 있는데 안 읽는 셈이다.
+        **Both** `RoomControllerStatus` and `OduStatus` carry `running`. Reading only the room
+        controller leaves the power switch permanently unknown on a device that sends that
+        field empty — the value is there and simply not read.
 
-        방 컨트롤러를 먼저 본다. 사용자가 만지는 것이 그쪽이다.
+        The room controller is read first, because that is what the user touches.
         """
         value = _as_running(self._controller.get("running"))
         if value is None:
@@ -709,18 +728,19 @@ class AironeDevice:
 
     @property
     def auto_dry_percent(self) -> int | None:
-        """자동건조 진행률(%). 자동건조 중이 아니면 `None`.
+        """Auto-dry progress in percent, or `None` when not auto-drying.
 
-        앱은 상태 줄에 `자동건조 중 47%` 로 함께 보여준다. 우리는 **상태 문구를
-        「자동건조」로 두고 진행률은 속성으로 뺀다** — 상태에 숫자를 섞으면
-        문자열을 비교하는 자동화가 매번 깨진다.
+        The app shows it inline on the status line as "자동건조 중 47%". Here **the state text
+        stays as the auto-dry label and the progress moves to an attribute** — mixing a number
+        into the state breaks any automation comparing the string.
 
-        `running` 이 4 일 때만 읽는다. 앱도 그 조건 안에서만 이 값을 본다.
+        Read only while `running` is 4; the app also consults this value only under that
+        condition.
         """
         if self.running != AIRONE_RUN_AUTO_DRY:
             return None
-        # **뒤에서부터 찾는다.** 앱이 그렇게 한다 — 같은 번호가 여러 번 오면
-        # 나중 것이 최신이다.
+        # **Searched from the end**, as the app does — when the same number appears more than
+        # once, the later one is the current value.
         for extra in reversed(self._controller.get("additionalData") or []):
             if not isinstance(extra, dict):
                 continue
@@ -731,20 +751,22 @@ class AironeDevice:
 
     @property
     def target_humidity(self) -> int | None:
-        """제습 목표 습도.
+        """Dehumidify target humidity.
 
-        **번호로만 찾다가 못 찾았다.** 서버 능력 정보는 범위를 `type: 1` 로 주는데,
-        기기 상태는 값을 **`type: 3`** 으로 돌려준다. 같은 목록의 `type: 1` 은 범위가
-        0~4 인 다른 항목이다. v0.9.1 까지 그것만 뒤져서 화면이 늘 비어 있었다.
+        **Searching by number alone never found it.** The server's capability data reports the
+        range as `type: 1`, while device state returns the value as **`type: 3`**. The
+        `type: 1` entry in that same list is a different item with a range of 0-4. Up to
+        v0.9.1 only that was searched, which is why the field was always empty.
 
-        그래서 두 가지를 함께 본다.
+        So two things are consulted together.
 
-        1. **서버가 알려준 그 모드의 범위 안에 있는 값** — 이게 판정 기준이다.
-           범위를 안 주는 모드(환기·청정, 터보·절전)에서는 값이 있어도 쓰지 않는다
-        2. 후보가 여럿이면 실기기에서 확인된 번호(`3`)를 먼저 쓴다
+        1. **A value inside the range the server declared for that mode** — this is the
+           deciding test. In modes that declare no range (ventilate/purify, turbo/saving) a
+           value is not used even when present.
+        2. With several candidates, the number confirmed on a real device (`3`) wins.
 
-        번호를 조건으로 걸지 않는 이유는 관측이 한 기기뿐이라서다. 범위 안에 드는
-        값이라면 번호가 달라도 읽는다.
+        The number is not a hard condition because the observation covers only one device. A
+        value inside the range is read whatever its number.
         """
         bounds = self.humidity_bounds(self.mode, self.option)
         if bounds is None:
@@ -762,7 +784,8 @@ class AironeDevice:
         if not candidates:
             return None
         if len(candidates) > 1:
-            # 어느 것이 습도인지 단정할 수 없다. 확인된 번호를 먼저 쓰고 남긴다.
+            # Which one is the humidity cannot be settled. The confirmed number wins, and the
+            # ambiguity is logged.
             _LOGGER.debug(
                 "에어원 습도 후보가 여럿입니다 (범위 %s): %s", bounds, candidates
             )
@@ -776,14 +799,15 @@ class AironeDevice:
 
     @property
     def filters(self) -> tuple[dict[str, Any], ...]:
-        """실외기 필터 상태. 메타데이터가 알려준 개수만큼 자리를 지킨다.
+        """Outdoor-unit filter state, holding as many slots as the metadata declared.
 
-        상태가 아직 안 왔으면 `percent` 가 `None` 인 자리를 돌려준다 —
-        길이가 흔들리면 엔티티와 자리가 어긋난다.
+        Before any state arrives it returns slots whose `percent` is `None` — a length that
+        moves would misalign the slots against the entities.
 
-        **`percent` 는 남은 수명이다.** 출처가 `usage.percent` 라 이름은 「쓴 만큼」
-        처럼 읽히지만 값은 반대다 — 87 이면 87% 남았고 13% 썼다. 실기기에서 나비엔
-        앱 표시와 대조해 확인했다. 키 이름은 그대로 둔다(진단 형식이 바뀐다).
+        **`percent` is the remaining life.** It comes from `usage.percent`, which reads like
+        "amount used" while the value is the opposite: 87 means 87% left and 13% used.
+        Confirmed on a real device against the Navien app display. The key name is left alone,
+        since changing it would change the diagnostics format.
         """
         reported = [
             item for item in self._odu.get("filter") or [] if isinstance(item, dict)
@@ -800,26 +824,26 @@ class AironeDevice:
             )
         return tuple(result)
 
-    # -- 능력 --------------------------------------------------------------
+    # -- capabilities ------------------------------------------------------
 
     @property
     def configurable_modes(self) -> tuple[AironeMode, ...]:
-        """서버가 「조절 가능」이라고 표시한 조합. 진단용이다.
+        """Combinations the server marked adjustable. For diagnostics.
 
-        **모드 목록을 이것으로 거르지 않는다** — `configurable` 은 모드를 고를 수
-        있는지가 아니라 그 안에서 풍량·습도를 조절할 수 있는지를 뜻한다.
+        **The mode list is never filtered by this** — `configurable` says whether fan speed or
+        humidity can be adjusted within a mode, not whether the mode can be selected.
         """
         return tuple(item for item in self.modes if item.configurable)
 
     @property
     def selectable_modes(self) -> tuple[AironeModeChoice, ...]:
-        """운전 모드 목록. **서버 순서를 지킨다.**
+        """The operating-mode list, **in the server's own order.**
 
-        앱과 같은 축으로 자른다 — 터보·절전·기저는 여기 넣지 않고 풍량 쪽으로
-        보낸다. 숙면만 별도 모드로 올린다.
+        Cut along the same axis as the app: turbo, saving and baseline go to fan speed rather
+        than here, and sleep is the one raised as its own mode.
 
-        서버가 어떤 모드에 `option 1` 을 안 주고 터보만 줄 수도 있다. 그때도 그
-        모드가 목록에서 사라지지 않도록 **그 모드의 첫 조합**을 대표로 쓴다.
+        The server may give a mode no `option 1` and only turbo. So that such a mode does not
+        vanish from the list, **the first combination of that mode** stands in for it.
         """
         result: list[AironeModeChoice] = []
         seen: set[tuple[int, int]] = set()
@@ -829,7 +853,7 @@ class AironeDevice:
                 key = (item.mode, AIRONE_OPTION_SLEEP)
                 label = AIRONE_MODE_SLEEP_LABEL
             else:
-                # 그 모드의 대표 option — 1 이 있으면 1, 없으면 처음 나온 것.
+                # The representative option for that mode: 1 if present, otherwise the first seen.
                 options = [
                     other.option
                     for other in self.modes
@@ -844,7 +868,8 @@ class AironeDevice:
             seen.add(key)
             result.append(AironeModeChoice(mode=key[0], option=key[1], label=label))
 
-        # 숙면이 여러 모드에 붙어 있으면 이름이 겹친다. 그때만 모드를 덧붙인다.
+        # Sleep attached to several modes produces duplicate labels. Only then is the mode
+        # appended to disambiguate.
         sleeps = [c for c in result if c.is_sleep]
         if len(sleeps) > 1:
             result = [
@@ -863,20 +888,22 @@ class AironeDevice:
         return tuple(item for item in self.modes if item.key == (mode, option))
 
     def fan_choices(self, mode: int | None, option: int | None) -> tuple[AironeFanChoice, ...]:
-        """지금 모드에서 고를 수 있는 풍량.
+        """The fan speeds selectable in the current mode.
 
-        **서버 메타데이터에 실제로 있던 조합만** 돌려준다. 표를 만들어 채우지 않는다.
+        Returns **only combinations that actually appeared in the server metadata**; no table
+        is invented to fill it out.
 
-        - `option == 1` → `airVolume` 이 미풍·약풍·강풍·자동을 정한다
-        - `option` 이 터보·절전·기저 → 옵션 자체가 풍량 항목이 된다
-        - 숙면 모드 안에서는 그 조합의 `airVolume` 만 쓴다 (앱과 같다)
+        - `option == 1` -> `airVolume` decides between gentle, low, high and auto
+        - `option` of turbo, saving or baseline -> the option itself becomes the entry
+        - inside sleep mode, only that combination's `airVolume` is used (as in the app)
         """
         if mode is None:
             return ()
         sleeping = option == AIRONE_OPTION_SLEEP
         result: list[AironeFanChoice] = []
         seen: set[str] = set()
-        # 서버가 같은 조합을 몇 개로 줬는지. 여러 개면 그 나열이 목록이다.
+        # How many entries the server gave for the same combination. Several means that
+        # enumeration is the list.
         enumerated: dict[tuple[int, int], int] = {}
         for item in self.modes:
             enumerated[item.key] = enumerated.get(item.key, 0) + 1
@@ -891,24 +918,26 @@ class AironeDevice:
             if item.mode != mode:
                 continue
             if sleeping != (item.option == AIRONE_OPTION_SLEEP):
-                # 숙면 모드에서는 숙면 조합만, 그 밖에서는 숙면 아닌 것만 본다.
+                # In sleep mode only sleep combinations are considered, and elsewhere only
+                # non-sleep ones.
                 continue
 
             if item.option in AIRONE_OPTIONS_WITH_WIND:
-                # **`configurable` 이 「풍량을 고를 수 있는가」다.** 앱이 그렇게 쓴다
+                # **`configurable` means "is the fan speed selectable".** That is how the app
+                # uses it:
                 # (`AirOneControlFragment.allowedWindChoicesFromDids`).
                 #
-                #     z10 = 그 모드 항목 중 configurable 이 하나라도 true
-                #     if (z10) { 미풍·약풍·강풍 을 모두 보여준다 }
-                #     else     { airVolume 값이 1·2·3 인 것만 }
+                #     z10 = any entry of that mode has configurable true
+                #     if (z10) { show gentle, low and high }
+                #     else     { only those whose airVolume is 1, 2 or 3 }
                 #
-                # `supportedAirVolumes` 는 **APK 2.10.4 에 없는 필드**다. 서버가
-                # 나중에 추가했고 옛 펌웨어는 안 내려준다. 그것만 믿으면 옛 펌웨어
-                # 기기에서 「자동」 하나로 줄어든다 — 실기기 제보(`NRT-530Z3`,
-                # 룸콘 10.1)에서 앱은 6개인데 우리는 3개였다.
+                # `supportedAirVolumes` is **a field absent from APK 2.10.4**. The server added
+                # it later and older firmware does not send it. Trusting it alone collapses an
+                # older-firmware device down to auto only — in a real-device report
+                # (`NRT-530Z3`, RC 10.1) the app showed six where we showed three.
                 #
-                # 순서: 서버가 목록을 주면 그것, 아니면 고를 수 있다고 했으니
-                # 앱 표 전체, 그것도 아니면 지금 값 하나.
+                # Order of preference: the server's list if it sent one; otherwise, since it
+                # said selectable, the app's whole table; failing that, the single current value.
                 if item.supported_air_volumes:
                     values: tuple[int, ...] = item.supported_air_volumes
                 elif (
@@ -916,20 +945,22 @@ class AironeDevice:
                     and item.air_volume in AIRONE_SELECTABLE_AIR_VOLUMES
                     and enumerated.get(item.key, 0) == 1
                 ):
-                    # **한 조합을 한 항목으로만 줬을 때 넓힌다.**
+                    # **Widen only when the combination came as a single entry.**
                     #
-                    # 서버가 같은 조합을 여러 항목으로 나열하면(`4:1` 이 풍량 1·2·3
-                    # 으로 세 번) 그 나열이 곧 목록이다. 그때 넓히면 서버가 빼둔
-                    # 값을 되살리게 된다.
+                    # When the server enumerates the same combination several times (`4:1`
+                    # appearing three times, for speeds 1, 2 and 3), that enumeration is the
+                    # list. Widening then would resurrect values the server deliberately left
+                    # out.
                     #
-                    # 하나만 준 경우가 다르다. 그건 「지금 값」이고 목록이 아니다.
+                    # A single entry is a different case: it is the current value, not a list.
                     #
-                    # **그 값이 네 단 중 하나일 때만 넓힌다.** 기저(5·6)를 주는
-                    # 기기까지 넓히면 서버가 알려준 항목을 **잃는다** — 기저가
-                    # 사라지고 미풍·약풍·강풍·자동이 대신 나온다. 넓히려다
-                    # 있던 것을 빼앗는 셈이라, 모르는 값이면 그대로 둔다.
-                    # `airVolume` 이 아예 없는 기기(전열교환기)도 넓히지 않는다 —
-                    # 풍량 단 자체가 없고 앱도 터보·절전만 보여준다.
+                    # **Widen only when that value is one of the four steps.** Widening on a
+                    # device that reports baseline (5, 6) would **lose** the entry the server
+                    # declared: baseline disappears and gentle/low/high/auto take its place.
+                    # Trying to widen would take away what was there, so an unrecognised value
+                    # is left alone. A device with no `airVolume` at all (a heat-recovery unit)
+                    # is not widened either — it has no fan steps and the app shows only turbo
+                    # and saving.
                     values = AIRONE_SELECTABLE_AIR_VOLUMES
                 elif item.air_volume is not None:
                     values = (item.air_volume,)
@@ -942,7 +973,7 @@ class AironeDevice:
         return tuple(result)
 
     def current_fan_label(self) -> str | None:
-        """지금 상태에 해당하는 풍량 항목 이름."""
+        """The name of the fan-speed entry matching the current state."""
         for choice in self.fan_choices(self.mode, self.option):
             if choice.option != (self.option or AIRONE_OPTION_NONE):
                 continue
@@ -954,18 +985,19 @@ class AironeDevice:
         return None
 
     def humidity_bounds(self, mode: int | None, option: int | None) -> tuple[int, int] | None:
-        """제습 목표 습도 범위.
+        """The dehumidify target-humidity range.
 
-        **조합이 정확히 맞을 때만 인정한다.** 서버는 제습·기본풍량(`9:1`)에만 범위를
-        주고 터보·절전(`9:2`·`9:3`)에는 주지 않는다.
+        **Accepted only on an exact combination match.** The server declares a range for
+        dehumidify at the base fan speed (`9:1`) and none for turbo or saving (`9:2`, `9:3`).
 
-        v0.9.0 까지는 「범위는 모드의 성질이다」라며 같은 모드의 다른 조합에서
-        가져왔다. **추측이었고 앱과 어긋난다** — 앱 리소스에 `humidityAutoText` 와
-        `humiditySeekbarNone` 이 있다. 터보·절전에서 앱은 슬라이더를 감추고
-        「자동」으로 보여준다. 기기가 알아서 하는 구간이다.
+        Up to v0.9.0 this borrowed from another combination of the same mode, on the grounds
+        that "a range is a property of the mode". **That was a guess, and it contradicts the
+        app**: the app resources contain `humidityAutoText` and `humiditySeekbarNone`, and in
+        turbo and saving the app hides the slider and shows "auto". That band is the device's
+        own business.
 
-        범위를 만들어내면 사용자가 조절할 수 없는 값을 조절하는 것처럼 보이고,
-        그 값이 명령에 실려 나간다.
+        Inventing a range makes a value the user cannot adjust look adjustable, and sends that
+        value out in a command.
         """
         if mode is None or mode not in AIRONE_MODES_WITH_HUMIDITY:
             return None
@@ -977,18 +1009,17 @@ class AironeDevice:
             return (item.humidity_min, item.humidity_max)
         return None
 
-    # -- 공기질 ------------------------------------------------------------
+    # -- air quality -------------------------------------------------------
 
     def set_air_sensors(self, airs: list[dict[str, Any]]) -> list[str]:
-        """`/air-sensor` 응답을 반영하고, 모르는 종류를 돌려준다.
+        """Apply an `/air-sensor` response and return the kinds that were not recognised.
 
-        **덮어쓰지 않고 겹쳐 쓴다.** 상태 응답과 같은 이유다 (`apply_reported`).
-        공기질은 5분마다 다시 읽는데, 한 번 비어서 오거나 일부 항목만 오면
-        **그때마다 센서가 「알 수 없음」으로 빠진다.** 에어모니터가 잠깐 끊기거나
-        서버가 한 번 거르면 그렇게 된다.
+        **Merged, not overwritten**, for the same reason as a status response
+        (`apply_reported`). Air quality is re-read every five minutes, and a response that
+        comes back empty or partial would otherwise **drop those sensors into unknown every
+        time** — which happens whenever the air monitor blips or the server skips one round.
 
-        빈 응답으로는 아무것도 지우지 않는다. 오래된 값이 남는 것이
-        전부 사라지는 것보다 낫다.
+        An empty response erases nothing. A stale value surviving beats all of them vanishing.
         """
         unknown: list[str] = []
         table: dict[str, dict[str, Any]] = {}
@@ -998,7 +1029,7 @@ class AironeDevice:
             kind = item.get("type")
             if not isinstance(kind, str) or not kind:
                 continue
-            # 서버가 다른 이름으로 줄 수 있다. 표준 이름으로 모은다.
+            # The server may use a different name; everything is normalised to the standard one.
             kind = AIRONE_SENSOR_ALIASES.get(kind.strip().lower(), kind)
             if kind not in AIRONE_SENSOR_KINDS:
                 unknown.append(kind)
@@ -1006,7 +1037,7 @@ class AironeDevice:
             table[kind] = item
 
         if not table:
-            # 빈 응답이 이미 받은 값을 지우게 하지 않는다.
+            # An empty response must not erase values already received.
             self.air_sensor_empty += 1
             _LOGGER.debug("공기질 응답이 비어 있어 앞서 받은 값을 유지합니다")
             return unknown
@@ -1021,38 +1052,40 @@ class AironeDevice:
             self.air_sensor_stamp = time.monotonic()
             self.air_sensor_unchanged = 0
         else:
-            # 값이 온 것은 맞는데 앞과 똑같다. 방이 조용한 것일 수도 있고
-            # 서버가 옛 값을 계속 주는 것일 수도 있다 — 세어서 판단에 넘긴다.
+            # Values did arrive, but identical to last time. The room may simply be quiet, or
+            # the server may be repeating a stale value — counted, and left to be judged.
             self.air_sensor_unchanged += 1
         return unknown
 
     def remember_sensor_kinds(self, kinds: Any) -> None:
-        """본 적 있는 공기질 종류에 더한다. 아는 종류만, 표 순서대로 둔다."""
+        """Add to the kinds ever seen — known kinds only, kept in table order."""
         seen = set(self.known_sensor_kinds)
         seen.update(k for k in kinds if k in AIRONE_SENSOR_KINDS)
         self.known_sensor_kinds = tuple(k for k in AIRONE_SENSOR_KINDS if k in seen)
 
     @property
     def entity_sensor_kinds(self) -> tuple[str, ...]:
-        """공기질 엔티티를 만들 종류.
+        """The kinds to create air-quality entities for.
 
-        지금 값이 오는 종류가 아니라 **본 적 있는 종류**를 쓴다. 서버가 이번에
-        일부만 주더라도 엔티티는 남아 있어야 값이 돌아왔을 때 이력이 이어진다.
+        This uses **the kinds ever seen**, not the ones arriving right now. Even when the
+        server sends only some of them this time, the entities have to remain for the history
+        to resume when the values return.
         """
         return self.known_sensor_kinds or self.sensor_kinds
 
     @property
     def wants_air_sensors(self) -> bool:
-        """이 기기에 공기질을 물어볼 이유가 있는가.
+        """Whether there is any reason to ask this device about air quality.
 
-        **없다고 확신할 때만 안 묻는다.** 셋 중 하나라도 걸리면 묻는다.
+        **It stops asking only when it is sure there is none.** Any one of three is enough:
 
-        - 에어모니터가 붙어 있다 → 센서는 거기 있다
-        - 룸콘이 센서 표를 내놨다 → 룸콘에 들어 있다
-        - 표 자체가 안 왔다 → **모르는 것**이지 없는 것이 아니다
+        - an air monitor is attached -> the sensors are there
+        - the room controller published a sensor table -> they are built into it
+        - no table arrived at all -> that is **unknown**, not absent
 
-        모니터 없는 전열교환기가 여기 걸린다. 그런 기기에 5분마다 물어봐야
-        빈 응답만 오고, v0.12.0 이전에는 그 호출이 늦으면 **폴링 전체가 죽었다.**
+        A heat-recovery unit without a monitor is what this catches. Asking such a device
+        every five minutes returns nothing but empty responses, and before v0.12.0 a slow call
+        there **killed the entire poll.**
         """
         if self.air_monitors:
             return True
@@ -1062,15 +1095,15 @@ class AironeDevice:
 
     @property
     def air_sensor_age(self) -> float | None:
-        """공기질 값이 마지막으로 **바뀐** 뒤 흐른 초."""
+        """Seconds since an air-quality value last **changed**."""
         if self.air_sensor_stamp is None:
             return None
         return round(time.monotonic() - self.air_sensor_stamp, 1)
 
-    # -- 제어 --------------------------------------------------------------
+    # -- control -----------------------------------------------------------
 
     def build_power_desired(self, turn_on: bool) -> dict[str, Any]:
-        """`power` 명령 본문 (`DesiredPowerRequestData`)."""
+        """The body of a `power` command (`DesiredPowerRequestData`)."""
         controller: dict[str, Any] = {
             "deviceId": self.physical_device_id,
             "running": AIRONE_RUN_ON if turn_on else AIRONE_RUN_OFF,
@@ -1086,18 +1119,18 @@ class AironeDevice:
         air_volume: int | None = None,
         humidity: int | None = None,
     ) -> dict[str, Any]:
-        """`change-mode` 명령 본문 (`DesiredChangeModeRequestData`).
+        """The body of a `change-mode` command (`DesiredChangeModeRequestData`).
 
-        풍량은 **서버가 알려준 값 중에서만** 고른다. 지금 조합에 풍량이 없으면
-        필드를 아예 넣지 않는다 — 0 이나 기본값을 만들어 넣지 않는다.
+        The fan speed is chosen **only from values the server declared**. When the current
+        combination has none, the field is omitted entirely — no 0 and no invented default.
         """
         controller: dict[str, Any] = {"mode": mode, "option": option}
 
         wind = air_volume
         if wind is not None and wind not in AIRONE_WIND_NAMES:
-            # 확인되지 않은 값은 **지정하지 않은 것으로 본다.** 그대로 쏘면 안 되고,
-            # 필드를 빼면 기기가 풍량을 0으로 되돌릴 수 있다. 아래에서 서버가 준
-            # 값으로 되돌린다.
+            # An unconfirmed value is **treated as unspecified.** Sending it as-is is wrong,
+            # and dropping the field can make the device reset the fan speed to 0. It falls
+            # back to a server-supplied value below.
             _LOGGER.debug("에어원 풍량 %s 는 확인된 값이 아니라 무시합니다", wind)
             wind = None
         if wind is None:
@@ -1113,9 +1146,10 @@ class AironeDevice:
         if wind is not None:
             controller["airVolume"] = wind
 
-        # **들어갈 모드**의 범위를 본다. `self.target_humidity` 는 「지금 모드」를
-        # 기준으로 읽으므로, 환기에서 제습으로 넘어가는 순간에는 항상 `None` 이다.
-        # 그것만 보고 습도를 안 실어 보내면 기기가 자기 최소값으로 되돌린다.
+        # Consult the range of **the mode being entered**. `self.target_humidity` reads
+        # against the *current* mode, so it is always `None` at the moment of moving from
+        # ventilate into dehumidify. Trusting only that and omitting the humidity makes the
+        # device fall back to its own minimum.
         target = humidity
         bounds = self.humidity_bounds(mode, option)
         if target is None and bounds is not None:
@@ -1125,7 +1159,7 @@ class AironeDevice:
                     break
         if target is not None and bounds is not None:
             target = max(bounds[0], min(bounds[1], target))
-            # 다음 왕복에서도 쓴다.
+            # Reused on the next round trip as well.
             self.last_humidity = target
             controller["additionalData"] = {
                 "type": AIRONE_HUMIDITY_TYPE,

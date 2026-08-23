@@ -1,8 +1,8 @@
-"""그동안 파싱만 하고 버리던 보일러 상태 필드를 검증한다.
+"""Verify the boiler status fields that used to be parsed and thrown away.
 
-여기 쓰는 값은 실기기(NR-67D) 진단 덤프에서 그대로 가져왔다. 44개 status 필드
-중 25개가 쓰이지 않고 있었고, 그중 뜻이 확실한 것만 연다. 확실하지 않은 것은
-**이름을 붙이지 않고 원시값으로** 남기는 것이 이 저장소의 규칙이다.
+The values here come straight from a real NR-67D diagnostics dump. Of its 44 status fields,
+25 were unused, and only those whose meaning is certain are opened. Leaving the uncertain
+ones **unnamed, as raw values**, is a rule of this repository.
 """
 
 from __future__ import annotations
@@ -30,8 +30,9 @@ def make_boiler() -> BoilerDevice:
                 "did": {
                     "response": {
                         "macAddress": "001122334455",
-                        # 이 기기는 온수를 분명히 쓰는데도 hotWaterUse 가 1 이다.
-                        # feature 의 *Use 를 status 와 같은 규약으로 읽으면 안 된다.
+                        # This device plainly uses hot water, yet hotWaterUse reads 1. The
+                        # *Use fields of feature must not be read on the same convention as
+                        # status.
                         "feature": {"hotWaterUse": 1, "outsideTemperatureDisplayUse": 1},
                     }
                 },
@@ -42,7 +43,7 @@ def make_boiler() -> BoilerDevice:
     return device
 
 
-# 실기기 진단 덤프의 status 그대로다.
+# The status block exactly as it appears in a real diagnostics dump.
 STATUS = {
     "outsideTemperature": 270,
     "DHWUse": 1,
@@ -64,94 +65,94 @@ device = make_boiler()
 device.apply_status(STATUS, now=100.0)
 
 
-r.section("외기 온도")
+r.section("outside temperature")
 
-r.ok(device.outside_temperature == 27.0, "0.1℃ 단위로 읽는다")
-# 이 기기는 outsideTemperatureDisplayUse 가 1 인데도 값이 온다. 그 플래그를
-# 조건으로 걸었다면 위 27.0 이 아니라 None 이 나왔을 것이다.
+r.ok(device.outside_temperature == 27.0, "read in 0.1C units")
+# On this device the value arrives even with outsideTemperatureDisplayUse at 1. Gating on
+# that flag would have produced None above instead of 27.0.
 r.ok(
     device.supports_feature("outsideTemperatureDisplayUse") is False
     and device.outside_temperature == 27.0,
-    "feature 플래그가 꺼져 있어도 값이 오면 읽는다",
+    "a value that arrives is read even with the feature flag off",
 )
 r.ok(
-    "지역 기상 관측값" in source("boiler.py"),
-    "보일러가 잰 값이 아니라는 것을 적었다",
+    "a regional weather observation" in source("boiler.py"),
+    "it records that the boiler did not measure this",
 )
 r.ok(
     "집 마당 기온으로 쓰지" in source("../../README.md"),
-    "README 에 집 기온이 아니라고 경고했다",
+    "the README warns this is not the temperature at the house",
 )
 device.apply_status({"outsideTemperature": None}, now=110.0)
-r.ok(device.outside_temperature is None, "값이 없으면 추측하지 않는다")
+r.ok(device.outside_temperature is None, "with no value, nothing is guessed")
 device.apply_status({"outsideTemperature": 270}, now=120.0)
 
 
-r.section("온수 사용 감지")
+r.section("detecting hot-water use")
 
-r.ok(device.hot_water_running is False, "DHWUse 1 은 사용 안 함이다")
-r.ok(device.hot_water_sustained is False, "DHWUseSustained 도 같은 인코딩이다")
+r.ok(device.hot_water_running is False, "DHWUse 1 means not in use")
+r.ok(device.hot_water_sustained is False, "DHWUseSustained uses the same encoding")
 device.apply_status({"DHWUse": 2, "DHWUseSustained": 2}, now=130.0)
-r.ok(device.hot_water_running is True, "2 는 사용 중이다")
-r.ok(device.hot_water_sustained is True, "연속 사용도 2 가 켜짐이다")
+r.ok(device.hot_water_running is True, "2 means in use")
+r.ok(device.hot_water_sustained is True, "sustained use is on at 2 as well")
 device.apply_status({"DHWUse": 7}, now=140.0)
-r.ok(device.hot_water_running is None, "모르는 값은 켜짐으로 추측하지 않는다")
+r.ok(device.hot_water_running is None, "an unrecognised value is not guessed to be on")
 device.apply_status({"DHWUse": 1}, now=150.0)
 
 
-r.section("유량과 신호")
+r.section("flow rates and signal")
 
-r.ok(device.hot_water_flow_rate == 3.2, "온수 유량은 0.1 단위다")
-r.ok(device.heating_flow_rate == 2.2, "난방 유량도 0.1 단위다")
-r.ok(device.wifi_rssi == 54, "Wi-Fi 신호는 원시 정수 그대로다")
-r.ok("단위를 확인하지 못했다" in source("boiler.py"), "단위를 모른다고 적었다")
-r.ok("L/min" in source("sensor.py"), "유량 센서에 분당 리터를 쓴다")
+r.ok(device.hot_water_flow_rate == 3.2, "hot-water flow is in 0.1 units")
+r.ok(device.heating_flow_rate == 2.2, "heating flow is in 0.1 units too")
+r.ok(device.wifi_rssi == 54, "the Wi-Fi signal passes through as a raw integer")
+r.ok("The unit was never confirmed" in source("boiler.py"), "it records that the unit is unknown")
+r.ok("L/min" in source("sensor.py"), "the flow sensors use litres per minute")
 
 
-r.section("고장 비트")
+r.section("fault bits")
 
-r.ok(device.fault_status == (0, 0), "두 값을 함께 읽는다")
+r.ok(device.fault_status == (0, 0), "both values are read together")
 device.apply_status({"faultStatus1": 4}, now=160.0)
-r.ok(device.fault_status == (4, 0), "한쪽만 와도 나머지를 0 으로 채운다")
+r.ok(device.fault_status == (4, 0), "with only one present, the other fills in as 0")
 device.apply_status({"faultStatus1": 0}, now=170.0)
 empty = make_boiler()
-r.ok(empty.fault_status is None, "둘 다 없으면 판단하지 않는다")
+r.ok(empty.fault_status is None, "with neither present, no judgement is made")
 
 
-r.section("난방 강도는 읽기만 한다")
+r.section("heating intensity is read only")
 
-r.ok(device.heating_intensity == 3, "원시 단계 값을 그대로 준다")
+r.ok(device.heating_intensity == 3, "the raw step value passes through")
 intensity_source = source("sensor.py").split("class BoilerHeatingIntensitySensor")[1]
-r.ok("이름을 붙이지 않는다" in intensity_source, "단계 이름을 붙이지 않는 이유를 적었다")
+r.ok("with no label" in intensity_source, "it records why the steps are left unnamed")
 r.ok(
     "async_set" not in intensity_source.split("class ")[0],
-    "제어 경로를 만들지 않는다",
+    "no control path is created",
 )
 r.ok(
     "heatingIntensity" not in source("switch.py")
     and "heatingIntensity" not in source("number.py")
     and "heatingIntensity" not in source("select.py"),
-    "난방 강도를 제어 엔티티로 만들지 않는다",
+    "heating intensity gets no control entity",
 )
 
 
-r.section("예약은 읽기만 한다")
+r.section("schedules are read only")
 
-r.ok(device.repeat_reservation_interval == (1, 10), "반복 예약 주기를 시·분으로 읽는다")
-r.ok(device.day_cycle_reservation == "0" * 24, "24시간 예약 원문을 그대로 남긴다")
-r.ok(device.reservation_enabled("programReservationUse") is False, "예약 꺼짐을 읽는다")
+r.ok(device.repeat_reservation_interval == (1, 10), "the repeat interval is read as hours and minutes")
+r.ok(device.day_cycle_reservation == "0" * 24, "the raw 24-hour schedule is kept verbatim")
+r.ok(device.reservation_enabled("programReservationUse") is False, "a disabled schedule is read")
 device.apply_status({"programReservationUse": 2}, now=180.0)
-r.ok(device.reservation_enabled("programReservationUse") is True, "예약 켜짐을 읽는다")
+r.ok(device.reservation_enabled("programReservationUse") is True, "an enabled schedule is read")
 r.ok(
-    device.reservation_enabled("없는키") is None,
-    "값이 없으면 예약 상태를 추측하지 않는다",
+    device.reservation_enabled("missingKey") is None,
+    "with no value, the schedule state is not guessed",
 )
 reservation_source = source("sensor.py").split("class BoilerReservationSensor")[1]
-r.ok("바꾸지 않는다" in reservation_source, "예약을 쓰지 않는 이유를 적었다")
-r.ok("해석하지 않고" in source("boiler.py"), "시간표 각 자리를 해석하지 않는다고 적었다")
+r.ok("Never write it" in reservation_source, "it records why schedules are never written")
+r.ok("kept raw, uninterpreted" in source("boiler.py"), "it records that the table positions are left uninterpreted")
 
 
-r.section("모르는 명령 코드를 모은다")
+r.section("collecting command codes of unknown meaning")
 
 fresh = make_boiler()
 fresh.apply_status({"command": 33554438}, now=200.0)
@@ -159,49 +160,49 @@ fresh.apply_status({"command": 33554438}, now=210.0)
 fresh.apply_status({"command": 33554434}, now=220.0)
 r.ok(
     fresh.observed_commands == {33554438: 2, 33554434: 1},
-    "본 적 있는 명령 코드를 횟수와 함께 모은다",
+    "every command code seen is collected with its count",
 )
 r.ok(
     "observed_commands" in source("diagnostics.py"),
-    "진단에 남겨 앱 조작으로 코드를 알아낼 수 있게 한다",
+    "kept in diagnostics so the codes can be learned by pressing buttons in the app",
 )
 
 boiler_source = source("boiler.py")
-r.ok("0x2000004 = 33554436" in boiler_source, "관측한 외출 명령 코드를 적었다")
-r.ok("추측이 아니라 관측이다" in boiler_source, "어떻게 알아냈는지 적었다")
+r.ok("0x2000004 = 33554436" in boiler_source, "the observed away command code is recorded")
+r.ok("These are observations, not" in boiler_source, "it records how that was learned")
 r.ok(
     "33554436" not in source("select.py") and "33554436" not in source("switch.py"),
-    "기기가 실행하지 않는 명령을 제어 엔티티로 열지 않는다",
+    "a command the device never executes gets no control entity",
 )
-r.ok("gooutUse" in boiler_source, "지원 플래그와 함께 봐야 한다는 근거를 적었다")
+r.ok("gooutUse" in boiler_source, "it records that this must be read alongside the support flags")
 
 
-r.section("설명서에서 옮긴 오류 코드")
+r.section("error codes transcribed from the manual")
 
 from navien_smarthome.boiler import BOILER_ERROR_NAMES, BOILER_STATE_HEATING  # noqa: E402
 
-r.ok(BOILER_STATE_HEATING == "연소", "설명서가 쓰는 말로 운전 상태를 표시한다")
-r.ok(BOILER_ERROR_NAMES[1] == "열교환기 과열", "E001 을 옮겼다")
-r.ok(BOILER_ERROR_NAMES[110] == "배기폐쇄", "세 자리 번호도 옮겼다")
-r.ok(BOILER_ERROR_NAMES[792] == "환탕 라인 순환 이상", "표의 마지막 항목까지 옮겼다")
-r.ok(len(BOILER_ERROR_NAMES) == 31, "설명서 표의 항목 수와 같다")
+r.ok(BOILER_STATE_HEATING == "연소", "the running state uses the manual's own wording")
+r.ok(BOILER_ERROR_NAMES[1] == "열교환기 과열", "E001 was transcribed")
+r.ok(BOILER_ERROR_NAMES[110] == "배기폐쇄", "three-digit numbers were transcribed too")
+r.ok(BOILER_ERROR_NAMES[792] == "환탕 라인 순환 이상", "the table was transcribed through its last entry")
+r.ok(len(BOILER_ERROR_NAMES) == 31, "the count matches the manual's table")
 
 coded = make_boiler()
 coded.apply_status({"errorCode": 110}, now=300.0)
-r.ok(coded.error_label == "E110", "설명서와 같은 표기를 만든다")
-r.ok(coded.error_name == "배기폐쇄", "이상 발생 내용을 붙인다")
+r.ok(coded.error_label == "E110", "it builds the same notation as the manual")
+r.ok(coded.error_name == "배기폐쇄", "the fault description is attached")
 coded.apply_status({"errorCode": 999}, now=310.0)
-r.ok(coded.error_label == "E999", "모르는 번호도 표기는 만든다")
-r.ok(coded.error_name is None, "표에 없는 번호는 이름을 지어내지 않는다")
+r.ok(coded.error_label == "E999", "an unknown number still gets a label")
+r.ok(coded.error_name is None, "a number absent from the table gets no invented name")
 coded.apply_status({"errorCode": 0}, now=320.0)
-r.ok(coded.error_label is None and coded.error_name is None, "정상이면 오류가 없다")
+r.ok(coded.error_label is None and coded.error_name is None, "a healthy device reports no error")
 r.ok(
-    "실기기에서 오류를\n# 재현해 확인한 것이 아니라" in boiler_source,
-    "번호를 어떻게 맞췄는지 밝혔다",
+    "alignment of two notations" in boiler_source,
+    "it states how the numbers were matched",
 )
 
 
-r.section("새 엔티티가 실제로 만들어진다")
+r.section("the new entities really are created")
 
 sensor_setup = source("sensor.py").split("async_add_entities(entities)")[0]
 for name in (
@@ -211,11 +212,11 @@ for name in (
     "BoilerHeatingIntensitySensor",
     "BoilerReservationSensor",
 ):
-    r.ok(name in sensor_setup, f"{name} 를 등록한다")
+    r.ok(name in sensor_setup, f"{name} is registered")
 
 binary_setup = source("binary_sensor.py").split("async_add_entities(entities)")[0]
-r.ok("BoilerHotWaterRunning" in binary_setup, "온수 사용 중을 등록한다")
-r.ok("BoilerFaultProblem" in binary_setup, "고장 상태를 등록한다")
+r.ok("BoilerHotWaterRunning" in binary_setup, "the hot-water-in-use sensor is registered")
+r.ok("BoilerFaultProblem" in binary_setup, "the fault-status sensor is registered")
 
 
 sys.exit(r.finish())

@@ -1,7 +1,7 @@
-"""전체 검토에서 나온 수정들이 되돌아가지 않게 붙잡는다.
+"""Pin the fixes that came out of the full review so they cannot regress.
 
-각 절은 「무엇이 잘못됐었나」를 먼저 적는다. 고친 모양만 적으면 다음 사람이
-그 줄을 왜 못 지우는지 알 수 없다.
+Each section states **what was wrong** first. Recording only the corrected shape leaves the
+next person with no way to know why that line cannot be deleted.
 """
 
 from __future__ import annotations
@@ -13,93 +13,96 @@ from harness import Report, source
 r = Report()
 
 
-r.section("재인증의 입구가 있다")
+r.section("the re-authentication entry point exists")
 
-# `ConfigEntryAuthFailed` 를 올리면 HA 는 `SOURCE_REAUTH` 로 흐름을 열고
-# `async_step_reauth` 를 찾는다. 확인 화면만 있고 입구가 없으면 흐름이 열리지
-# 않아, 비밀번호를 바꾼 사용자가 통합을 지웠다 다시 까는 수밖에 없다 —
-# 엔티티 ID 와 장기 통계가 통째로 끊긴다.
+# Raising `ConfigEntryAuthFailed` makes HA open the flow with `SOURCE_REAUTH` and look for
+# `async_step_reauth`. With only a confirmation step and no entry point, the flow never opens
+# and a user who changed their password has to delete and reinstall the integration — losing
+# every entity id and all long-term statistics.
 flow = source("config_flow.py")
-r.ok("async def async_step_reauth(" in flow, "입구가 정의돼 있다")
-r.ok("async def async_step_reauth_confirm(" in flow, "확인 화면도 있다")
+r.ok("async def async_step_reauth(" in flow, "the entry point is defined")
+r.ok("async def async_step_reauth_confirm(" in flow, "the confirmation step exists too")
 r.ok(
     flow.index("async def async_step_reauth(")
     < flow.index("async def async_step_reauth_confirm("),
-    "입구가 확인 화면보다 먼저 온다",
+    "the entry point comes before the confirmation step",
 )
 
 for module in ("__init__.py", "coordinator.py"):
     if "ConfigEntryAuthFailed" in source(module):
-        r.ok(True, f"{module} 이 재인증을 요구할 수 있다 — 입구가 필요하다")
+        r.ok(True, f"{module} can demand re-authentication, so the entry point is needed")
 
 
-r.section("통계 앞 누적을 0 으로 되돌리지 않는다")
+r.section("the preceding statistics total is never reset to 0")
 
-# 서버가 주는 범위가 앞으로 밀렸는데 그 자리에 행이 없으면(그 달에 사용량이
-# 아예 없었으면 서버가 행을 주지 않는다) 예전에는 0 을 돌려줬다. 그러면 2년치
-# 시리즈가 통째로 0 부터 다시 쌓여 경계에 거대한 음수 사용량이 그려진다 —
-# HA 는 `sum` 의 차분으로 사용량을 계산하기 때문이다.
+# When the range the server sends moves forward and no row sits at that point (the server
+# sends no row for a month with no usage at all), this used to return 0. That restarted the
+# whole two-year series from zero and drew a huge negative usage at the boundary, because HA
+# derives usage from differences in `sum`.
 gas = source("gas_statistics.py")
-r.ok("_async_last_sum_before" in gas, "앞의 마지막 누적을 찾는 길이 있다")
+r.ok("_async_last_sum_before" in gas, "there is a path that finds the last preceding total")
 baseline = gas.split("async def _async_baseline")[1].split("\nasync def ")[0]
 r.ok(
     "_async_last_sum_before" in baseline,
-    "자리에 행이 없으면 그 길로 넘어간다",
+    "with no row at that point, it takes that path",
 )
 r.ok(
     baseline.rfind("return 0.0") < baseline.find("_async_last_sum_before"),
-    "0 을 돌려주기 전에 먼저 앞을 찾는다",
+    "it searches backwards before returning 0",
 )
 
 
-r.section("가스 통계 반영이 겹치지 않는다")
+r.section("gas statistics writes never overlap")
 
-# 반영은 「직전 누적 읽기 → 더하기 → 쓰기」다. 두 번째가 첫 번째의 쓰기 전에
-# 읽으면 같은 값에서 출발해 둘 다 잘못 쓴다. 초기 요청과 시간별 갱신이
-# 겹치거나 서버가 같은 응답을 두 번 줄 때 일어날 수 있다.
+# The sequence is read the previous total, add, write. If the second read happens before the
+# first write, both start from the same value and both write the wrong one. That can occur
+# when the initial request overlaps the hourly refresh, or when the server returns the same
+# response twice.
 coord = source("coordinator.py")
-r.ok("_gas_statistics_locks" in coord, "기기별 락을 둔다")
+r.ok("_gas_statistics_locks" in coord, "there is a per-device lock")
 importer = coord.split("async def _async_import_gas_statistics")[1]
 importer = importer.split("\n    @callback")[0]
-r.ok("async with lock" in importer, "락을 잡고 반영한다")
+r.ok("async with lock" in importer, "the write happens while holding the lock")
 r.ok(
     importer.index("async with lock") < importer.index("async_import_gas_statistics("),
-    "락을 잡은 다음에 부른다",
+    "the call comes after the lock is taken",
 )
 
 
-r.section("MQTT 백오프가 CONNACK 마다 리셋되지 않는다")
+r.section("the MQTT backoff does not reset on every CONNACK")
 
-# 붙자마자 끊기는 상황에서 백오프가 영원히 첫 칸(5초)에 머물렀다. 계정당
-# 세션이 하나뿐이라 사용자가 나비엔 앱을 열어두면 실제로 그렇게 된다 —
-# 5초마다 재접속하면서 매번 기기 전체에 초기 상태 요청을 다시 보냈다.
+# When the link dropped immediately after connecting, the backoff sat on its first delay
+# (5 seconds) forever. With one session per account that really happens whenever the user
+# leaves the Navien app open — reconnecting every five seconds and re-sending the initial
+# status request to every device each time.
 mq = source("mqtt.py")
-r.ok("_STABLE_CONNECTION_SECONDS" in mq, "얼마나 버텨야 「제대로 붙었다」인지 정한다")
+r.ok("_STABLE_CONNECTION_SECONDS" in mq, "it defines how long counts as a real connection")
 run = mq.split("async def _async_run")[1].split("\n    async def ")[0]
-r.ok("self._attempt = 0" in run, "리셋하는 자리가 있다")
+r.ok("self._attempt = 0" in run, "there is a place that resets it")
 r.ok(
     run.index("_STABLE_CONNECTION_SECONDS") < run.index("self._attempt = 0"),
-    "버틴 시간을 확인한 뒤에 리셋한다",
+    "the reset happens after checking how long it held",
 )
 r.ok(
     "await self._async_wait_connected()\n                self._attempt = 0" not in run,
-    "CONNACK 직후에 리셋하지 않는다",
+    "no reset immediately after CONNACK",
 )
 
 
-r.section("한 번 도는 타이머도 취소된다")
+r.section("one-shot timers are cancelled too")
 
-# 언로드·리로드 뒤에 깨어나면 이미 없어진 통합이 서버로 요청을 보낸다.
-# 예외는 잡히지만 비공식 서버에 헛된 요청이 나가고, 관리되는 다른 타이머와
-# 앞뒤가 안 맞았다.
-r.ok("_oneshot_unsubs" in coord, "한 번 도는 타이머를 붙잡아 둔다")
-r.ok("_track_oneshot" in coord, "붙잡는 길이 있다")
+# Waking after an unload or reload has an integration that no longer exists send a request to
+# the server. The exception is caught, but a pointless request still reaches an unofficial
+# server, and it was inconsistent with every other timer, which is managed.
+r.ok("_oneshot_unsubs" in coord, "one-shot timers are held")
+r.ok("_track_oneshot" in coord, "there is a path that holds them")
 stop = coord.split("async def async_stop_mqtt")[1].split("\n    @property")[0]
-r.ok("_oneshot_unsubs" in stop, "멈출 때 함께 취소한다")
+r.ok("_oneshot_unsubs" in stop, "they are cancelled on shutdown")
 
-# `async_call_later` 를 부르는 자리는 모두 어딘가에 결과를 남겨야 한다.
-# **앞줄까지 본다** — 여러 줄로 감싸면 호출이 있는 줄에는 대입도 감싸는
-# 이름도 없다. 줄 하나만 보던 판정이 멀쩡한 코드를 세 건 물었다.
+# Every call to `async_call_later` has to keep its result somewhere.
+# **The preceding line is inspected too**: when the call is wrapped across several lines, the
+# line holding it has neither the assignment nor the wrapping name. A single-line check bit
+# three pieces of perfectly good code.
 lines = coord.splitlines()
 loose = []
 for index, line in enumerate(lines):
@@ -109,45 +112,45 @@ for index, line in enumerate(lines):
     if "=" in context or "_track_oneshot" in context:
         continue
     loose.append(line.strip())
-r.ok(not loose, f"결과를 버리는 async_call_later 가 없다 ({len(loose)}건)")
+r.ok(not loose, f"no async_call_later discards its result ({len(loose)} found)")
 
 
-r.section("동시에 실패해도 로그인은 한 번만 한다")
+r.section("simultaneous failures still log in only once")
 
-# 계정당 세션이 하나뿐인 서버라, 동시에 실패한 요청들이 각자 로그인하면
-# 서로를 무효화한다.
+# The server allows one session per account, so requests that fail at the same time would
+# invalidate each other by each logging in.
 api = source("api.py")
 login = api.split("async def async_login")[1].split("\n    async def ")[0]
-r.ok("seen = self._session" in login, "들어오기 전 세션을 기억한다")
+r.ok("seen = self._session" in login, "it remembers the session from before entering")
 r.ok(
     "self._session is not seen" in login,
-    "기다리는 동안 바뀌었으면 그것을 쓴다",
+    "if it changed while waiting, that one is used",
 )
 r.ok(
     login.index("async with self._lock") < login.index("self._session is not seen"),
-    "락 안에서 확인한다",
+    "the check happens inside the lock",
 )
 
 
-r.section("설정온도 범위가 지금 값을 따른다")
+r.section("the setpoint range follows the current value")
 
-# 시작할 때 한 번 읽어 고정하면, 서버가 범위를 바꿨을 때 슬라이더는 옛
-# 범위를 보여준다. 사용자는 움직이는데 명령은 거부된다.
+# Reading it once at startup and freezing it leaves the slider showing the old range after
+# the server changes it: the user moves it and the command is rejected.
 num = source("number.py")
-r.ok("def native_min_value" in num, "최소값을 속성으로 낸다")
-r.ok("def native_max_value" in num, "최대값을 속성으로 낸다")
-r.ok("_fallback_bounds" in num, "기기가 사라진 순간을 위한 값도 남긴다")
+r.ok("def native_min_value" in num, "the minimum is exposed as a property")
+r.ok("def native_max_value" in num, "the maximum is exposed as a property")
+r.ok("_fallback_bounds" in num, "a value is kept for the moment the device disappears")
 
 
-r.section("쓰지 않는 import 가 없다")
+r.section("there are no unused imports")
 
-# 같은 유형이 두 번 나왔다 — `coordinator.py` 의 `_dig`, `airone.py` 의
-# `LEGACY_EXTRA_FIELDS`. 둘 다 있어도 아무 일이 없어 오래 남아 있었다.
+# The same kind of thing happened twice — `_dig` in `coordinator.py` and
+# `LEGACY_EXTRA_FIELDS` in `airone.py`. Neither did any harm, so both lingered.
 for module, name in (
     ("coordinator.py", "_dig"),
     ("airone.py", "LEGACY_EXTRA_FIELDS"),
 ):
-    r.ok(name not in source(module), f"{module} 이 {name} 를 들이지 않는다")
+    r.ok(name not in source(module), f"{module} does not import {name}")
 
 
 sys.exit(r.finish())

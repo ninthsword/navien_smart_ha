@@ -1,11 +1,11 @@
-"""Home Assistant 없이 통합 모듈을 실제로 import 하기 위한 최소 스텁.
+"""A minimal stub so the integration modules can actually be imported without Home Assistant.
 
-`py_compile` 은 문법만 본다. **클래스 본문의 이름 오류** — 지운 import 를 계속
-참조한다든지 — 는 실제로 import 해 봐야 나온다. 그래서 HA 를 설치하지 않고도
-전 모듈을 불러볼 수 있게 필요한 만큼만 흉내 낸다.
+`py_compile` checks syntax only. **A name error in a class body** — still referencing an
+import that was deleted, say — only surfaces on a real import. So just enough of HA is
+imitated for every module to be loaded without installing it.
 
-여기 있는 것은 **이름과 모양뿐**이다. HA 의 동작을 재현하지 않는다. HA 가 실제로
-어떻게 도는지 알아야 하는 시험은 HA 원본을 직접 받아 쓴다.
+What lives here is **names and shapes only**; none of HA's behaviour is reproduced. A test
+that needs to know how HA really behaves takes HA's own source instead.
 """
 
 import sys
@@ -23,7 +23,7 @@ def stub(name: str, pkg: bool = False, **attrs) -> types.ModuleType:
 
 
 class Base:
-    """무엇이든 받아주는 껍데기. 상속·제네릭 첨자 모두 통과시킨다."""
+    """A shell that accepts anything, allowing both subclassing and generic subscripting."""
 
     def __init__(self, *args, **kwargs) -> None:
         pass

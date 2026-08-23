@@ -1,14 +1,16 @@
-"""전원 스위치.
+"""Power switches.
 
-**매트에는 언제나 만든다.** `functions.powerCtrl` 로 가르지 않는다 — 그 규칙은
-근거가 없었고, 그 때문에 EME-520 사용자는 기기를 끌 방법이 아예 없었다 (이슈 #16).
+**A mat always gets one.** `functions.powerCtrl` does not gate it — that rule had no
+evidence behind it, and it left EME-520 owners with no way to turn the device off at all
+(issue #16).
 
-앱은 그 필드를 **읽지도 않는다.** `ResponseDataSource.getPowerCtrl()` 을 부르는
-곳이 앱 전체에 0건이다 (APK 2.10.4 전수 확인). 파싱만 하고 버리는 값이다.
+The app does not even **read** that field: nothing in it calls
+`ResponseDataSource.getPowerCtrl()` (checked exhaustively against APK 2.10.4). The value is
+parsed and discarded.
 
-전원은 `operationMode` 로 간다. 이슈 #16 제보자의 EME-520 은 `powerCtrl: false`
-인데도 상태 기록에 `operationMode` 가 1↔0 으로 네 번 오갔고, 우리가 보낸
-`operationMode: 1` 명령 다섯 건이 전부 반영됐다.
+Power goes through `operationMode`. The EME-520 of the reporter in issue #16 had
+`powerCtrl: false`, yet its status history shows `operationMode` moving 1↔0 four times, and
+all five `operationMode: 1` commands we sent took effect.
 """
 
 from __future__ import annotations
@@ -34,15 +36,15 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    # `has_power_ctrl` 로 거르지 않는다 (모듈 설명 참조). 진단에는 그대로 남겨
-    # 두었으니 서버가 무엇을 알려주는지는 계속 볼 수 있다.
+    # Not filtered by `has_power_ctrl` — see the module docstring. The field stays in
+    # diagnostics, so what the server reports is still visible.
     entities: list[SwitchEntity] = [
         NavienSmartPowerSwitch(coordinator, device)
         for device in (coordinator.data or {}).values()
     ]
-    # **서버가 잠금 기능을 알려줄 때만 만든다.** 앱은 모델 번호 표로 가르는데
-    # (`MateInfoData` 의 `case 257: supportLock = false`) 표에 실린 모델이 다섯
-    # 개뿐이라 새 모델을 못 따라간다. 서버 쪽 선언을 쓴다.
+    # **Created only when the server declares the lock feature.** The app decides from a
+    # model-number table (`case 257: supportLock = false` in `MateInfoData`), but that table
+    # lists only five models and cannot keep up with new ones. Trust the server instead.
     entities.extend(
         NavienSmartChildLockSwitch(coordinator, device)
         for device in (coordinator.data or {}).values()
@@ -72,7 +74,7 @@ async def async_setup_entry(
 
 
 class BoilerPowerSwitch(BoilerEntity, SwitchEntity):
-    """앱 상단 전원 버튼과 같은 NR-67D 전원."""
+    """NR-67D power, the same control as the power button at the top of the app."""
 
     _attr_name = "전원"
     _attr_icon = "mdi:power"
@@ -98,7 +100,7 @@ class BoilerPowerSwitch(BoilerEntity, SwitchEntity):
 
 
 class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):
-    """앱에서 확인한 빠른온수 계열의 1/2 값 스위치."""
+    """A 1/2-valued switch in the fast-hot-water family, confirmed against the app."""
 
     def __init__(
         self,
@@ -132,22 +134,23 @@ class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):
 
 
 class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):
-    """`operationMode` 0/1 로 전원을 끄고 켠다."""
+    """Turns power off and on through `operationMode` 0/1."""
 
-    # **기기의 대표 엔티티다.** 이름을 두지 않으면 HA 가 기기 이름을 그대로 쓴다
+    # **This is the device's primary entity.** With no name of its own, HA shows the device
     # (`Entity.use_device_name` — "the single main feature of a device").
     #
-    # 그래서 목록에서 **항상 맨 위**에 온다. 기기 페이지는 표시 이름을 사전순으로
-    # 정렬하는데, 한글은 `우(ㅇ)` 가 `좌(ㅈ)` 보다 앞이라 좌우 분리형에서
-    # `우측 → 전원 → 좌측` 이라는 이상한 순서가 나왔다.
+    # so it sorts **first** in the list. The device page orders entities by display name, and
+    # in Korean `우(ㅇ)` sorts before `좌(ㅈ)`, which on a split left/right mat produced the
+    # odd order `right → power → left`.
     #
-    # **자격이 있는가** — 전원은 어느 모델이든 기기당 하나다. `operationMode` 가
-    # `heater` 바깥에 있고, 좌/우를 아무리 만져도 그 값은 안 움직인다(실측).
-    # 좌우 난방 단계는 둘이라 이름을 유지한다. `tplink` 가 쓰는 기준과 같다 —
-    # 「기기당 하나면 기기 이름, 여럿이면 자기 이름」.
+    # **Does it qualify?** Every model has exactly one power control per device.
+    # `operationMode` sits outside `heater`, and no amount of touching left or right moves it
+    # (observed on a real device). The left/right heating steps come in pairs, so they keep
+    # their own names. This is the rule `tplink` uses: one per device takes the device name,
+    # several keep their own.
     #
-    # `_attr_name` 이 `translation_key` 를 이긴다 (`Entity._name_internal` 첫 줄).
-    # 번역 항목은 에어원 전원이 계속 쓰므로 남겨둔다.
+    # `_attr_name` wins over `translation_key` (first line of `Entity._name_internal`). The
+    # translation entry stays because the Airone power switch still uses it.
     _attr_name = None
     _attr_icon = "mdi:power"
 
@@ -183,13 +186,13 @@ class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):
 
 
 class NavienSmartChildLockSwitch(NavienSmartEntity, SwitchEntity):
-    """조작 잠금. 기기 본체 버튼을 잠근다.
+    """Control lock, which locks the buttons on the device itself.
 
-    **v0.12.0 은 이것을 읽기 전용 센서로 만들었다. 틀렸다.** 앱에 자물쇠 버튼이
-    있는데 못 찾았다 — 명령을 문자열 그대로 넘기는 호출만 훑었고, 잠금은
-    `"lock-on"`/`"lock-off"` 를 **변수로** 넘긴다.
+    **v0.12.0 shipped this as a read-only sensor. That was wrong.** The app has a padlock
+    button and we missed it: the search only covered calls passing the command as a literal,
+    while the lock passes `"lock-on"`/`"lock-off"` through a **variable**.
 
-    켜면 잠근다. 앱 버튼과 같은 방향이다.
+    On means locked, the same direction as the app's button.
     """
 
     _attr_icon = "mdi:lock"
@@ -220,15 +223,16 @@ class NavienSmartChildLockSwitch(NavienSmartEntity, SwitchEntity):
 
 
 class AironePowerSwitch(AironeEntity, SwitchEntity):
-    """`running` 1/2 로 전원을 끄고 켠다.
+    """Turns power off and on through `running` 1/2.
 
-    구세대는 이 값이 반대다(운전=2). `coordinator` 가 구세대를 걸러내므로 여기서는
-    신형 규약만 다룬다 — 세대 판정을 두 곳에 두면 한쪽만 고치는 실수가 난다.
+    The older generation inverts this value (running = 2). The coordinator filters those out,
+    so only the newer protocol is handled here — deciding the generation in two places invites
+    fixing only one of them.
     """
 
-    # 매트 전원과 같은 이유로 기기 대표다 (위 `NavienSmartPowerSwitch` 주석).
-    # 에어원도 전원은 기기당 하나이고, 운전모드·풍량·희망습도는 여럿이라
-    # 각자 이름을 유지한다.
+    # The primary entity for the same reason as the mat power switch (see the comment on
+    # `NavienSmartPowerSwitch` above). Airone also has one power control per device, while
+    # mode, fan speed and target humidity come in several and keep their own names.
     _attr_name = None
     _attr_icon = "mdi:power"
 

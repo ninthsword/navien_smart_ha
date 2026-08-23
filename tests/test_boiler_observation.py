@@ -1,4 +1,4 @@
-"""보일러 상태와 NR-67D 설정온도 명령을 검증한다."""
+"""Verify boiler status and the NR-67D setpoint commands."""
 
 from __future__ import annotations
 
@@ -23,25 +23,25 @@ from navien_smarthome.diagnostics import TO_REDACT, _identifiers, _scrub
 r = Report()
 
 
-r.section("상태 센서와 제한된 제어")
+r.section("status sensors and limited control")
 
-r.ok(TOPIC_PREFIX[SERVICE_BOILER] == "smarttok", "앱과 같은 관찰 토픽을 구독한다")
-r.ok(SERVICE_BOILER in SUPPORTED_SERVICE_CODES, "보일러를 지원 기기로 분류한다")
-r.ok("async_boiler_request" in source("api.py"), "보일러 전용 봉투만 중계한다")
-r.ok("boiler.build_start_payload" in source("coordinator.py"), "MQTT 연결 뒤 초기 상태를 요청한다")
+r.ok(TOPIC_PREFIX[SERVICE_BOILER] == "smarttok", "it subscribes to the same observation topic as the app")
+r.ok(SERVICE_BOILER in SUPPORTED_SERVICE_CODES, "the boiler is classed as a supported device")
+r.ok("async_boiler_request" in source("api.py"), "only the boiler envelope is relayed")
+r.ok("boiler.build_start_payload" in source("coordinator.py"), "the initial status is requested once MQTT connects")
 r.ok(
     "_schedule_boiler_readback(boiler)" in source("coordinator.py"),
-    "초기 요청 뒤 일반 상태 조회도 한 번 보낸다",
+    "a plain status query follows the initial request once",
 )
 r.ok(
     "전원·빠른온수·터보온수·설정온도 제어" in source("../../README.md"),
-    "README 에 지원 범위를 적었다",
+    "the README states what is supported",
 )
-r.ok("`대기`, `연소`" in source("../../README.md"), "README 에 상태 센서를 적었다")
-r.ok("히팅 여부와 관계없이" in source("../../README.md"), "README 에 제어 조건을 적었다")
+r.ok("`대기`, `연소`" in source("../../README.md"), "the README lists the status sensor values")
+r.ok("히팅 여부와 관계없이" in source("../../README.md"), "the README states the control condition")
 
 
-r.section("실측 상태 봉투")
+r.section("an observed status envelope")
 
 status = {
     "operationMode": 6,
@@ -71,16 +71,16 @@ envelope = {
 }
 stats = {}
 parsed = extract_boiler_status(json.dumps(envelope).encode(), stats)
-r.ok(parsed == ("001122334455", status), "status 봉투와 물리 기기 ID를 꺼낸다")
-r.ok(stats == {"accepted": 1}, "받은 상태를 집계한다")
+r.ok(parsed == ("001122334455", status), "the status envelope and the physical device id are extracted")
+r.ok(stats == {"accepted": 1}, "received state is counted")
 
 ignored_stats = {}
 r.ok(
     extract_boiler_status(b'{"payload":{"response":{"feature":{}}}}', ignored_stats)
     is None,
-    "DID 응답은 상태로 쓰지 않는다",
+    "a DID response is never used as state",
 )
-r.ok(ignored_stats == {"dropped_no_status": 1}, "상태 아닌 응답을 집계한다")
+r.ok(ignored_stats == {"dropped_no_status": 1}, "non-status responses are counted")
 
 raw_device = {
     "deviceId": "0011223344556272",
@@ -113,9 +113,9 @@ raw_device = {
     },
 }
 device = BoilerDevice.parse(raw_device)
-r.ok(device is not None, "REST 메타데이터로 보일러를 만든다")
+r.ok(device is not None, "the boiler is built from REST metadata")
 assert device is not None
-r.ok(device.nickname == "보일러", "문자열 별칭을 기기명으로 쓴다")
+r.ok(device.nickname == "보일러", "a string nickname becomes the device name")
 dict_nick_device = BoilerDevice.parse(
     {
         **raw_device,
@@ -127,37 +127,37 @@ dict_nick_device = BoilerDevice.parse(
 )
 r.ok(
     dict_nick_device is not None and dict_nick_device.nickname == "보일러",
-    "mainItem 형태 별칭을 기기명으로 쓴다",
+    "a mainItem-shaped nickname becomes the device name",
 )
 device.apply_status(status)
-r.ok(device.indoor_temperature == 30.3, "정밀 실내온도는 0.1℃ 단위다")
-r.ok(device.supply_temperature == 33.5, "난방수 온도는 0.5℃ 단위다")
-r.ok(device.return_temperature == 32.0, "환수 온도는 0.5℃ 단위다")
-r.ok(device.ondol_target_temperature == 30.0, "온돌 설정은 0.5℃ 단위다")
-r.ok(device.hot_water_temperature == 31.0, "온수 현재값은 0.5℃ 단위다")
-r.ok(device.hot_water_target_temperature == 43.0, "온수 설정값은 0.5℃ 단위다")
-r.ok(device.indoor_humidity == 58.5, "실내 습도는 0.1% 단위다")
-r.ok(device.operation_mode == 6, "원시 모드 코드를 보존한다")
-r.ok(device.operation_mode_name == "온돌 난방", "operationMode=6은 온돌 난방 모드다")
-r.ok(device.operation_busy == 2 and not device.heating_is_idle, "실측 히팅 값 2를 보존한다")
-r.ok(device.operating_state == "연소", "전원이 켜지고 operationBusy=2면 연소다")
+r.ok(device.indoor_temperature == 30.3, "the precise indoor temperature is in 0.1C units")
+r.ok(device.supply_temperature == 33.5, "the heating-water temperature is in 0.5C units")
+r.ok(device.return_temperature == 32.0, "the return temperature is in 0.5C units")
+r.ok(device.ondol_target_temperature == 30.0, "the underfloor setpoint is in 0.5C units")
+r.ok(device.hot_water_temperature == 31.0, "the current hot-water value is in 0.5C units")
+r.ok(device.hot_water_target_temperature == 43.0, "the hot-water setpoint is in 0.5C units")
+r.ok(device.indoor_humidity == 58.5, "indoor humidity is in 0.1% units")
+r.ok(device.operation_mode == 6, "the raw mode code is preserved")
+r.ok(device.operation_mode_name == "온돌 난방", "operationMode=6 is the underfloor heating mode")
+r.ok(device.operation_busy == 2 and not device.heating_is_idle, "the observed heating value 2 is preserved")
+r.ok(device.operating_state == "연소", "powered on with operationBusy=2 means combustion")
 device.apply_status({"operationBusy": 1})
-r.ok(device.heating_is_idle, "실측 대기 값 1을 보존한다")
-r.ok(device.operating_state == "대기", "전원이 켜지고 operationBusy=1이면 대기다")
+r.ok(device.heating_is_idle, "the observed idle value 1 is preserved")
+r.ok(device.operating_state == "대기", "powered on with operationBusy=1 means idle")
 device.apply_status({"operationBusy": 3})
-r.ok(device.operating_state is None, "모르는 operationBusy 값은 연소로 추측하지 않는다")
+r.ok(device.operating_state is None, "an unrecognised operationBusy is not guessed to be combustion")
 device.apply_status({"operationMode": 1})
-r.ok(device.operating_state == "꺼짐", "operationMode=1이면 꺼짐이다")
-r.ok(device.operation_mode_name == "꺼짐", "operationMode=1의 모드 이름도 꺼짐이다")
+r.ok(device.operating_state == "꺼짐", "operationMode=1 means powered off")
+r.ok(device.operation_mode_name == "꺼짐", "the mode name for operationMode=1 is off as well")
 device.apply_status({"operationMode": 99})
-r.ok(device.operation_mode_name is None, "모르는 운전 모드는 이름을 추측하지 않는다")
+r.ok(device.operation_mode_name is None, "an unrecognised operating mode gets no guessed name")
 device.apply_status({"operationMode": 6, "operationBusy": 2})
-r.ok(device.status_age is not None, "MQTT 상태를 받은 시각을 진단 정보로 남긴다")
-r.ok(device.error_code == 0 and device.available, "상태를 받은 연결 기기는 사용 가능하다")
-r.ok(device.switch_state("power"), "operationMode가 꺼짐이 아니면 전원 켜짐이다")
-r.ok(device.switch_state("fast_dhw") is False, "빠른온수 1은 꺼짐이다")
-r.ok(device.switch_state("smart_fast_dhw") is False, "스마트운전 1은 꺼짐이다")
-r.ok(device.switch_state("dhw_boost") is True, "터보온수 2는 켜짐이다")
+r.ok(device.status_age is not None, "when MQTT state arrived is kept for diagnostics")
+r.ok(device.error_code == 0 and device.available, "a connected device that received state is available")
+r.ok(device.switch_state("power"), "any operationMode other than off means powered on")
+r.ok(device.switch_state("fast_dhw") is False, "fast hot water 1 means off")
+r.ok(device.switch_state("smart_fast_dhw") is False, "smart operation 1 means off")
+r.ok(device.switch_state("dhw_boost") is True, "turbo hot water 2 means on")
 
 gas_meter = {
     "thisYearMonthTotalGasUsage": 142,
@@ -183,56 +183,56 @@ gas_envelope = {
     }
 }
 gas_update = extract_boiler_status(json.dumps(gas_envelope).encode())
-r.ok(gas_update is not None, "가스 사용량 응답도 보일러에 붙인다")
+r.ok(gas_update is not None, "a gas-usage response attaches to the boiler too")
 assert gas_update is not None
 device.apply_status(gas_update[1], now=700.0)
-r.ok(device.gas_total_month == 14.2, "월 가스 원시값을 앱처럼 10으로 나눈다")
-r.ok(device.gas_heating_month == 9.9, "월 난방 가스 사용량을 푼다")
-r.ok(device.gas_hot_water_month == 4.3, "월 온수 가스 사용량을 푼다")
-r.ok(device.gas_day(date(2026, 8, 20)) == (0.3, 0.1, 0.2), "오늘 일간 가스 3종을 푼다")
-r.ok(device.gas_day(date(2026, 8, 19)) == (0.0, 0.0, 0.0), "같은 달의 빠진 날짜는 0이다")
-r.ok(device.gas_day(date(2026, 7, 31)) is None, "다른 달의 오래된 배열을 오늘 값으로 쓰지 않는다")
-r.ok(device.operation_mode == 6, "가스 응답이 기존 운전 상태를 지우지 않는다")
+r.ok(device.gas_total_month == 14.2, "the monthly raw gas value is divided by 10 as the app does")
+r.ok(device.gas_heating_month == 9.9, "monthly heating gas usage is decoded")
+r.ok(device.gas_hot_water_month == 4.3, "monthly hot-water gas usage is decoded")
+r.ok(device.gas_day(date(2026, 8, 20)) == (0.3, 0.1, 0.2), "all three of today's daily gas figures are decoded")
+r.ok(device.gas_day(date(2026, 8, 19)) == (0.0, 0.0, 0.0), "a missing date within the same month reads 0")
+r.ok(device.gas_day(date(2026, 7, 31)) is None, "a stale array from another month is not used as today")
+r.ok(device.operation_mode == 6, "a gas response does not erase the existing running state")
 
 
-r.section("5분 무통신 상태 확인")
+r.section("the five-minute idle status check")
 
 device.apply_status({"operationBusy": 1}, now=100.0)
-r.ok(device.communication_age(now=220.0) == 120.0, "수신 뒤 흐른 시간을 계산한다")
-r.ok(device.silence_refresh_delay(now=220.0) == 180.0, "5분에서 통신 경과 시간을 뺀다")
+r.ok(device.communication_age(now=220.0) == 120.0, "it computes the time since the last message")
+r.ok(device.silence_refresh_delay(now=220.0) == 180.0, "it subtracts the elapsed time from five minutes")
 device.note_communication(now=250.0)
-r.ok(device.communication_age(now=260.0) == 10.0, "HA가 보낸 요청도 통신 시각을 갱신한다")
-r.ok(device.silence_refresh_delay(now=600.0) == 1.0, "이미 5분이 지났어도 즉시 반복하지 않는다")
+r.ok(device.communication_age(now=260.0) == 10.0, "a request HA sent also refreshes the timestamp")
+r.ok(device.silence_refresh_delay(now=600.0) == 1.0, "even past five minutes it does not repeat immediately")
 r.ok(
     "_schedule_boiler_silence_check(device)" in source("coordinator.py")
     and "BOILER_SILENCE_REFRESH_SECONDS" in source("coordinator.py"),
-    "수신할 때마다 5분 타이머를 다시 잡는다",
+    "every message reschedules the five-minute timer",
 )
 r.ok(
     "boiler.last_communication_at = old.last_communication_at" in source("coordinator.py"),
-    "5분 REST 갱신이 마지막 통신 시각을 지우지 않는다",
+    "the five-minute REST refresh does not erase the last-communication time",
 )
 r.ok(
     "not target.connected or not self.mqtt_connected" in source("coordinator.py"),
-    "연결이 끊겼을 때 상태 요청을 보내지 않는다",
+    "no status request is sent while disconnected",
 )
 
 
-r.section("NR-67D 설정온도 봉투")
+r.section("the NR-67D setpoint envelope")
 
-r.ok(device.temperature_bounds("hot_water") == (30.0, 60.0), "온수 범위는 서버값을 0.5℃로 푼다")
-r.ok(device.temperature_bounds("ondol") == (30.0, 65.0), "난방수 범위는 서버값을 0.5℃로 푼다")
+r.ok(device.temperature_bounds("hot_water") == (30.0, 60.0), "the hot-water range decodes the server value at 0.5C")
+r.ok(device.temperature_bounds("ondol") == (30.0, 65.0), "the heating-water range decodes the server value at 0.5C")
 
 status_payload = device.build_status_payload("mqtt-client", now_ms=123456)
-r.ok(status_payload["protocolVersion"] == 1, "상태 요청 프로토콜 버전은 1이다")
+r.ok(status_payload["protocolVersion"] == 1, "the status request protocol version is 1")
 r.ok(
     status_payload["requestTopic"] == "cmd/20/roomcon-001122334455/status",
-    "상태 요청 토픽은 앱과 같다",
+    "the status request topic matches the app",
 )
 r.ok(
     status_payload["responseTopic"]
     == "cmd/20/private-topic-key/mobile-mqtt-client/res",
-    "응답 토픽은 앱 MQTT 클라이언트에 묶는다",
+    "the response topic is bound to the app MQTT client",
 )
 r.ok(
     status_payload["request"]
@@ -245,37 +245,37 @@ r.ok(
         "command": 16777219,
         "deviceType": 20,
     },
-    "상태 요청 내부 봉투를 앱과 같게 만든다",
+    "the inner status-request envelope matches the app",
 )
 
 start_payload = device.build_start_payload("mqtt-client", now_ms=123456)
-r.ok(start_payload["requestTopic"].endswith("/status/start"), "최초 상태 요청 토픽")
-r.ok(start_payload["responseTopic"].endswith("/res/start"), "최초 상태 응답 토픽")
-r.ok(start_payload["request"]["command"] == 16777217, "최초 상태 요청 명령 코드")
+r.ok(start_payload["requestTopic"].endswith("/status/start"), "the initial status request topic")
+r.ok(start_payload["responseTopic"].endswith("/res/start"), "the initial status response topic")
+r.ok(start_payload["request"]["command"] == 16777217, "the initial status request command code")
 
 gas_payload = device.build_gas_payload("mqtt-client", now_ms=123456)
-r.ok(gas_payload["requestTopic"].endswith("/status/gas-meter-query"), "가스 조회 요청 토픽")
-r.ok(gas_payload["responseTopic"].endswith("/res/gas-meter"), "가스 조회 응답 토픽")
-r.ok(gas_payload["request"]["command"] == 16777224, "가스 조회 명령 코드")
+r.ok(gas_payload["requestTopic"].endswith("/status/gas-meter-query"), "the gas query request topic")
+r.ok(gas_payload["responseTopic"].endswith("/res/gas-meter"), "the gas query response topic")
+r.ok(gas_payload["request"]["command"] == 16777224, "the gas query command code")
 
 hot_water = device.build_temperature_payload(
     "hot_water", 43, "mqtt-client", now_ms=123456
 )
-r.ok(hot_water["request"]["mode"] == "hotwater-temperature", "온수 모드 문자열")
-r.ok(hot_water["request"]["command"] == 33554443, "온수 명령 코드")
-r.ok(hot_water["request"]["param"] == [86.0], "NR-67D는 섭씨×2 원시값을 보낸다")
-r.ok(hot_water["request"]["roomUseSetting"] == "10000000", "온수 비트마스크")
+r.ok(hot_water["request"]["mode"] == "hotwater-temperature", "the hot-water mode string")
+r.ok(hot_water["request"]["command"] == 33554443, "the hot-water command code")
+r.ok(hot_water["request"]["param"] == [86.0], "the NR-67D sends Celsius x 2 as a raw value")
+r.ok(hot_water["request"]["roomUseSetting"] == "10000000", "the hot-water bitmask")
 
 hot_water_half = device.build_temperature_payload(
     "hot_water", 43.5, "mqtt-client", now_ms=123456
 )
-r.ok(hot_water_half["request"]["param"] == [87.0], "0.5℃ 단계도 원시 정수로 보낸다")
+r.ok(hot_water_half["request"]["param"] == [87.0], "a 0.5C step is also sent as a raw integer")
 
 ondol = device.build_temperature_payload("ondol", 50, "mqtt-client", now_ms=123456)
-r.ok(ondol["request"]["mode"] == "ondol-heat", "난방수 모드 문자열")
-r.ok(ondol["request"]["command"] == 33554438, "난방수 명령 코드")
-r.ok(ondol["request"]["param"] == [100.0], "난방수도 섭씨×2 원시값을 보낸다")
-r.ok(ondol["request"]["roomUseSetting"] == "11111111", "난방수 비트마스크")
+r.ok(ondol["request"]["mode"] == "ondol-heat", "the heating-water mode string")
+r.ok(ondol["request"]["command"] == 33554438, "the heating-water command code")
+r.ok(ondol["request"]["param"] == [100.0], "heating water also sends Celsius x 2 as a raw value")
+r.ok(ondol["request"]["roomUseSetting"] == "11111111", "the heating-water bitmask")
 
 try:
     device.build_temperature_payload("hot_water", 43.25, "mqtt-client")
@@ -283,7 +283,7 @@ except ValueError:
     half_step_rejected = True
 else:
     half_step_rejected = False
-r.ok(half_step_rejected, "modelCode=20 앱에 없는 0.25℃ 명령은 막는다")
+r.ok(half_step_rejected, "a 0.25C command, absent from the modelCode=20 app, is refused")
 
 try:
     device.build_temperature_payload("ondol", 66, "mqtt-client")
@@ -291,26 +291,26 @@ except ValueError:
     outside_rejected = True
 else:
     outside_rejected = False
-r.ok(outside_rejected, "서버 범위 밖 명령은 막는다")
-r.ok("_attr_native_step = 0.5" in source("number.py"), "number 슬라이더도 0.5℃ 단위다")
+r.ok(outside_rejected, "a command outside the server range is refused")
+r.ok("_attr_native_step = 0.5" in source("number.py"), "the number slider is in 0.5C units too")
 r.ok(
     "async_refresh_boiler_status(device)" not in source("coordinator.py")
     and "not current.heating_is_idle" not in source("coordinator.py"),
-    "히팅 상태 사전 차단 없이 온도 명령을 보낸다",
+    "a temperature command is sent without pre-checking the heating state",
 )
 
 
-r.section("NR-67D 앱 기능 스위치 봉투")
+r.section("the NR-67D feature-switch envelopes")
 
 power_on = device.build_power_payload(True, "mqtt-client", now_ms=123456)
-r.ok(power_on["request"]["mode"] == "power-on", "전원 켜기 모드 문자열")
-r.ok(power_on["request"]["command"] == 33554434, "전원 켜기 명령 코드")
-r.ok(power_on["request"]["param"] == [], "전원 명령은 값 배열이 비어 있다")
-r.ok(power_on["request"]["roomUseSetting"] == "11111111", "전원은 전체 룸콘 대상이다")
+r.ok(power_on["request"]["mode"] == "power-on", "the power-on mode string")
+r.ok(power_on["request"]["command"] == 33554434, "the power-on command code")
+r.ok(power_on["request"]["param"] == [], "a power command carries an empty value array")
+r.ok(power_on["request"]["roomUseSetting"] == "11111111", "power targets every room controller")
 
 power_off = device.build_power_payload(False, "mqtt-client", now_ms=123456)
-r.ok(power_off["request"]["mode"] == "power-off", "전원 끄기 모드 문자열")
-r.ok(power_off["request"]["command"] == 33554433, "전원 끄기 명령 코드")
+r.ok(power_off["request"]["mode"] == "power-off", "the power-off mode string")
+r.ok(power_off["request"]["command"] == 33554433, "the power-off command code")
 
 for kind, mode, command in (
     ("fast_dhw", "fastDHW", 33554444),
@@ -319,21 +319,21 @@ for kind, mode, command in (
 ):
     enabled = device.build_switch_payload(kind, True, "mqtt-client", now_ms=123456)
     disabled = device.build_switch_payload(kind, False, "mqtt-client", now_ms=123456)
-    r.ok(enabled["request"]["mode"] == mode, f"{kind} 앱 모드 문자열")
-    r.ok(enabled["request"]["command"] == command, f"{kind} 명령 코드")
-    r.ok(enabled["request"]["param"] == [2], f"{kind} 켜기는 값 2")
-    r.ok(disabled["request"]["param"] == [1], f"{kind} 끄기는 값 1")
-    r.ok(enabled["request"]["roomUseSetting"] == "10000000", f"{kind} 온수 비트마스크")
+    r.ok(enabled["request"]["mode"] == mode, f"{kind}: the app mode string")
+    r.ok(enabled["request"]["command"] == command, f"{kind}: the command code")
+    r.ok(enabled["request"]["param"] == [2], f"{kind}: on is value 2")
+    r.ok(disabled["request"]["param"] == [1], f"{kind}: off is value 1")
+    r.ok(enabled["request"]["roomUseSetting"] == "10000000", f"{kind}: the hot-water bitmask")
 
-r.ok("async_boiler_power" in source("coordinator.py"), "전원 제어 경로를 코디네이터에 둔다")
-r.ok("async_boiler_switch" in source("coordinator.py"), "온수 기능 제어 경로를 코디네이터에 둔다")
-r.ok("BoilerMonthlyGasSensor" in source("sensor.py"), "월간 가스 센서를 만든다")
-r.ok("BoilerDailyGasSensor" in source("sensor.py"), "오늘 가스 센서를 만든다")
-r.ok("async_track_time_change" in source("sensor.py"), "자정에 날짜 기준을 바꾼다")
-r.ok("BOILER_GAS_REFRESH_SECONDS" in source("coordinator.py"), "가스 사용량은 저빈도로 갱신한다")
+r.ok("async_boiler_power" in source("coordinator.py"), "the power control path lives in the coordinator")
+r.ok("async_boiler_switch" in source("coordinator.py"), "the hot-water feature control path lives in the coordinator")
+r.ok("BoilerMonthlyGasSensor" in source("sensor.py"), "the monthly gas sensor is created")
+r.ok("BoilerDailyGasSensor" in source("sensor.py"), "the daily gas sensor is created")
+r.ok("async_track_time_change" in source("sensor.py"), "the date basis rolls at midnight")
+r.ok("BOILER_GAS_REFRESH_SECONDS" in source("coordinator.py"), "gas usage refreshes infrequently")
 
 
-r.section("보일러 진단 식별정보")
+r.section("boiler diagnostics identifiers")
 
 for key in (
     "clientID",
@@ -343,7 +343,7 @@ for key in (
     "responseTopic",
     "boilerControllerSerialNumber",
 ):
-    r.ok(key in TO_REDACT, f"{key} 키를 가린다")
+    r.ok(key in TO_REDACT, f"the {key} key is redacted")
 
 sensitive = {
     "clientID": "client-secret-123",
@@ -351,11 +351,11 @@ sensitive = {
     "requestTopic": "cmd/20/roomcon-001122334455/status/start",
 }
 scrubbed = repr(_scrub(sensitive, _identifiers([sensitive])))
-r.ok("client-secret" not in scrubbed, "clientID 값이 진단 어디에도 남지 않는다")
-r.ok("001122334455" not in scrubbed, "MAC 값이 토픽 안에도 남지 않는다")
+r.ok("client-secret" not in scrubbed, "the clientID value appears nowhere in diagnostics")
+r.ok("001122334455" not in scrubbed, "the MAC value does not survive inside a topic either")
 
 
-r.section("JSON 구조만 남기고 식별값은 지운다")
+r.section("only the JSON structure survives; identifiers are scrubbed")
 
 raw = {
     "payload": {
@@ -376,48 +376,49 @@ observation = observe_boiler_message(
 )
 text = repr(observation)
 
-r.ok(observation["encoding"] == "json", "JSON 봉투를 구분한다")
-r.ok(observation["topic_suffix_depth"] == 2, "원문 없이 토픽 깊이만 남긴다")
+r.ok(observation["encoding"] == "json", "a JSON envelope is recognised")
+r.ok(observation["topic_suffix_depth"] == 2, "only the topic depth survives, never the text")
 r.ok(
     observation["shape"]["payload"]["insideTemperature"] == 23.5,
-    "짧은 수치는 남긴다",
+    "short numbers survive",
 )
-r.ok(observation["shape"]["payload"]["mode"] == 2, "작은 정수 상태도 남긴다")
-r.ok(observation["shape"]["payload"]["epoch"] == {"kind": "number"}, "큰 숫자는 가린다")
-r.ok("DEVICE-SECRET" not in text, "deviceId 값이 남지 않는다")
-r.ok("CLIENT-SECRET" not in text, "clientID 값이 남지 않는다")
-r.ok("roomcon-secret" not in text, "토픽 문자열이 남지 않는다")
-r.ok("우리집" not in text, "일반 문자열도 원문을 남기지 않는다")
-r.ok("ABCDEF1234567890" not in text, "식별자 모양의 dict 키도 가린다")
+r.ok(observation["shape"]["payload"]["mode"] == 2, "small integer states survive too")
+r.ok(observation["shape"]["payload"]["epoch"] == {"kind": "number"}, "large numbers are redacted")
+r.ok("DEVICE-SECRET" not in text, "the deviceId value does not survive")
+r.ok("CLIENT-SECRET" not in text, "the clientID value does not survive")
+r.ok("roomcon-secret" not in text, "the topic string does not survive")
+r.ok("우리집" not in text, "even an ordinary string leaves no original text")
+r.ok("ABCDEF1234567890" not in text, "a dict key shaped like an identifier is redacted too")
 
 
-r.section("바이너리와 크기 제한")
+r.section("binary payloads and the size limit")
 
 binary = observe_boiler_message(b"\x00\xffDEVICE-SECRET", "1/smarttok/secret")
-r.ok(binary["encoding"] == "binary_or_text", "JSON 이 아니면 종류만 남긴다")
-r.ok("DEVICE-SECRET" not in repr(binary), "바이너리 원문은 남기지 않는다")
+r.ok(binary["encoding"] == "binary_or_text", "anything not JSON keeps only its kind")
+r.ok("DEVICE-SECRET" not in repr(binary), "raw binary is never retained")
 
 oversize = observe_boiler_message(b"[" + b"0," * 40_000 + b"0]", "1/smarttok/x")
-r.ok(oversize["encoding"] == "oversize", "큰 JSON 은 파싱하지 않는다")
-r.ok("shape" not in oversize, "큰 JSON 내용을 메모리에 다시 펼치지 않는다")
+r.ok(oversize["encoding"] == "oversize", "a large JSON payload is not parsed")
+r.ok("shape" not in oversize, "a large JSON payload is not re-expanded in memory")
 
 many = sanitize_boiler_value(list(range(40)))
-r.ok(len(many) == 33, "목록은 32개와 잘림 표지만 남긴다")
-r.ok(many[-1] == {"kind": "truncated_items", "count": 8}, "잘린 개수를 알린다")
+r.ok(len(many) == 33, "a list keeps 32 items plus a truncation marker")
+r.ok(many[-1] == {"kind": "truncated_items", "count": 8}, "the number truncated is reported")
 
 
-r.section("근거를 코드에 남겼다")
+r.section("the reasoning is recorded in the code")
 
 boiler_source = source("boiler.py")
 r.ok(
     "modelCode=20" in boiler_source and "operationMode=1" in boiler_source,
-    "모델과 상태 매핑 근거를 적었다",
+    "the model and state mapping evidence is recorded",
 )
 r.ok(
-    "공식\n        NR-67D 설명서" in boiler_source and "불꽃 표시" in boiler_source,
-    "설명서의 선택 모드·실제 가동 구분을 적었다",
+    "The official NR-67D manual likewise separates" in boiler_source
+    and "flame indicator" in boiler_source,
+    "it records the manual's split between selected mode and actual operation",
 )
-r.ok("바이너리 원문" in boiler_source, "바이너리를 보관하지 않는 이유를 적었다")
+r.ok("Raw binary, even a leading" in boiler_source, "it records why binary is never retained")
 
 
 sys.exit(r.finish())

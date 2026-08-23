@@ -1,13 +1,15 @@
-"""보일러 MQTT 상태와 NR-67D 온도 제어 프로토콜.
+"""Boiler MQTT state and the NR-67D temperature control protocol.
 
-보일러는 매트와 상태 모델이 다르고, 컨트롤러 종류별 인코딩도 다르다. 특히
-온도값을 짐작해 제어하면 실제 난방·온수 설정을 바꿀 수 있으므로, 현재 앱에서
-확인한 ``modelCode=20`` 의 온수·난방수 설정만 연다.
+A boiler has a different state model from a mat, and its encoding differs per controller
+type. Guessing at a temperature value here would change someone's real heating or hot-water
+setting, so only the hot-water and heating-water settings of ``modelCode=20``, confirmed in
+the current app, are opened up.
 
-여기서는 앱과 같은 ``smarttok`` 구독에서 들어온 메시지의 **모양만** 남긴다.
-진단 파일이 공개 이슈에 첨부될 수 있으므로 원문 문자열·토픽·큰 숫자·바이너리는
-보관하지 않는다. 작은 수치와 키 구조만으로 상태 봉투를 가른 뒤, 실제 필드의 뜻은
-실기기 관찰과 앱 코드가 서로 맞을 때 별도 단계에서 연다.
+What is kept here is **only the shape** of messages arriving on the same ``smarttok``
+subscription the app uses. A diagnostics file can end up attached to a public issue, so raw
+strings, topics, large numbers and binary are never retained. Small numbers and the key
+structure are enough to tell the state envelopes apart; the meaning of an actual field is
+opened in a separate step, once real-device observation and the app code agree.
 """
 
 from __future__ import annotations
@@ -32,13 +34,13 @@ BOILER_GAS_METER_UPDATE = "__gas_meter__"
 
 BOILER_STATE_OFF = "꺼짐"
 BOILER_STATE_IDLE = "대기"
-# 공식 NCB753 설명서가 이 상태를 「연소」로 부른다. 처음에 쓰던 「히팅」은
-# 설명서에도 앱에도 없는 말이었다.
+# The official NCB753 manual calls this state 연소 (combustion). The 히팅 used at first
+# appears in neither the manual nor the app.
 BOILER_STATE_HEATING = "연소"
 
-# Navien Smart 2.10.4의 NR-67D(modelCode=20) 탭 선택 분기에서 확인했다.
-# 이 값은 현재 연소 여부가 아니라 룸콘에서 선택한 운전 모드다. 실제 가동 여부는
-# 별도 ``operationBusy`` 값으로 판단한다.
+# Confirmed from the NR-67D (modelCode=20) tab-selection branch of Navien Smart 2.10.4.
+# This value is the operating mode selected on the room controller, not whether it is burning
+# right now; that is decided from the separate ``operationBusy`` value.
 BOILER_OPERATION_MODE_NAMES: dict[int, str] = {
     1: "꺼짐",
     4: "외출",
@@ -49,39 +51,41 @@ BOILER_OPERATION_MODE_NAMES: dict[int, str] = {
     10: "온수 전용",
 }
 
-# 실기기에서 확인한 운전모드 명령. **추측이 아니라 관측이다** — 룸콘은 마지막으로
-# 처리한 명령 코드를 상태의 ``command`` 로 되돌려주므로, 앱에서 그 버튼을 누르면
-# 코드가 드러난다.
+# Operating-mode commands confirmed on a real device. **These are observations, not
+# guesses**: the room controller echoes the last command code it processed back in the
+# status ``command`` field, so pressing that button in the app reveals the code.
 #
-#   0x2000001 = 33554433  전원 끄기      (mode 1 꺼짐)
-#   0x2000004 = 33554436  외출           (mode 4 외출)
-#   0x2000006 = 33554438  온돌 난방 온도  (mode 6 온돌 난방)
+#   0x2000001 = 33554433  power off       (mode 1, 꺼짐)
+#   0x2000004 = 33554436  away            (mode 4, 외출)
+#   0x2000006 = 33554438  underfloor temp (mode 6, 온돌 난방)
 #
-# 하위 자리가 운전모드 값과 맞는다. 다만 **아직 명령을 열지 않는다.** 이 기기에서
-# 외출 명령은 룸콘이 7번 되돌려줬는데도 ``operationMode`` 가 6 에서 바뀌지 않았다.
-# 기기가 받기만 하고 실행하지 않는 명령을 통합이 보내면, 사용자는 눌렀는데 아무
-# 일도 안 일어나는 스위치를 갖게 된다. 어떤 기기가 실제로 실행하는지 확인한 뒤에
-# 연다 — `feature` 의 지원 플래그와 함께 봐야 한다(아래).
+# The low digits line up with the operating-mode values. **The commands stay closed even
+# so.** On this device the away command was echoed back seven times while ``operationMode``
+# never moved off 6. Shipping a command the device accepts but never executes would give the
+# user a switch that does nothing when pressed. It opens once some device is confirmed to
+# execute it — read together with the support flags in `feature` (below).
 #
-# **동작이 확인된 기능은 예외 없이 `feature` 값이 2 다.** powerUse · ondolUse ·
+# **Every feature confirmed to work has a `feature` value of 2.** powerUse, ondolUse and
 # gasUsageUse · fastDHWUse · smartFastDHWUse · DHWBoostUse ·
-# hotWaterTemperatureSettingUse 가 모두 2 이고 전부 실기기에서 동작한다. 반대로
-# 이 기기에서 듣지 않는 외출은 ``gooutUse`` 가 1 이다. 앱의 「온수전용·외출」
-# 버튼이 통째로 안 먹는 것도 ``hotWaterUse`` 가 1 인 것과 맞는다 — 그 값은
-# 「온수 기능」이 아니라 **온수 전용 운전모드** 지원 여부로 읽어야 앞뒤가 맞는다.
+# hotWaterTemperatureSettingUse are all 2, and all of them work on the real device.
+# Conversely the away mode, which this device ignores, has ``gooutUse`` at 1. That the app's
+# hot-water-only and away buttons do nothing at all also fits ``hotWaterUse`` being 1 — that
+# value only makes sense read as support for the **hot-water-only operating mode**, not for
+# the hot-water function itself.
 #
-# **다만 원인은 아직 모른다.** 앱에서 눌러도, 룸콘에서 눌러도 외출로 바뀌지
-# 않는다. 이 설치는 룸콘과 보일러가 접점(무전압 접점) 방식으로 연결돼 있어,
-# 외출이라는 운전모드 자체가 그 배선으로는 전달되지 않는 것일 수도 있고
-# 기기 이상일 수도 있다. 지금 가진 자료로는 둘을 가릴 수 없다 — 제조사 문의가
-# 필요하다. 어느 쪽이든 **명령을 열지 않는다**는 결론은 그대로다.
-# 공식 `NCB753` 사용설명서(2025-01-08판) 「12. 자가 진단 조치 방법」 표를 그대로
-# 옮겼다. 추가하거나 짐작한 항목은 없다.
+# **The cause is still unknown.** Neither the app nor the room controller switches it to
+# away. In this installation the room controller and the boiler are wired through a
+# volt-free contact, so the away mode may simply not be conveyable over that wiring — or the
+# device may be faulty. The evidence at hand cannot separate the two; that needs a question
+# to the manufacturer. Either way the conclusion, **do not open the command**, is unchanged.
+# Transcribed verbatim from the "12. 자가 진단 조치 방법" table of the official `NCB753`
+# manual (2025-01-08 edition). Nothing was added or guessed.
 #
-# **번호를 어떻게 맞췄는지 밝혀 둔다.** 설명서는 `E001` 처럼 적고 서버는 정수로
-# 준다. 이 표는 그 정수를 설명서의 세 자리 번호로 읽는다 — 실기기에서 오류를
-# 재현해 확인한 것이 아니라 두 표기를 맞춘 것이다. 그래서 **이름을 못 찾으면
-# 비워 두고 숫자만 보여준다.** 틀린 이름을 붙이는 것보다 낫다.
+# **How the numbers were matched, stated openly.** The manual writes them as `E001` while
+# the server sends integers, and this table reads those integers as the manual's three-digit
+# numbers. That is an alignment of two notations, not something confirmed by reproducing an
+# error on a real device. So **an unmatched number is left unnamed and shown as a number** —
+# better than attaching the wrong name.
 BOILER_ERROR_NAMES: dict[int, str] = {
     1: "열교환기 과열",
     3: "불착화",
@@ -117,14 +121,14 @@ BOILER_ERROR_NAMES: dict[int, str] = {
 }
 
 BOILER_TEMPERATURE_CONTROLS: dict[str, tuple[str, int, str]] = {
-    # Navien Smart 2.10.4 의 modelCode=20 분기. 이 세 값은 한 묶음이다.
+    # From the modelCode=20 branch of Navien Smart 2.10.4. These three values move together.
     "hot_water": ("hotwater-temperature", 33554443, "10000000"),
     "ondol": ("ondol-heat", 33554438, "11111111"),
 }
 
-# Navien Smart 현재 앱의 modelCode=20 제어 호출에서 확인한 단일 값 스위치다.
-# 상태와 명령은 1=끔, 2=켬이며, 전체 룸콘(11111111)은 온수 기능을 첫 비트
-# (10000000)로 바꿔 보낸다.
+# Single-value switches confirmed from the modelCode=20 control calls of the current Navien
+# Smart app. State and command are both 1=off, 2=on, and the all-controllers mask
+# (11111111) is replaced by the first bit (10000000) for the hot-water function.
 BOILER_SWITCH_CONTROLS: dict[str, tuple[str, str, int]] = {
     "fast_dhw": ("fastDHWUse", "fastDHW", 33554444),
     "smart_fast_dhw": ("smartFastDHW", "smartFastDHW", 33554456),
@@ -141,8 +145,9 @@ _INTEGER_TEXT = re.compile(r"-?\d{1,6}")
 _FLOAT_TEXT = re.compile(r"-?\d{1,4}\.\d{1,3}")
 _IDENTIFIER_KEY = re.compile(r"(?:[0-9a-fA-F]{12,}|\d{10,})")
 
-# 키 이름은 구조를 파악하는 데 필요하므로 남기되, 그 아래 값은 종류조차 드러내지
-# 않는다. 대소문자와 ``-``/``_`` 차이를 없애 새 변형도 같은 규칙에 걸리게 한다.
+# Key names are kept because the structure cannot be understood without them, but the values
+# beneath them do not even reveal their type. Case and ``-``/``_`` differences are normalised
+# away so a new variant falls under the same rule.
 _SENSITIVE_KEYS = {
     "accesstoken",
     "authorization",
@@ -186,17 +191,18 @@ def _integer(value: Any) -> int | None:
 
 
 def _half_degree(value: Any) -> float | None:
-    """보일러의 0.5℃ 단위 값을 섭씨로 바꾼다.
+    """Convert a boiler value in 0.5C units to degrees Celsius.
 
-    서버가 알려준 범위가 온돌 60~130 → 30~65℃, 온수 60~120 → 30~60℃로
-    정확히 맞고, 실측 설정값 86이 앱의 43℃와 맞는다.
+    The ranges the server reports line up exactly — underfloor 60-130 maps to 30-65C and hot
+    water 60-120 maps to 30-60C — and an observed setpoint of 86 matches the 43C shown in the
+    app.
     """
     number = _number(value)
     return None if number is None else number / 2
 
 
 def _tenth(value: Any) -> float | None:
-    """실측 정밀 센서의 0.1 단위 값을 사람이 읽는 값으로 바꾼다."""
+    """Convert a 0.1-unit value from a precision sensor into a human-readable one."""
     number = _number(value)
     return None if number is None else number / 10
 
@@ -208,7 +214,7 @@ def _bump(stats: dict[str, Any] | None, key: str) -> None:
 
 @dataclass(frozen=True)
 class GasUsageBucket:
-    """가스 사용량 한 칸. ``start`` 는 그 칸이 시작하는 현지 날짜다."""
+    """One gas-usage bucket. ``start`` is the local date the bucket begins on."""
 
     start: date
     monthly: bool
@@ -218,10 +224,11 @@ class GasUsageBucket:
 
 
 def _gas_bucket(row: dict[str, Any], *, monthly: bool) -> GasUsageBucket | None:
-    """가스 배열의 행 하나를 사용량 칸으로 바꾼다.
+    """Turn one row of a gas array into a usage bucket.
 
-    아직 오지 않은 날·달은 세 값이 모두 ``null`` 로 온다(실기기 응답에서 확인).
-    그런 행은 사용량 0 이 아니라 **자료 없음**이라 통계로 만들지 않는다.
+    A day or month that has not happened yet arrives with all three values ``null``
+    (confirmed in a real device response). Such a row means **no data**, not zero usage, and
+    never becomes a statistics bucket.
     """
     year = _integer(row.get("year"))
     month = _integer(row.get("month"))
@@ -229,7 +236,8 @@ def _gas_bucket(row: dict[str, Any], *, monthly: bool) -> GasUsageBucket | None:
         return None
     day = _integer(row.get("day"))
     if monthly:
-        # 월별 배열은 모든 행이 day=0 이다. 일별 행이 섞여 오면 뜻을 모르므로 버린다.
+        # Every row of a monthly array has day=0. A daily row mixed in would mean something
+        # unknown, so it is discarded.
         if day not in (0, None):
             return None
         start = date(year, month, 1)
@@ -254,7 +262,7 @@ def _gas_bucket(row: dict[str, Any], *, monthly: bool) -> GasUsageBucket | None:
 
 @dataclass
 class BoilerDevice:
-    """REST 기기 정보와 MQTT 상태를 합친 보일러."""
+    """A boiler, combining REST device information with MQTT state."""
 
     raw: dict[str, Any]
     device_id: str
@@ -267,16 +275,18 @@ class BoilerDevice:
     feature: dict[str, Any] = field(default_factory=dict)
     status: dict[str, Any] = field(default_factory=dict)
     gas_meter: dict[str, Any] = field(default_factory=dict)
-    # REST 목록에 든 상태는 서버 캐시일 수 있다. 센서가 실제 MQTT 프레임을 언제
-    # 받았는지 구분할 수 있도록 그때에만 이 시각을 채운다.
+    # The state in the REST list may be a server cache. This timestamp is filled in only when
+    # an actual MQTT frame arrives, so a sensor can tell the two apart.
     status_received_at: float | None = None
-    # 수신 상태와 HA가 보낸 요청을 합친 마지막 통신 시각. 보일러가 변화를 스스로
-    # 올리는 동안에는 폴링하지 않고, 양방향 통신이 5분간 없을 때만 상태를 묻는다.
+    # The last communication in either direction, covering both received state and requests
+    # HA sent. While the boiler pushes its own changes nothing is polled; state is only asked
+    # for after five minutes with no traffic either way.
     last_communication_at: float | None = None
     gas_received_at: float | None = None
-    # 룸콘이 마지막으로 처리한 명령 코드를 상태가 되돌려준다. 아직 뜻을 모르는
-    # 명령(운전모드 변경 등)을 추측 없이 알아내는 유일한 길이라, 본 적 있는
-    # 코드를 모아 진단에 남긴다. 값은 프로토콜 상수이지 식별정보가 아니다.
+    # The status echoes back the last command code the room controller processed. That is the
+    # only way to learn a command whose meaning is still unknown (a mode change, say) without
+    # guessing, so every code ever seen is collected into diagnostics. The values are protocol
+    # constants, not identifying information.
     observed_commands: dict[int, int] = field(default_factory=dict)
 
     @classmethod
@@ -291,9 +301,10 @@ class BoilerDevice:
         feature = response.get("feature")
         status = response.get("status")
         model_name = str(raw.get("modelName") or "보일러")
-        # 앱 응답은 보통 ``{"mainItem": "보일러"}`` 이지만 계정/세대에 따라
-        # 문자열 하나로 올 수도 있다. dict 자체를 문자열로 바꾸면 HA 기기명이
-        # ``{'mainItem': '보일러'}`` 로 노출되므로 두 형태를 명시적으로 가른다.
+        # The app response is usually ``{"mainItem": "보일러"}``, but depending on the account
+        # or household it can arrive as a bare string. Stringifying the dict would expose
+        # ``{'mainItem': '보일러'}`` as the HA device name, so the two shapes are handled
+        # explicitly.
         raw_nick = _dig(raw, "Properties", "nickName")
         nick = raw_nick if isinstance(raw_nick, dict) else {}
         nick_text = raw_nick.strip() if isinstance(raw_nick, str) else ""
@@ -313,7 +324,7 @@ class BoilerDevice:
         )
 
     def apply_status(self, status: dict[str, Any], *, now: float | None = None) -> None:
-        """부분 응답이 와도 전에 알던 필드를 잃지 않는다."""
+        """A partial response must not cost us fields that were already known."""
         update = dict(status)
         gas_meter = update.pop(BOILER_GAS_METER_UPDATE, None)
         stamp = time.monotonic() if now is None else now
@@ -329,18 +340,18 @@ class BoilerDevice:
         self.last_communication_at = stamp
 
     def note_communication(self, *, now: float | None = None) -> None:
-        """성공적으로 서버에 보낸 보일러 요청도 마지막 통신으로 센다."""
+        """A boiler request successfully sent to the server also counts as communication."""
         self.last_communication_at = time.monotonic() if now is None else now
 
     def communication_age(self, *, now: float | None = None) -> float | None:
-        """마지막 보일러 송수신 뒤 흐른 초."""
+        """Seconds since the last boiler message in either direction."""
         if self.last_communication_at is None:
             return None
         stamp = time.monotonic() if now is None else now
         return max(0.0, stamp - self.last_communication_at)
 
     def silence_refresh_delay(self, *, now: float | None = None) -> float:
-        """5분 무통신 상태 요청까지 남은 시간. 1초보다 짧게 재예약하지 않는다."""
+        """Time left before the five-minute idle status request; never rescheduled below 1s."""
         age = self.communication_age(now=now)
         if age is None:
             return float(BOILER_SILENCE_REFRESH_SECONDS)
@@ -352,7 +363,8 @@ class BoilerDevice:
 
     @property
     def indoor_temperature(self) -> float | None:
-        # actualInsideTemperature 는 0.1℃ 정밀값이다. 없는 모델만 0.5℃ 값을 쓴다.
+        # actualInsideTemperature is a 0.1C precision value. Only a model lacking it falls
+        # back to the 0.5C value.
         precise = _tenth(self.status.get("actualInsideTemperature"))
         return precise if precise is not None else _half_degree(
             self.status.get("insideTemperature")
@@ -392,24 +404,25 @@ class BoilerDevice:
 
     @property
     def heating_is_idle(self) -> bool:
-        """실기기에서 난방수 온도가 오르지 않은 ``operationBusy=1`` 인가."""
+        """The ``operationBusy=1`` state, in which the real device's water temperature did not rise."""
         return self.operation_busy == BOILER_BUSY_IDLE
 
     @property
     def operation_mode_name(self) -> str | None:
-        """앱의 NR-67D 탭 이름으로 확인된 운전 모드 이름."""
+        """The operating-mode name, confirmed from the NR-67D tab labels in the app."""
         mode = self.operation_mode
         return None if mode is None else BOILER_OPERATION_MODE_NAMES.get(mode)
 
     @property
     def operating_state(self) -> str | None:
-        """앱 표시 로직으로 확인한 전원·히팅 상태를 사람이 읽는 값으로.
+        """Power and heating state as a human-readable value, confirmed from the app's display logic.
 
-        Navien Smart 2.10.4의 ``modelCode=20`` 화면은 ``operationMode=1``일
-        때 전원 꺼짐으로 처리한다. 실기기에서 ``operationBusy=1``일 때 난방수
-        온도가 유지됐고, ``2``로 바뀐 뒤 공급·환수 온도가 함께 상승했다. 공식
-        NR-67D 설명서도 선택 운전 모드와 실제 가동 시 켜지는 불꽃 표시를 구분한다.
-        이 둘 외 값은 히팅으로 추측하지 않고 ``None``으로 둔다.
+        The ``modelCode=20`` screen of Navien Smart 2.10.4 treats ``operationMode=1`` as
+        powered off. On a real device the heating-water temperature held steady while
+        ``operationBusy=1`` and both supply and return temperatures rose after it changed to
+        ``2``. The official NR-67D manual likewise separates the selected operating mode from
+        the flame indicator that lights while it is actually running. Any other value is left
+        as ``None`` rather than guessed to be heating.
         """
         mode = self.operation_mode
         busy = self.operation_busy
@@ -432,7 +445,7 @@ class BoilerDevice:
         return max(0.0, time.monotonic() - self.status_received_at)
 
     def temperature_bounds(self, kind: str) -> tuple[float, float] | None:
-        """서버가 이 기기에 허용한 설정 범위를 섭씨로 돌려준다."""
+        """The setting range the server allows for this device, in degrees Celsius."""
         if kind == "hot_water":
             use_key = "hotWaterTemperatureSettingUse"
             low_key = "hotWaterTemperatureMin"
@@ -452,11 +465,11 @@ class BoilerDevice:
         return low, high
 
     def supports_feature(self, key: str) -> bool:
-        """서버가 이 보일러에 기능 사용 가능(2)을 선언했는가."""
+        """Whether the server declared this feature available (2) for this boiler."""
         return _integer(self.feature.get(key)) == 2
 
     def switch_state(self, kind: str) -> bool | None:
-        """앱과 같은 1=끔, 2=켬 상태를 bool로 바꾼다."""
+        """Convert the app's 1=off, 2=on state into a bool."""
         if kind == "power":
             mode = self.operation_mode
             return None if mode is None else mode != BOILER_OPERATION_OFF
@@ -469,63 +482,63 @@ class BoilerDevice:
 
     @property
     def outside_temperature(self) -> float | None:
-        """외기 온도. **보일러가 잰 값이 아니라 지역 기상 관측값이다.**
+        """Outside temperature. **Not measured by the boiler — a regional weather observation.**
 
-        실측 대조로 확인했다. 어느 시점에 이 값이 27.0℃ 였을 때 같은 시각
-        기상청 서울(종로구 송월동) 관측이 **27.0℃ 로 정확히 같았고**, 동네
-        추정치(응암2동)는 25.8℃ 로 달랐다. 지금까지 본 값이 260 · 270 처럼 늘
-        정수 ℃ 인 것도 관측소 값을 그대로 받는 것과 맞는다.
+        Confirmed by comparison. At one point this value read 27.0C while the KMA observation
+        for Seoul (Songwol-dong, Jongno-gu) at the same moment was **exactly 27.0C**, whereas
+        the neighbourhood estimate (Eungam 2-dong) was 25.8C. That every value seen so far has
+        been a whole degree (260, 270) also fits a station reading passed straight through.
 
-        그래서 **집 마당 기온이 아니다.** 보일러에 외기 센서가 달려 있지 않아도
-        값이 온다. 외기보상 제어(``outsideTemperatureControlUse`` ·
-        ``outsideTemperatureStopUse``)와는 별개다.
+        So **this is not the temperature in the user's yard.** It arrives even on a boiler
+        with no outside sensor fitted, and it is unrelated to outside-compensation control
+        (``outsideTemperatureControlUse``, ``outsideTemperatureStopUse``).
 
-        **``outsideTemperatureDisplayUse`` 를 조건으로 쓰지 않는다.** 그 값은
-        룸콘 화면에 외기온도를 띄울지에 대한 것이지 자료가 오는지가 아니다 —
-        이 기기는 그 값이 1 인데도 온도가 정상으로 온다.
+        **``outsideTemperatureDisplayUse`` is not used as a condition.** That value governs
+        whether the room controller shows the outside temperature on its screen, not whether
+        the data arrives — this device has it at 1 and still receives the temperature.
         """
         return _tenth(self.status.get("outsideTemperature"))
 
     @property
     def hot_water_flow_rate(self) -> float | None:
-        """온수 유량(L/분). 다른 0.1 단위 값과 같은 배율로 읽는다."""
+        """Hot-water flow in L/min, read with the same scale as the other 0.1-unit values."""
         return _tenth(self.status.get("DHWInternalFlowRate"))
 
     @property
     def heating_flow_rate(self) -> float | None:
-        """난방 유량(L/분)."""
+        """Heating flow in L/min."""
         return _tenth(self.status.get("heatFlowRate"))
 
     @property
     def wifi_rssi(self) -> int | None:
-        """룸콘 Wi-Fi 신호 세기. 서버가 알려주는 원시값 그대로다.
+        """Room-controller Wi-Fi signal strength, exactly as the server reports it.
 
-        단위를 확인하지 못했다 — dBm 의 절댓값인지 백분율인지 모른다. 그래서
-        단위를 붙이지 않고 숫자만 진단으로 남긴다.
+        The unit was never confirmed — it may be an absolute dBm value or a percentage. So no
+        unit is attached and only the number is kept, for diagnostics.
         """
         return _integer(self.status.get("wifiRssi"))
 
     @property
     def hot_water_running(self) -> bool | None:
-        """지금 온수를 쓰고 있는지.
+        """Whether hot water is being drawn right now.
 
-        ``fastDHWUse`` · ``smartFastDHW`` · ``DHWBoost`` 와 같은 1=끔·2=켬 값이다.
+        A 1=off, 2=on value, like ``fastDHWUse``, ``smartFastDHW`` and ``DHWBoost``.
         """
         value = _integer(self.status.get("DHWUse"))
         return None if value not in (1, 2) else value == 2
 
     @property
     def hot_water_sustained(self) -> bool | None:
-        """온수 사용이 이어지고 있는지. ``DHWUse`` 와 같은 인코딩이다."""
+        """Whether hot-water use is sustained. Same encoding as ``DHWUse``."""
         value = _integer(self.status.get("DHWUseSustained"))
         return None if value not in (1, 2) else value == 2
 
     @property
     def fault_status(self) -> tuple[int, int] | None:
-        """``faultStatus1`` · ``faultStatus2`` 비트묶음.
+        """The ``faultStatus1`` and ``faultStatus2`` bit fields.
 
-        각 비트의 뜻은 모른다. 0 이 아니면 무언가 걸렸다는 것만 알린다 —
-        ``errorCode`` 와는 별개 필드다.
+        What the individual bits mean is unknown. A non-zero value only reports that something
+        is flagged — this is a separate field from ``errorCode``.
         """
         first = _integer(self.status.get("faultStatus1"))
         second = _integer(self.status.get("faultStatus2"))
@@ -535,18 +548,17 @@ class BoilerDevice:
 
     @property
     def heating_intensity(self) -> int | None:
-        """난방 강도 설정. **원시값 그대로 읽기만 한다.**
+        """The heating-intensity setting. **Read only, as a raw value.**
 
-        NCB753 계열 설명서에서 단계 이름과 순서를 확인하지 못했고, 서버가 주는
-        범위도 ``heatingIntensityMin: 3`` · ``heatingIntensityMax: 1`` 로 최소가
-        최대보다 커서 방향조차 확정할 수 없다. 이름을 붙이거나 제어를 열지
-        않는다.
+        The NCB753-family manual never names or orders the steps, and the range the server
+        sends has ``heatingIntensityMin: 3`` above ``heatingIntensityMax: 1``, so even the
+        direction cannot be settled. No names are attached and no control is opened.
         """
         return _integer(self.status.get("heatingIntensityModeSetting"))
 
     @property
     def repeat_reservation_interval(self) -> tuple[int, int] | None:
-        """반복 예약 주기 (시, 분)."""
+        """The repeat-schedule interval, as (hours, minutes)."""
         hour = _integer(self.status.get("timeCycleReservationSettingHour"))
         minute = _integer(self.status.get("timeCycleReservationSettingMinute"))
         if hour is None and minute is None:
@@ -555,17 +567,17 @@ class BoilerDevice:
 
     @property
     def day_cycle_reservation(self) -> str | None:
-        """24시간 예약 시간표 원문.
+        """The raw 24-hour schedule table.
 
-        실기기에서 24자 문자열로 온다 — 한 시간에 한 자리로 보이지만 각 자리의
-        뜻은 확인하지 못했다. 해석하지 않고 원문만 남긴다.
+        It arrives from a real device as a 24-character string — apparently one digit per
+        hour, but what each digit means was never confirmed. It is kept raw, uninterpreted.
         """
         value = self.status.get("dayCycleReservationSetting")
         return value if isinstance(value, str) and value else None
 
     @property
     def error_name(self) -> str | None:
-        """설명서에 적힌 이상 발생 내용. 표에 없는 번호면 아무 이름도 주지 않는다."""
+        """The fault description from the manual. A number absent from the table gets no name."""
         code = self.error_code
         if not code:
             return None
@@ -573,22 +585,22 @@ class BoilerDevice:
 
     @property
     def error_label(self) -> str | None:
-        """설명서 표기와 같은 ``E001`` 형태의 오류 번호."""
+        """The error number in the manual's own ``E001`` form."""
         code = self.error_code
         return None if not code else f"E{code:03d}"
 
     def reservation_enabled(self, key: str) -> bool | None:
-        """예약 사용 여부. ``programReservationUse`` 계열의 1=끔·2=켬."""
+        """Whether a schedule is in use — the 1=off, 2=on family of ``programReservationUse``."""
         value = _integer(self.status.get(key))
         return None if value not in (1, 2) else value == 2
 
     @property
     def gas_month_start(self) -> date | None:
-        """이번 달 누적값이 0으로 돌아간 시점 — 서버가 말한 달의 1일.
+        """When this month's total last reset — the first of the month the server named.
 
-        벽시계로 계산하지 않는다. 달이 바뀌어도 다음 가스 응답이 오기 전까지는
-        아직 지난달 누적값을 들고 있어서, 그 값의 주기 시작을 잘못 옮기면 장기
-        통계가 한 달치를 통째로 잃는다.
+        It is not computed from the wall clock. After the month rolls over, the value on hand
+        is still last month's total until the next gas response arrives, and moving that
+        value's cycle start would cost the long-term statistics an entire month.
         """
         for row in self._gas_rows("gasMeterThisMonth"):
             year = _integer(row.get("year"))
@@ -612,7 +624,7 @@ class BoilerDevice:
     def gas_day(
         self, wanted: date
     ) -> tuple[float | None, float | None, float | None] | None:
-        """앱의 일별 배열에서 지정한 현지 날짜의 전체·난방·온수 사용량."""
+        """Total, heating and hot-water usage for a given local date, from the app's daily array."""
         rows = self.gas_meter.get("gasMeterThisMonth")
         if not isinstance(rows, list):
             return None
@@ -632,8 +644,8 @@ class BoilerDevice:
                     _tenth(row.get("heatGasMeter")),
                     _tenth(row.get("hotWaterGasMeter")),
                 )
-        # 앱 차트도 해당 월 배열에 빠진 날짜는 사용량 0으로 그린다. 다른 월의
-        # 오래된 응답이면 0으로 단정하지 않고 unknown을 유지한다.
+        # The app chart also draws a date missing from that month's array as zero usage. For a
+        # stale response from another month, unknown is kept rather than asserting zero.
         return (0.0, 0.0, 0.0) if same_month else None
 
     def _gas_rows(self, key: str) -> list[dict[str, Any]]:
@@ -643,15 +655,16 @@ class BoilerDevice:
         return [row for row in rows if isinstance(row, dict)]
 
     def gas_history(self) -> list[GasUsageBucket]:
-        """가스 응답의 네 배열을 하나의 시간순 사용량 목록으로 합친다.
+        """Merge the four arrays of a gas response into one chronological usage list.
 
-        앱의 가스 사용량 화면이 그리는 것과 같은 자료다. 한 번의 조회 응답에
-        **일별 두 달치**(``gasMeterLastMonth`` · ``gasMeterThisMonth``)와
-        **월별 두 해치**(``gasMeterLastYear`` · ``gasMeterThisYear``)가 함께 온다.
+        This is the same data the app's gas-usage screen draws. A single query response
+        carries **two months of daily figures** (``gasMeterLastMonth``, ``gasMeterThisMonth``)
+        and **two years of monthly ones** (``gasMeterLastYear``, ``gasMeterThisYear``).
 
-        일별과 월별이 겹치는 달은 **일별만 남긴다.** 같은 사용량을 두 번 세지
-        않기 위해서다. ``day`` 가 0 인 행이 그 달 전체의 합계라는 것은 실기기
-        응답에서 확인했다 — 월별 배열은 12 개 행 모두 ``day: 0`` 이다.
+        Where daily and monthly overlap, **only the daily figures are kept**, so the same
+        usage is never counted twice. That a row with ``day`` of 0 is the whole month's total
+        was confirmed from a real device response — all twelve rows of a monthly array carry
+        ``day: 0``.
         """
         daily: dict[date, GasUsageBucket] = {}
         for key in ("gasMeterLastMonth", "gasMeterThisMonth"):
@@ -673,7 +686,7 @@ class BoilerDevice:
         return sorted((monthly | daily).values(), key=lambda bucket: bucket.start)
 
     def _identity_parts(self) -> tuple[str, str, str]:
-        """앱의 ``deviceId.substring(0, 12/16)`` 분기를 그대로 적용한다."""
+        """Apply the app's ``deviceId.substring(0, 12/16)`` branch exactly."""
         if self.model_code != BOILER_MODEL_MGPP:
             raise ValueError(f"지원하지 않는 보일러 modelCode: {self.model_code}")
         if len(self.device_id) < 16:
@@ -695,7 +708,7 @@ class BoilerDevice:
         command: int | None = None,
         room_use_setting: str | None = None,
     ) -> dict[str, Any]:
-        """Navien Smart 2.10.4 ``boilerMGPPMqttPayload`` 와 같은 봉투."""
+        """The same envelope as ``boilerMGPPMqttPayload`` in Navien Smart 2.10.4."""
         if not client_id:
             raise ValueError("MQTT clientId가 없습니다")
         mac, additional, mqtt_topic_key = self._identity_parts()
@@ -728,7 +741,7 @@ class BoilerDevice:
     def build_status_payload(
         self, client_id: str, *, now_ms: int | None = None
     ) -> dict[str, Any]:
-        """앱의 ``getDeviceStatus`` 와 같은 상태 요청."""
+        """The same status request as the app's ``getDeviceStatus``."""
         return self.build_request_payload(
             "status", "res", client_id, now_ms=now_ms, command=16777219
         )
@@ -736,7 +749,7 @@ class BoilerDevice:
     def build_start_payload(
         self, client_id: str, *, now_ms: int | None = None
     ) -> dict[str, Any]:
-        """앱의 ``getDeviceStart`` 와 같은 최초 상태 요청."""
+        """The same initial status request as the app's ``getDeviceStart``."""
         return self.build_request_payload(
             "status/start",
             "res/start",
@@ -748,7 +761,7 @@ class BoilerDevice:
     def build_gas_payload(
         self, client_id: str, *, now_ms: int | None = None
     ) -> dict[str, Any]:
-        """앱의 가스 사용량 화면이 보내는 읽기 요청."""
+        """The read request the app's gas-usage screen sends."""
         if not self.supports_feature("gasUsageUse"):
             raise ValueError("가스 사용량 조회를 서버가 허용하지 않았습니다")
         return self.build_request_payload(
@@ -762,7 +775,7 @@ class BoilerDevice:
     def build_power_payload(
         self, turn_on: bool, client_id: str, *, now_ms: int | None = None
     ) -> dict[str, Any]:
-        """NR-67D 전원 명령. 앱처럼 전체 룸콘 비트마스크를 쓴다."""
+        """The NR-67D power command, using the all-controllers bitmask as the app does."""
         if not self.supports_feature("powerUse"):
             raise ValueError("전원 제어를 서버가 허용하지 않았습니다")
         return self.build_request_payload(
@@ -783,7 +796,7 @@ class BoilerDevice:
         *,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        """빠른온수·스마트운전·터보온수 명령을 만든다."""
+        """Build a fast-hot-water, smart-operation or turbo-hot-water command."""
         feature_keys = {
             "fast_dhw": "fastDHWUse",
             "smart_fast_dhw": "smartFastDHWUse",
@@ -810,13 +823,14 @@ class BoilerDevice:
     def build_temperature_payload(
         self, kind: str, target: float, client_id: str, *, now_ms: int | None = None
     ) -> dict[str, Any]:
-        """NR-67D 설정온도 명령을 만든다. 섭씨값은 0.5℃ 원시값으로 바꾼다."""
+        """Build an NR-67D setpoint command, converting Celsius into the raw 0.5C value."""
         bounds = self.temperature_bounds(kind)
         if bounds is None:
             raise ValueError(f"{kind} 설정온도 제어를 서버가 허용하지 않았습니다")
         target = float(target)
-        # modelCode=20 앱 분기는 SeekBar 원시 정수를 Float 로만 바꿔 보낸다.
-        # 상태 61이 화면의 30.5℃이므로 전송도 섭씨×2인 61.0이어야 한다.
+        # The modelCode=20 branch of the app sends the SeekBar's raw integer with nothing but a
+        # cast to Float. A status of 61 is 30.5C on screen, so what goes out must likewise be
+        # Celsius x 2, or 61.0.
         raw_target = target * 2
         if not raw_target.is_integer():
             raise ValueError("NR-67D 설정온도는 0.5℃ 단위여야 합니다")
@@ -849,11 +863,11 @@ class BoilerDevice:
 def extract_boiler_status(
     payload: bytes, stats: dict[str, Any] | None = None
 ) -> tuple[str, dict[str, Any]] | None:
-    """보일러 봉투에서 물리 기기 ID와 상태만 꺼낸다.
+    """Extract only the physical device id and the state from a boiler envelope.
 
-    실측 봉투는 ``payload.response.status`` 이고 기기 목록의
-    ``Properties.did.response.macAddress`` 와 같은 값으로 기기를 찾는다. 명령 응답과
-    DID/펌웨어 응답은 ``status`` 가 없으므로 상태로 쓰지 않는다.
+    The observed envelope is ``payload.response.status``, and the device is found by matching
+    ``Properties.did.response.macAddress`` from the device list. Command responses and
+    DID/firmware responses carry no ``status`` and are never used as state.
     """
     try:
         event = json.loads(payload)
@@ -883,7 +897,7 @@ def _normalized_key(key: str) -> str:
 
 
 def _safe_key(key: Any, index: int) -> str:
-    """필드명처럼 보이는 키만 남긴다. 식별자가 dict 키인 경우도 가린다."""
+    """Keep only keys that look like field names, redacting identifiers used as dict keys."""
     text = str(key)
     if not _SAFE_KEY.fullmatch(text) or _IDENTIFIER_KEY.search(text):
         return f"<key:{index}>"
@@ -891,7 +905,7 @@ def _safe_key(key: Any, index: int) -> str:
 
 
 def _safe_numeric_text(value: str) -> int | float | None:
-    """프로토콜 값으로 쓸 만한 짧은 숫자 문자열만 수치로 남긴다."""
+    """Keep as numbers only the short numeric strings plausible as protocol values."""
     text = value.strip()
     try:
         if _INTEGER_TEXT.fullmatch(text):
@@ -946,15 +960,15 @@ def sanitize_boiler_value(value: Any, depth: int = 0) -> Any:
             return number
         return {"kind": "string", "length": len(value)}
 
-    # JSON 밖의 값이 들어와도 repr 로 원문을 남기지 않는다.
+    # Even for a value outside JSON, the original is never left behind through repr.
     return {"kind": type(value).__name__}
 
 
 def observe_boiler_message(payload: bytes, topic: str) -> dict[str, Any]:
-    """한 MQTT 메시지를 개인정보 없는 관찰 레코드로 바꾼다.
+    """Turn one MQTT message into an observation record carrying nothing personal.
 
-    JSON 이 아니면 길이만 남긴다. 바이너리 원문이나 앞부분조차 기기 식별자를
-    품을 수 있으므로 hex/base64 로 보관하지 않는다.
+    Anything that is not JSON keeps only its length. Raw binary, even a leading fragment of
+    it, can hold a device identifier, so none of it is retained as hex or base64.
     """
     parts = topic.split("/")
     try:
@@ -968,8 +982,9 @@ def observe_boiler_message(payload: bytes, topic: str) -> dict[str, Any]:
         "payload_bytes": len(payload),
         "topic_suffix_depth": suffix_depth,
     }
-    # MQTT 프레임은 이미 메모리에 있지만, 거대한 JSON 을 다시 트리로 펼쳐 이벤트
-    # 루프를 오래 잡는 일은 막는다. 크기와 인코딩 종류만으로 진단에는 충분하다.
+    # The MQTT frame is already in memory, but re-expanding a huge JSON document into a tree
+    # would hold the event loop for too long. Its size and encoding kind are enough for
+    # diagnostics.
     if len(payload) > _MAX_JSON_BYTES:
         observation["encoding"] = "oversize"
         return observation

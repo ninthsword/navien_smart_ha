@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""나비엔 스마트 조회용 CLI.
+"""A read-only CLI for querying Navien Smart.
 
-이 도구는 **읽기 전용**이다. 기기에 제어 명령을 보내지 않는다.
+This tool is **read-only** by default; it sends no control command to a device.
 
   python3 tools/navien_cli.py login
   python3 tools/navien_cli.py devices
   python3 tools/navien_cli.py devices --raw
 
-표준 라이브러리만 쓴다. 추가 설치가 필요 없다.
+It uses only the standard library, so nothing has to be installed.
 """
 
 from __future__ import annotations
@@ -31,7 +31,8 @@ from typing import Any
 
 API_URL = "https://nskr.naviensmartcontrol.com/api/v2.0"
 LOGIN_URL = "https://member.naviensmartcontrol.com"
-# 앱의 `Constants.getIotEndPoint()` 값. AWS IoT 앞단의 나비엔 자체 도메인이다.
+# The value from the app's `Constants.getIotEndPoint()` — Navien's own domain in front of
+# AWS IoT.
 # dev: nskr-dev-iot… / qa: nskr-stg-iot…
 IOT_ENDPOINT = "nskr-iot.naviensmartcontrol.com"
 IOT_REGION = "ap-northeast-2"
@@ -47,7 +48,8 @@ ENV_FILE = ROOT / ".env"
 SERVICE_NAMES = {100: "보일러", 200: "숙면매트", 300: "환기청정(에어원)", 500: "스마트홈"}
 MODEL_TYPES = {"em": "카본", "wm": "온수", "fm": "사계절"}
 
-# notes/api-spec.md 의 매트 modelCode 표. 진단 표시용이며 동작에 쓰지 않는다.
+# The mat modelCode table from notes/api-spec.md. For diagnostic display only; nothing
+# depends on it.
 MATE_MODELS = {
     "1": "EQM572", "2": "EQM580", "3": "EQM581", "4": "EQM582/590",
     "5": "EQM591", "6": "EQM650", "17": "EMW700/720", "18": "EMW721",
@@ -65,11 +67,11 @@ class NavienError(Exception):
 
 
 def _ssl_context() -> ssl.SSLContext:
-    """인증서 저장소를 찾는다.
+    """Locate a certificate store.
 
-    python.org 배포판 파이썬은 macOS 시스템 인증서를 못 읽는 경우가 있다
-    (`CERTIFICATE_VERIFY_FAILED`). certifi → /etc/ssl/cert.pem → 기본값 순으로
-    시도한다. **검증을 끄지는 않는다.**
+    Python from python.org sometimes cannot read the macOS system certificates
+    (`CERTIFICATE_VERIFY_FAILED`). This tries certifi, then /etc/ssl/cert.pem, then the
+    default. **Verification is never disabled.**
     """
     try:
         import certifi
@@ -89,7 +91,7 @@ SSL_CONTEXT = _ssl_context()
 
 
 def _opener() -> urllib.request.OpenerDirector:
-    """쿠키를 물고 리다이렉트를 따라가는 opener. 로그인 흐름에 필요하다."""
+    """An opener that holds cookies and follows redirects, as the login flow requires."""
     jar = http.cookiejar.CookieJar()
     return urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(jar),
@@ -129,9 +131,10 @@ def _request(
 def _api(method: str, path: str, token: str, *, query: dict[str, Any] | None = None,
          payload: dict[str, Any] | None = None,
          raw_body: str | None = None) -> dict[str, Any]:
-    """`raw_body` 를 주면 그 문자열을 그대로 보낸다.
+    """Given `raw_body`, that exact string is sent.
 
-    제어 요청은 `topic` 의 '/' 이스케이프를 앱과 똑같이 맞춰야 해서 원문이 필요하다.
+    A control request has to escape the '/' in `topic` exactly as the app does, which needs
+    the original text.
     """
     url = f"{API_URL}{path}"
     if query:
@@ -163,7 +166,7 @@ def _api(method: str, path: str, token: str, *, query: dict[str, Any] | None = N
     raise NavienError(f"{path} 실패 (code={code}): {hint}")
 
 
-# ---------------------------------------------------------------- 인증
+# ------------------------------------------------------------ authentication
 
 
 def _read_env() -> dict[str, str]:
@@ -198,7 +201,7 @@ def _credentials(args: argparse.Namespace) -> tuple[str, str]:
 
 
 def login(username: str, password: str) -> dict[str, Any]:
-    """1단계 — 폼 로그인. 쿠키를 물고 리다이렉트를 따라간다."""
+    """Stage 1 — form login, holding cookies and following redirects."""
     opener = _opener()
     body = urllib.parse.urlencode({"username": username, "password": password}).encode()
     status, raw = _request(
@@ -239,7 +242,7 @@ def login(username: str, password: str) -> dict[str, Any]:
 
 
 def secured_sign_in(access_token: str, user_id: str, account_seq: int) -> dict[str, Any]:
-    """2단계 — 토큰 로그인. home 목록과 AWS IoT 임시 자격증명이 여기서 나온다."""
+    """Stage 2 — token login. The home list and temporary AWS IoT credentials come from here."""
     data = _api(
         "POST",
         "/users/secured-sign-in",
@@ -280,14 +283,14 @@ def cmd_login(args: argparse.Namespace) -> int:
     }
     auth = data.get("authInfo") or {}
     if auth:
-        # AWS IoT 접속용 임시 자격증명. watch 에서 쓴다.
+        # Temporary credentials for connecting to AWS IoT, used by `watch`.
         session["aws"] = {
             "accessKeyId": auth.get("accessKeyId"),
             "secretKey": auth.get("secretKey"),
             "sessionToken": auth.get("sessionToken"),
             "expiresIn": auth.get("authorizationExpiresIn"),
         }
-    # IoT 엔드포인트는 기기 응답에 실려 온다. 상수로 박지 않는다.
+    # The IoT endpoint arrives in the device response; it is never hard-coded.
     try:
         devs = _api("GET", "/devices", access_token,
                     query={"homeSeq": homes[0]["homeSeq"], "userSeq": user_seq})
@@ -322,11 +325,11 @@ def _load_session() -> dict[str, Any]:
     return json.loads(SESSION_FILE.read_text(encoding="utf-8"))
 
 
-# ---------------------------------------------------------------- 기기 조회
+# ------------------------------------------------------------- device queries
 
 
 def _mask(value: Any) -> str:
-    """식별자를 가린다. 같은 값은 같게 표시되므로 대조는 된다."""
+    """Redact an identifier. Equal values render equal, so they can still be compared."""
     if value in (None, ""):
         return "-"
     text = str(value)
@@ -484,7 +487,7 @@ def _find_device(token: str, home_seq: int, user_seq: int, device_seq: int) -> d
 
 
 def cmd_control(args: argparse.Namespace) -> int:
-    """단계(level) 제어 명령을 보낸다. **기기가 실제로 반응한다.**
+    """Send a level control command. **A real device really responds to this.**
 
     앱의 `control-temp` 페이로드를 그대로 따른다 — `event` + `heater` 만 채운다.
     """
@@ -528,7 +531,7 @@ def cmd_control(args: argparse.Namespace) -> int:
             "heater": heater,
         }}},
     }
-    # 앱은 topic 의 '/' 를 '\/' 로 이스케이프해 보낸다. 서버가 까다로울 수 있어 그대로 맞춘다.
+    # The app escapes '/' in the topic as '\/'. The server may be fussy, so this matches it.
     body = json.dumps(payload, ensure_ascii=False).replace(
         '"@@TOPIC@@"', json.dumps(topic, ensure_ascii=False).replace("/", "\\/")
     )
@@ -561,7 +564,7 @@ def cmd_control(args: argparse.Namespace) -> int:
 
 
 def _sigv4_encode(value: Any) -> str:
-    """SigV4 정규화용 인코딩. unreserved 문자만 남긴다 ('/' 도 %2F 로)."""
+    """SigV4 canonical encoding, keeping only unreserved characters ('/' becomes %2F too)."""
     return urllib.parse.quote(str(value), safe="-_.~")
 
 
@@ -575,7 +578,7 @@ def _sigv4_derive_key(secret: str, datestamp: str, region: str, service: str) ->
 
 
 def describe_iot_endpoint(region: str, creds: dict[str, str]) -> str:
-    """AWS IoT `DescribeEndpoint` 로 계정의 데이터 엔드포인트를 받는다.
+    """Fetch the account's data endpoint through the AWS IoT `DescribeEndpoint` call.
 
     앱도 이렇게 한다 (dex 에 `DescribeEndpoint` 심볼 존재).
     **기기 registry 의 `network.server.endpoint` 는 기기가 접속하는 쪽이라 다르다.**
@@ -632,7 +635,7 @@ def describe_iot_endpoint(region: str, creds: dict[str, str]) -> str:
 
 
 def _sigv4_ws_path(endpoint: str, region: str, creds: dict[str, str]) -> str:
-    """AWS IoT WebSocket 용 SigV4 사전서명 경로를 만든다.
+    """Build the SigV4 pre-signed path for the AWS IoT WebSocket.
 
     보안 토큰은 **서명 계산 뒤에** 붙인다. AWS IoT 규칙이다.
     """
@@ -671,7 +674,7 @@ def _sigv4_ws_path(endpoint: str, region: str, creds: dict[str, str]) -> str:
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
-    """기기가 스스로 올리는 shadow 보고를 구독한다. **구독만 한다 — 발행하지 않는다.**"""
+    """Subscribe to the shadow reports a device pushes. **Subscribe only — never publish.**"""
     try:
         import paho.mqtt.client as mqtt
     except ImportError:
@@ -796,7 +799,7 @@ def cmd_whoami(args: argparse.Namespace) -> int:
 
 
 
-# ---------------------------------------------------------------- 에어원
+# -------------------------------------------------------------------- Airone
 
 AIRONE_MODE_NAMES = {0: "없음", 4: "환기", 5: "배기", 6: "요리", 8: "청정", 9: "제습",
                      10: "환기제습", 12: "자동운전", 15: "환기(외기)", 17: "바이패스",
@@ -813,7 +816,7 @@ def _airone_mode_label(mode: Any, option: Any) -> str:
 
 
 def _airone_prepare(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], str, int, int]:
-    """세션과 기기를 잡고, 에어원인지·세대가 맞는지 검사한다."""
+    """Take the session and device, and check that it is an Airone of the right generation."""
     session = _load_session()
     home_seq = args.home_seq or session["homes"][0]["homeSeq"]
     user_seq = session["userSeq"]
@@ -839,7 +842,7 @@ def _airone_prepare(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str,
 
 def _airone_body(dev: dict[str, Any], command: str, client_id: str,
                  desired: dict[str, Any] | None) -> str:
-    """`AironePubComm` 봉투를 만든다. 매트와 모양이 다르다."""
+    """Build an `AironePubComm` envelope, whose shape differs from a mat's."""
     rc = _dig(dev, "Properties", "data", "did", "reported", "roomController") or {}
     physical = rc.get("deviceId") or dev["deviceId"]
     topic = f"cmd/rc/v2/{dev['modelCode']}/{physical}/remote/{command}"
@@ -860,7 +863,7 @@ def _airone_body(dev: dict[str, Any], command: str, client_id: str,
 
 
 def cmd_airone_modes(args: argparse.Namespace) -> int:
-    """서버가 알려준 운전 조합을 표로 본다. **아무것도 보내지 않는다.**
+    """Tabulate the operating combinations the server declared. **Nothing is sent.**
 
     이 표가 통합이 선택 항목을 만드는 근거다. 제보할 때 이것부터 붙이면 된다.
     """
@@ -892,7 +895,7 @@ def cmd_airone_modes(args: argparse.Namespace) -> int:
             wind_txt = f"{wind}({AIRONE_WIND_NAMES[wind]})"
         elif wind is not None:
             wind_txt = f"{wind}(?)"
-        # `supportedAirVolumes` 가 고를 수 있는 목록이다. `airVolume` 은 지금 값이다.
+        # `supportedAirVolumes` is the selectable list; `airVolume` is the current value.
         supported = item.get("supportedAirVolumes") or []
         sup_txt = ",".join(
             f"{v}({AIRONE_WIND_NAMES.get(v, '?')})" for v in supported
@@ -922,7 +925,7 @@ def cmd_airone_modes(args: argparse.Namespace) -> int:
 
 
 def cmd_airone_status(args: argparse.Namespace) -> int:
-    """상태를 올려달라고 요청한다.
+    """Ask the device to push its state.
 
     응답은 MQTT 로 온다 — `watch --prefix airone` 를 따로 띄워 두고 이걸 실행한다.
     공기질은 REST 로 바로 읽는다.
@@ -961,7 +964,7 @@ def cmd_airone_status(args: argparse.Namespace) -> int:
 
 
 def cmd_airone_control(args: argparse.Namespace) -> int:
-    """운전 모드·풍량·습도를 바꾼다. **기기가 실제로 반응한다.**
+    """Change the operating mode, fan speed or humidity. **A real device really responds.**
 
     서버가 알려준 조합에 없는 값은 거부한다. 추측으로 보내지 않는다.
     """

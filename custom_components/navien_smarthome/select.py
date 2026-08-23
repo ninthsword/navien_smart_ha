@@ -1,16 +1,18 @@
-"""난방 단계 선택 (`heatControl.unit == "1.0L"`).
+"""Heating step selection (`heatControl.unit == "1.0L"`).
 
-단계는 연속량이 아니다. 9개의 이산 상태이고, 그중 `0` 은 숫자가 아니라
-**운전 대기** 라는 상태다. 슬라이더로 만들면 세 가지가 어긋난다.
+A step is not a continuous quantity. There are nine discrete states, and `0` among them is
+not a number but the state the app calls 운전 대기 (standby). A slider gets three things
+wrong:
 
-- 조준해야 한다 — 좁은 카드 행에서 한 칸 오버슈트가 실제 온도 차이로 이어진다
-- 눈금에 이름을 못 붙인다 — 앱은 `운전 대기` 라고 부르는데 `0 단계` 로 보인다
-- 서버가 알려주는 `rangeMin` 이 1이라 0을 넣을 수 없다. 표시는 되는데 설정이 안 됐다
+- it has to be aimed — in a narrow card row, overshooting by one means a real temperature
+  difference
+- its ticks cannot be named — the app says 운전 대기 where a slider shows "step 0"
+- the server reports `rangeMin` as 1, so 0 cannot be entered. It displays but never sets
 
-단계를 `climate` 로 만들지 않은 이유("단계는 온도가 아니다")와 같은 논리다.
-단계는 연속량도 아니다.
+This is the same reasoning that kept steps out of `climate` ("a step is not a temperature").
+A step is not a continuous quantity either.
 
-온도형(`0.5C`)은 진짜 연속량이므로 `climate` 를 쓴다.
+Temperature mats (`0.5C`) are genuinely continuous, so they use `climate`.
 """
 
 from __future__ import annotations
@@ -45,14 +47,15 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
     entities: list[SelectEntity] = []
     for device in (coordinator.data or {}).values():
-        # 사계절 모델만 계절이 있다. 서버가 `coolControl` 을 줄 때가 그때다.
+        # Only four-season models have a season, which is when the server sends `coolControl`.
         if device.is_four_season:
             entities.append(NavienSmartSeasonSelect(coordinator, device))
 
-        # **`functions.beep` 이 있으면 소리를 내는 기기다.** 앱은 이 값을 안 보고
-        # 음량 화면을 여는데, 앱의 판단 기준을 찾지 못했다 — 모델별 표에도
-        # 음량 항목이 없다. 서버가 스스로 알려주는 값을 쓰는 편이 낫다.
-        # 없는 기기에 명령을 보내는 것보다 안 만드는 쪽이 안전하다.
+        # **`functions.beep` present means the device makes sound.** The app opens its volume
+        # screen without consulting this value, and its actual criterion was never found —
+        # the per-model table has no volume row either. Better to use what the server declares
+        # about itself: not creating the entity is safer than sending a command to a device
+        # that has no such control.
         if device.has_beep:
             entities.append(NavienSmartVolumeSelect(coordinator, device))
 
@@ -64,11 +67,11 @@ async def async_setup_entry(
         )
 
     for airone in coordinator.airone.values():
-        # 서버가 고를 수 있는 조합을 알려주지 않으면 만들지 않는다.
+        # Not created unless the server reports the combinations that can be selected.
         if airone.selectable_modes:
             entities.append(AironeModeSelect(coordinator, airone))
-        # 풍량은 모드에 따라 고를 수 있는 값이 달라진다. 어떤 모드에서든 두 개
-        # 이상 고를 수 있을 때만 만든다.
+        # The selectable fan speeds depend on the mode. Created only when at least one mode
+        # offers two or more of them.
         if any(
             len(airone.fan_choices(mode.mode, mode.option)) > 1
             for mode in airone.selectable_modes
@@ -79,15 +82,16 @@ async def async_setup_entry(
 
 
 class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
-    """사계절 매트의 계절 — 난방 / 냉방.
+    """The season of a four-season mat — heating or cooling.
 
-    **`climate` 의 난방·냉방으로 만들지 않았다.** 계절은 지금 무엇을 하는지가
-    아니라 **기기가 어느 쪽으로 설정돼 있는지**다. 앱도 제어 화면이 아니라 기기
-    설정 화면에 두고, 바꾸면 온도 범위가 통째로 갈린다(난방 28~45 / 냉방 20~35).
-    `climate` 의 모드 버튼으로 만들면 「지금 난방 중」과 「난방으로 설정됨」이
-    같은 자리에 겹친다.
+    **This is not modelled as `climate` heat/cool.** The season is not what the device is
+    doing right now but **which way it is configured**. The app puts it on the device settings
+    screen rather than the control screen, and changing it splits the temperature range
+    wholesale (heating 28-45, cooling 20-35). As a `climate` mode button, "currently heating"
+    and "configured for heating" would collapse into the same place.
 
-    앱이 쓰는 값 두 개만 쓴다. 서버가 모르는 값을 보내오면 상태를 비운다.
+    Only the two values the app uses are offered. An unrecognised value from the server
+    leaves the state empty.
     """
 
     _attr_icon = "mdi:sun-snowflake-variant"
@@ -107,8 +111,8 @@ class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
         device = self.device
         if device is None:
             return None
-        # 모르는 값이면 비운다. `season_name` 은 「알 수 없음(3)」처럼 목록에 없는
-        # 문구를 만들 수 있는데, 그것을 상태로 쓰면 목록과 어긋난다.
+        # Unknown values leave it empty. `season_name` can produce text that is not in the
+        # option list (such as "알 수 없음(3)"), and using that as the state contradicts the list.
         return SEASON_NAMES.get(device.season)
 
     async def async_select_option(self, option: str) -> None:
@@ -124,25 +128,25 @@ class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
 
 
 class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):
-    """조작음 음량 — 음소거 / 1 / 2 / 3 단계.
+    """Button sound volume — mute, 1, 2, 3.
 
-    앱 음량 화면과 칸이 같다. `MateDeviceSettingSoundVolumeFragment` 가 고른
-    `selectedIndex`(0~3)를 그대로 `Desired.volume` 에 싣는다.
+    The steps match the app's volume screen: `MateDeviceSettingSoundVolumeFragment` puts the
+    `selectedIndex` it picked (0-3) straight into `Desired.volume`.
 
-    **끄고 켜는 것이 아니라 단계라서 스위치로 만들지 않았다.** 조작음을 통째로
-    끄는 `control-beep` 는 따로 있는데, 그건 값 체계가 다르고 앱이
-    2024년 이후 모델에만 붙인다 — 손대지 않는다.
+    **Not a switch, because this is a level rather than an on/off.** A separate `control-beep`
+    silences the button sound entirely, but it uses a different value scheme and the app only
+    attaches it to models from 2024 onwards — leave it alone.
     """
 
     _attr_icon = "mdi:volume-high"
     _attr_options = list(MAT_VOLUME_NAMES.values())
-    # **한 번 정하고 안 건드리는 값이라 「설정」으로 내린다.** 기기 페이지에서
-    # 줄 아래 칸으로 가고, 기본 「개요」 대시보드에서는 빠진다
-    # (프론트엔드 `computeDefaultViewStates` 가 `entity_category` 를 숨긴다).
+    # **Set once and left alone, so it goes under configuration.** That moves it further down
+    # the device page and drops it from the default Overview dashboard (the frontend's
+    # `computeDefaultViewStates` hides anything with an `entity_category`).
     #
-    # **조작 잠금에는 붙이지 않는다.** 아이 있는 집에서 매일 켜고 끄는 것이라
-    # 개요 화면에서 사라지면 안 된다 — v0.13.0 에서 읽기 전용 센서를 굳이
-    # 스위치로 승격시킨 이유가 그것이다.
+    # **Not applied to the control lock.** A household with children toggles that daily, so it
+    # must not vanish from the Overview — which is exactly why v0.13.0 went to the trouble of
+    # promoting a read-only sensor to a switch.
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
@@ -172,7 +176,7 @@ class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):
 
 
 class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
-    """구역 하나의 난방 단계."""
+    """Heating step for one zone."""
 
     _attr_icon = "mdi:thermometer-lines"
 
@@ -190,25 +194,25 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         self._attr_name = f"{label} 단계" if device.is_double else "난방 단계"
 
         control = device.heat_control
-        assert control is not None  # setup 에서 걸러진다
+        assert control is not None  # filtered out during setup
         low = int(control.range_min if control.range_min is not None else 1)
         high = int(control.range_max if control.range_max is not None else 8)
 
-        # 서버는 `rangeMin` 을 1로 주지만 기기는 0(운전 대기)을 받는다 — 실측 확인.
-        # 그래서 0을 앞에 붙인다. 온도형에는 적용하지 않는다.
+        # The server reports `rangeMin` as 1, but the device accepts 0 (standby) — confirmed
+        # on a real device. So 0 is prepended. This does not apply to temperature mats.
         self._levels = [LEVEL_STANDBY, *range(low, high + 1)]
         self._attr_options = [level_label(value) for value in self._levels]
 
     @property
     def available(self) -> bool:
-        """냉방 중이면 손을 뗀다.
+        """Stay out of the way while cooling.
 
-        **단계형은 그대로 막아둔다.** 냉방 값 체계가 확인된 것은 온도형(`0.5C`)
-        뿐이다 — 실기기 제보가 EMF520(온도형)이었다. 단계형 사계절 모델이
-        냉방에서 어떤 단계 범위를 쓰는지는 아직 모른다.
+        **Stepped mats remain blocked.** The cooling value scheme was only confirmed for
+        temperature mats (`0.5C`) — the real-device report was an EMF520, a temperature mat.
+        What step range a stepped four-season model uses while cooling is still unknown.
 
-        목록(`options`)이 만들어질 때 한 번 정해지는 구조라, 범위가 갈리는 것을
-        런타임에 반영할 수 없다. 제보가 오면 그때 연다.
+        `options` is fixed once at construction, so a range that splits cannot be reflected at
+        runtime. Open this up when a report arrives.
         """
         device = self.device
         return super().available and device is not None and not device.is_cooling
@@ -222,7 +226,7 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         if value is None:
             return None
         label = level_label(int(value))
-        # 서버가 목록 밖의 값을 보내면 상태를 비운다. 없는 항목을 만들지 않는다.
+        # A value outside the list leaves the state empty. Do not invent an option.
         return label if label in (self._attr_options or []) else None
 
     @property
@@ -233,13 +237,14 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         value = device.zone_setting(self._zone)
         attrs: dict[str, Any] = {
             "zone": self._zone,
-            # 숫자로 다뤄야 하는 자동화·템플릿을 위해 값을 그대로 남긴다.
+            # The raw value stays available for automations and templates that need a number.
             "level": None if value is None else int(value),
             "enabled": device.zone_enabled(self._zone),
         }
         control = device.heat_control
         if control is not None and control.safe_value is not None:
-            # 고온경고 기준선. 상한이 아니다 — 앱도 이 위로 설정할 수 있다.
+            # The high-temperature warning line, not an upper bound — the app allows settings
+            # above it too.
             attrs["high_temp_warning_level"] = int(control.safe_value)
         return attrs
 
@@ -254,13 +259,13 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         control = device.active_control
         off = control.off_value if control is not None else None
         if off is not None and level <= off:
-            # **「운전 대기」는 그 구역을 끄는 것이다.** 온도형의 「꺼짐」과 같은
-            # 명령이라 같은 자리를 쓴다 (이슈 #16).
+            # **Standby turns that zone off.** It is the same command as "off" on a
+            # temperature mat, so it shares the same path (issue #16).
             #
-            # **한쪽만 대기로 내리는 것은 종전과 똑같다** — `build_zone_off` 가
-            # 같은 `heater` 를 만든다. 달라지는 것은 **마지막 남은 구역**을 내릴
-            # 때뿐이고, 그때는 기기가 어차피 막으므로 이유를 알린다.
-            # (실기기 확인: 좌 0 인 상태에서 우를 0 으로 내리면 `0, 1` 로 남는다)
+            # **Dropping one side to standby behaves exactly as before** — `build_zone_off`
+            # produces the same `heater`. Only dropping **the last remaining zone** differs,
+            # and the device refuses that anyway, so the reason is surfaced.
+            # (Observed: with the left side at 0, setting the right to 0 leaves `0, 1`.)
             await self.coordinator.async_send(
                 device, device.build_zone_off([self._zone])
             )
@@ -270,13 +275,14 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
 
 
 class AironeModeSelect(AironeEntity, SelectEntity):
-    """운전 모드.
+    """Operating mode.
 
-    선택 항목을 **서버 메타데이터(`did.roomController.mode`)에서만** 만든다.
-    모델 표를 코드에 넣지 않는다 — 매트에서 통한 방식과 같다.
+    The options are built **only from server metadata** (`did.roomController.mode`). No model
+    table goes in the source — the same approach that worked for mats.
 
-    앱과 같은 축으로 자른다 — 터보·절전·기저는 여기가 아니라 풍량 쪽이다.
-    그래야 목록이 짧고, 풍량만 바꾸려고 모드 목록을 뒤지지 않는다.
+    The axis is cut the way the app cuts it: turbo, saving and baseline belong to fan speed,
+    not here. That keeps the list short, so changing only the fan speed does not mean digging
+    through the mode list.
     """
 
     _attr_translation_key = "airone_mode"
@@ -293,7 +299,8 @@ class AironeModeSelect(AironeEntity, SelectEntity):
         device = self.device
         if device is None or device.mode is None:
             return None
-        # 지금 상태가 어느 항목에 해당하는지 찾는다. 숙면은 옵션까지 봐야 갈린다.
+        # Find which option the current state corresponds to. Sleep needs the option field
+        # as well to be told apart.
         for choice in self._modes:
             if choice.mode != device.mode:
                 continue
@@ -310,7 +317,7 @@ class AironeModeSelect(AironeEntity, SelectEntity):
         return {
             "mode": device.mode,
             "option": device.option,
-            # 앱이 보여주는 전체 문구. 자동화·템플릿에서 쓸 수 있게 남긴다.
+            # The full label the app shows, kept available for automations and templates.
             "full_label": device.mode_label,
         }
 
@@ -322,18 +329,19 @@ class AironeModeSelect(AironeEntity, SelectEntity):
             chosen = self._modes[(self._attr_options or []).index(option)]
         except ValueError:
             return
-        # 모드를 바꿀 때 풍량은 `build_mode_desired` 가 서버 값에서 골라 채운다.
+        # On a mode change, `build_mode_desired` fills the fan speed from the server values.
         await self.coordinator.async_airone_mode(device, chosen.mode, chosen.option)
 
 
 class AironeFanSelect(AironeEntity, SelectEntity):
-    """풍량.
+    """Fan speed.
 
-    **미풍·약풍·강풍·자동과 터보·절전·기저를 한 축에 둔다.** 앱이 그렇게 다룬다
-    (`AironeModeCode.labelFor` 의 두 번째 칸). 기기에 따라 앞쪽만 있거나 뒤쪽만
-    있는데, 어느 쪽이든 사용자에게는 「풍량」 하나로 보이는 것이 맞다.
+    **The gentle/low/high/auto set and the turbo/saving/baseline set share one axis**, the way
+    the app treats them (the second field of `AironeModeCode.labelFor`). A device may offer
+    only one set or the other, and either way it should look like a single fan-speed control
+    to the user.
 
-    지금 모드에서 서버가 알려준 조합만 보여준다.
+    Only the combinations the server reports for the current mode are offered.
     """
 
     _attr_translation_key = "airone_fan"
@@ -356,15 +364,15 @@ class AironeFanSelect(AironeEntity, SelectEntity):
 
     @property
     def available(self) -> bool:
-        """고를 것이 **하나도 없을 때만** 손을 뗀다.
+        """Step aside **only when there is nothing to choose at all.**
 
-        **하나뿐인 것과 없는 것은 다르다.** 앱은 숙면에서 풍량을 「자동」으로
-        보여주면서 못 누르게만 한다 — 숨기지 않는다. 요리(강풍 하나)와
-        자동운전(자동 하나)도 같다.
+        **One option and no options are different things.** In sleep mode the app still shows
+        the fan speed as auto and merely makes it unpressable — it does not hide it. Cooking
+        (high only) and auto operation (auto only) behave the same way.
 
-        `> 1` 로 두었더니 그 모드로 바꾸는 순간 엔티티가 통째로 빠졌다.
-        사용자에게는 「지금 풍량이 뭔지」가 사라지는 것이라 없느니만 못하다.
-        하나뿐이면 그 값을 보여준다 — 골라도 같은 값이라 바뀌는 것이 없다.
+        Written as `> 1`, the entity vanished entirely the moment the mode changed. To the
+        user that removes any answer to "what is the fan speed right now", which is worse than
+        useless. With one option, show it — selecting it changes nothing.
         """
         return super().available and bool(self._choices)
 

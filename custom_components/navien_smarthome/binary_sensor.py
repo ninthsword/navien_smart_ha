@@ -1,4 +1,4 @@
-"""고온경고와 실시간 연결 상태."""
+"""High-temperature warning and live connection state."""
 
 from __future__ import annotations
 
@@ -47,9 +47,9 @@ async def async_setup_entry(
 
 
 class NavienSmartHighTempWarning(NavienSmartEntity, BinarySensorEntity):
-    """설정 단계가 고온경고선을 넘었는지.
+    """Whether the setpoint step is above the high-temperature warning line.
 
-    제어를 막지 않는다 — 앱도 이 위로 설정할 수 있고, 경고 표시만 한다.
+    It blocks nothing: the app allows settings above the line too, and only shows a warning.
     """
 
     _attr_name = "고온경고"
@@ -62,7 +62,7 @@ class NavienSmartHighTempWarning(NavienSmartEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        """냉방 중에는 판정하지 않는다. 냉방의 안전 기준값 의미가 미확인이다."""
+        """No judgement while cooling — what the safety threshold means in cooling is unconfirmed."""
         device = self.device
         return super().available and device is not None and not device.is_cooling
 
@@ -73,7 +73,7 @@ class NavienSmartHighTempWarning(NavienSmartEntity, BinarySensorEntity):
 
 
 class NavienSmartErrorProblem(NavienSmartEntity, BinarySensorEntity):
-    """`errorCode` 가 0 이 아니면 문제."""
+    """A non-zero `errorCode` is a problem."""
 
     _attr_name = "오류"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
@@ -91,16 +91,17 @@ class NavienSmartErrorProblem(NavienSmartEntity, BinarySensorEntity):
 
 
 class AironeAirDataMissing(AironeEntity, BinarySensorEntity):
-    """전에 오던 공기질 값이 지금 안 오는지.
+    """Whether air-quality values that used to arrive have stopped arriving.
 
-    **아무 신호가 없던 것이 문제였다.** 에어모니터와 룸콘 사이 통신이 끊기면
-    서버는 온도·습도만 주기 시작하고, 나머지 센서는 값이 멈춘 채 남거나
-    재시작 뒤 `사용할 수 없음` 이 된다. 오류 코드도 안 오고 조회도 성공하므로
-    어디에도 티가 나지 않는다.
+    **The problem was that nothing signalled it at all.** When the link between the air
+    monitor and the room controller drops, the server starts sending only temperature and
+    humidity; the remaining sensors either freeze at their last value or turn up as
+    `unavailable` after a restart. No error code is sent and the poll still succeeds, so
+    nothing anywhere shows it.
 
-    기기가 「센서가 없다」고 말한 적은 없다 — **우리가 전에 받아봤는데 지금은
-    안 온다**는 관찰뿐이다. 그래서 기기 고장이라고 하지 않고 자료가 빠졌다고만
-    알린다.
+    The device never claims "this sensor is absent" — all we have is the observation that
+    **we used to receive it and now do not**. So this reports missing data rather than a
+    device fault.
     """
 
     _attr_name = "공기질 자료 끊김"
@@ -135,7 +136,7 @@ class AironeAirDataMissing(AironeEntity, BinarySensorEntity):
             "빠진 항목": [AIRONE_SENSOR_KINDS[k][0] for k in missing],
             "받고 있는 항목": [AIRONE_SENSOR_KINDS[k][0] for k in device.sensor_kinds],
         }
-        # 값이 멈춘 것과 아예 안 오는 것은 다르다. 둘 다 보여준다.
+        # A value that froze and a value that stopped arriving are different things. Show both.
         if (age := device.air_sensor_age) is not None:
             attrs["마지막으로 값이 바뀐 뒤(초)"] = age
         attrs["같은 값 반복 조회"] = device.air_sensor_unchanged
@@ -143,10 +144,10 @@ class AironeAirDataMissing(AironeEntity, BinarySensorEntity):
 
 
 class BoilerHotWaterRunning(BoilerEntity, BinarySensorEntity):
-    """지금 온수를 쓰고 있는지.
+    """Whether hot water is being drawn right now.
 
-    ``DHWUse`` 는 앱이 온수 기능 스위치에 쓰는 것과 같은 1=끔·2=켬 값이다.
-    수도를 열면 켜지므로 샤워·설거지 감지에 쓸 수 있다.
+    ``DHWUse`` carries the same 1=off / 2=on value the app uses for its hot-water switch.
+    It turns on when a tap opens, so it can detect a shower or the washing-up.
     """
 
     _attr_name = "온수 사용 중"
@@ -171,9 +172,10 @@ class BoilerHotWaterRunning(BoilerEntity, BinarySensorEntity):
 
 
 class BoilerFaultProblem(BoilerEntity, BinarySensorEntity):
-    """``faultStatus1`` · ``faultStatus2`` 중 하나라도 0 이 아니면 문제.
+    """A non-zero ``faultStatus1`` or ``faultStatus2`` is a problem.
 
-    각 비트의 뜻은 모른다. 원시값은 속성으로 남겨 제보 때 대조할 수 있게 한다.
+    What the individual bits mean is unknown. The raw values stay as attributes so they can
+    be cross-checked against a user report.
     """
 
     _attr_name = "고장 상태"
@@ -200,7 +202,7 @@ class BoilerFaultProblem(BoilerEntity, BinarySensorEntity):
 
 
 class AironeErrorProblem(AironeEntity, BinarySensorEntity):
-    """오류 여부. 방 컨트롤러와 실외기 중 하나라도 오류면 켜진다."""
+    """Error state: on when either the room controller or the outdoor unit reports one."""
 
     _attr_name = "오류"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM

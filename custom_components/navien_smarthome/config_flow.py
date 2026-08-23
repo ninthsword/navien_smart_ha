@@ -1,7 +1,7 @@
-"""설정 흐름.
+"""Config flow.
 
-아이디·비밀번호를 config entry 에 담는다. YAML 이나 코드에 하드코딩하지 않는다.
-home 이 여러 개면 어느 home 을 쓸지 고르게 한다.
+The username and password go into the config entry; they are never hard-coded in YAML or
+in the source. When the account holds more than one home, the user picks which one to use.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ STEP_USER_SCHEMA = vol.Schema(
 
 
 class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
-    """아이디/비밀번호 → (필요하면) home 선택."""
+    """Username and password, then a home to use if there is more than one."""
 
     VERSION = 1
 
@@ -71,7 +71,7 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_home(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """home 이 여러 개일 때만 나온다."""
+        """Shown only when the account holds more than one home."""
         if user_input is not None:
             chosen = int(user_input[CONF_HOME_SEQ])
             home = next(
@@ -95,21 +95,21 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
-        """재인증의 입구.
+        """Entry point for re-authentication.
 
-        `ConfigEntryAuthFailed` 를 올리면 HA 는 `SOURCE_REAUTH` 로 흐름을 열고
-        **`async_step_reauth` 를 찾는다.** 확인 화면만 있고 이 입구가 없으면
-        흐름이 열리지 않아, 비밀번호를 바꾼 사용자가 통합을 지웠다 다시 까는
-        수밖에 없다 — 엔티티 ID 와 장기 통계가 통째로 끊긴다.
+        Raising `ConfigEntryAuthFailed` makes HA open the flow with `SOURCE_REAUTH` and look
+        for **`async_step_reauth`**. With only a confirmation step and no entry point here,
+        the flow never opens, and a user who changed their password would have to delete
+        and reinstall the integration — losing every entity id and all long-term statistics.
 
-        `entry_data` 는 쓰지 않는다. 아이디는 아래에서 기존 entry 로 읽는다.
+        `entry_data` is unused; the username is read from the existing entry below.
         """
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """비밀번호가 바뀌었거나 세션이 계속 실패할 때."""
+        """Used when the password changed or the session keeps failing."""
         errors: dict[str, str] = {}
         entry = self._get_reauth_entry()
 

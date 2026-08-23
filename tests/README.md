@@ -1,56 +1,56 @@
-# 시험
+# Tests
 
 ```bash
-python3 tests/run.py            # 전부
-python3 tests/run.py filter     # 이름에 filter 가 들어간 것만
+python3 tests/run.py            # everything
+python3 tests/run.py filter     # only files whose name contains "filter"
 ```
 
-**Home Assistant 를 설치하지 않아도 돌아갑니다.** 외부 패키지도 필요 없습니다.
-파이썬 3.11 이상이면 됩니다.
+**They run without Home Assistant installed**, and need no external packages. Python 3.11
+or later is enough.
 
-## 왜 HA 없이 도나
+## Why they run without HA
 
-`tests/ha_stub.py` 가 통합이 쓰는 HA 모듈의 **이름과 모양만** 흉내 냅니다.
-동작은 재현하지 않습니다. 그래서 이 시험이 확인하는 것은 이런 것들입니다.
+`tests/ha_stub.py` imitates **only the names and shapes** of the HA modules the integration
+uses; none of the behaviour is reproduced. So what these tests actually check is:
 
-- 모듈이 실제로 import 되는가 (문법 검사로는 안 잡힙니다)
-- 기기 응답을 넣으면 **어떤 명령이 만들어지는가**
-- 값이 없거나 이상할 때 **터지지 않고 무엇을 하는가**
-- 판단 근거가 코드에 적혀 있는가
+- whether every module really imports (a syntax check does not catch this)
+- **which command gets built** when a device response goes in
+- **what happens instead of a crash** when a value is missing or malformed
+- whether the reasoning behind a decision is written down in the code
 
-HA 가 실제로 어떻게 도는지 알아야 하는 시험은 HA 원본을 직접 받아서 씁니다.
+A test that needs to know how HA really behaves takes HA's own source instead.
 
-## 무엇을 시험하나
+## What is tested
 
-| 파일 | |
+| file | |
 | --- | --- |
-| `test_imports.py` | 전 모듈 import · CLI 문법 |
-| `test_zone_onoff.py` | 구역 하나를 끄고 켜는 길 (이슈 #16) |
-| `test_filter.py` | 필터 센서가 잔량이라는 것 (PR #18) |
-| `test_boiler_observation.py` | 보일러는 제어 없이 실측 MQTT 상태를 읽고 공개 진단은 식별정보 제거 |
-| `test_boiler_extra_status.py` | 읽고 버리던 status 필드에서 만든 센서들 · 오류 코드 이름 |
-| `test_gas_statistics.py` | 가스 이력을 장기 통계로 넣는 길 · 겹치는 달 처리 |
-| `test_airone_air_kinds.py` | 공기질 종류가 줄어도 엔티티가 사라지지 않는다 · 저장 순서 |
-| `test_review_fixes.py` | 전체 검토에서 나온 수정들이 되돌아가지 않게 |
+| `test_imports.py` | every module imports; the CLI parses |
+| `test_zone_onoff.py` | turning a single zone off and on (issue #16) |
+| `test_filter.py` | the filter sensor reports life remaining (PR #18) |
+| `test_boiler_observation.py` | the boiler reads observed MQTT state without control, and public diagnostics carry no identifiers |
+| `test_boiler_extra_status.py` | the sensors built from status fields that used to be discarded, and the error-code names |
+| `test_gas_statistics.py` | writing gas history into long-term statistics, and handling overlapping months |
+| `test_airone_air_kinds.py` | entities survive a shrinking set of air-quality kinds, and the save ordering |
+| `test_review_fixes.py` | the fixes from the full review cannot regress |
 
-## 새로 쓸 때
+## Writing a new one
 
-`harness.py` 의 `make_mat` · `make_airone` 로 기기를 만들고 `Report` 로 셉니다.
+Build devices with `make_mat` and `make_airone` from `harness.py`, and count with `Report`.
 
 ```python
 from harness import Report, make_mat
 
 r = Report()
-r.section("무엇을 보는가")
+r.section("what this looks at")
 mat = make_mat(unit="0.5C", range_min=28, range_max=50, capacity=2,
                zones={"left": 33.0, "right": 30.0})
-r.ok(mat.zone_is_off("left") is False, "켜져 있다")
+r.ok(mat.zone_is_off("left") is False, "it is on")
 sys.exit(r.finish())
 ```
 
-**가짜 상태를 실기기에 없는 조합으로 만들지 마세요.** `make_mat` 이 `enable` 을
-값에서 유도하는 이유가 그것입니다 — 꺼짐 값인데 `enable: true` 같은 상태는
-실기기에 없고, 그런 데이터로 통과한 시험은 아무것도 보장하지 않습니다.
+**Do not build fake state in combinations that cannot occur on a real device.** That is why
+`make_mat` derives `enable` from the value: an off value with `enable: true` does not exist
+on real hardware, and a test that passes on such data guarantees nothing.
 
-**왜 그렇게 판단했는지를 함께 적어 주세요.** 이 저장소의 주석은 「무엇을」보다
-「왜」를 적습니다. 앱을 다시 뜯지 않아도 근거를 따라갈 수 있어야 합니다.
+**Write down why a decision was made.** Comments in this repository record the **why** rather
+than the what, so the reasoning can be followed without tearing the app apart again.

@@ -1,11 +1,11 @@
-"""기기 응답과 shadow 상태를 통합이 쓰기 쉬운 형태로 정리한다.
+"""Reshape device responses and shadow state into something the integration can use.
 
-실측에서 나온 함정을 여기서 흡수한다.
+The traps found on real devices are absorbed here.
 
-- `functions` 는 모델마다 키가 빠진다. 없는 기능은 엔티티를 만들지 않는다
-- `heater.single` 이 `null` 로 함께 온다. 키 존재 여부로 판단하면 틀린다
-- 싱글/더블은 `mcu.capacity` 로 가른다. `mcu.matType` 이 아니다
-- `sleepMode` 는 `functions` 쪽과 상태 쪽 구조가 다르다. 섞지 않는다
+- `functions` drops keys per model. A feature that is absent gets no entity
+- `heater.single` arrives as `null` alongside the others. Testing for key presence is wrong
+- single versus double is decided by `mcu.capacity`, not `mcu.matType`
+- `sleepMode` has a different shape under `functions` than it does in state. Do not mix them
 """
 
 from __future__ import annotations
@@ -41,12 +41,12 @@ def _dig(source: Any, *keys: str) -> Any:
     return source
 
 
-# 진단에 남길 기록 개수. 순서를 보는 것이 목적이라 길 필요가 없다.
+# How many records diagnostics keeps. The point is to see the ordering, so it need not be long.
 _LOG_KEEP = 8
 
 
 def _merge(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    """딕셔너리를 깊이까지 겹쳐 쓴다. 목록과 그 밖의 값은 통째로 바꾼다."""
+    """Merge dictionaries at any depth. Lists and other values are replaced wholesale."""
     merged = dict(base)
     for key, value in incoming.items():
         current = merged.get(key)
@@ -58,9 +58,10 @@ def _merge(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
 
 
 def _version_text(current: Any) -> str | None:
-    """`{major, minor, build}` 를 `14.0.0` 으로 옮긴다.
+    """Render `{major, minor, build}` as `14.0.0`.
 
-    매트는 MCU 와 Wi-Fi 모듈이 각자 펌웨어를 가진다 (실측 MCU 14.0.0 / Wi-Fi 5.1.100).
+    A mat carries separate firmware for its MCU and its Wi-Fi module (observed: MCU 14.0.0,
+    Wi-Fi 5.1.100).
     """
     if not isinstance(current, dict):
         return None
@@ -72,10 +73,10 @@ def _version_text(current: Any) -> str | None:
 
 @dataclass(slots=True)
 class HeatControl:
-    """`functions.heatControl` 또는 `functions.coolControl`.
+    """Either `functions.heatControl` or `functions.coolControl`.
 
-    두 구조는 같고, 냉방에만 `fanRPM` 과 `antiCondensation` 이 더 붙는다.
-    펠티어 냉각이라 팬으로 열을 빼고 결로를 잡아야 하기 때문이다.
+    The two have the same shape; cooling adds `fanRPM` and `antiCondensation`. Cooling is
+    Peltier-based, so a fan has to carry the heat away and condensation has to be managed.
     """
 
     unit: str | None
@@ -100,35 +101,35 @@ class HeatControl:
 
     @property
     def step(self) -> float:
-        """`<간격><축>` 인코딩의 앞쪽 숫자."""
+        """The leading number of the `<step><axis>` encoding."""
         if self.is_celsius:
             return 0.5
         return 1.0
 
     @property
     def off_value(self) -> float | None:
-        """구역 하나를 끌 때 보내는 값. **`rangeMin` 보다 한 칸 아래다.**
+        """The value sent to turn one zone off — **one step below `rangeMin`.**
 
-        앱 원본 (`MateWifiModelControlViewModel.setTemperature`)
+        From the app (`MateWifiModelControlViewModel.setTemperature`):
 
-            if (temp <= rangeMin - 1) temp = 0;      // 내부 표시용
+            if (temp <= rangeMin - 1) temp = 0;      // for the app's own display
             ...
-            if (temp < rangeMin) temp = rangeMin - controlUnit;   // 실제 전송값
+            if (temp < rangeMin) temp = rangeMin - controlUnit;   // what actually goes out
 
-        **0 을 보내는 게 아니다.** 0 은 앱이 화면에 「꺼짐」을 그리려고 쓰는 중간
-        값이고, 기기로 나가는 것은 `rangeMin - 간격` 이다.
+        **It does not send 0.** Zero is an intermediate value the app uses to draw "off" on
+        screen; what reaches the device is `rangeMin - step`.
 
-            단계형 1.0L (1~8)    1 - 1.0  = 0      ← 실측 검증됨
-            온도형 0.5C (28~50)  28 - 0.5 = 27.5
-            온수형 1.0C (28~45)  28 - 1.0 = 27.0
+            stepped   1.0L (1-8)     1 - 1.0  = 0      <- verified on a real device
+            temperature 0.5C (28-50)  28 - 0.5 = 27.5
+            hot water 1.0C (28-45)   28 - 1.0 = 27.0
 
-        **단계형이 지금까지 맞았던 이유가 이것이다.** `level 0` 을 보내고 있었는데
-        그게 우연이 아니라 같은 규칙의 결과였다. 온도형만 이 계산을 안 하고
-        `enable: false` 만 보내서 기기가 무시했다 (이슈 #16).
+        **This is why stepped mats worked all along.** They were already sending `level 0`,
+        which was not luck but the same rule. Only temperature mats skipped this calculation
+        and sent `enable: false` alone, which the device ignored (issue #16).
 
-        `enable` 은 앱이 **구역을 끌 때 손대지 않는다** — `updateLeftMatSettingTemp`
-        가 `temperature.setSet()` 만 부른다. 우리는 단계형에서 함께 보내 검증된
-        형태라 그대로 두되, 값이 본체다.
+        The app **does not touch `enable` when turning a zone off** —
+        `updateLeftMatSettingTemp` calls only `temperature.setSet()`. We keep sending it,
+        because that is the form verified on stepped mats, but the value is what matters.
         """
         if self.range_min is None or not self.is_known:
             return None
@@ -149,7 +150,7 @@ class HeatControl:
         )
 
     def as_diagnostics(self) -> dict[str, Any]:
-        """제보용. 미지원 축의 실제 값을 사용자가 그대로 붙일 수 있게 노출한다."""
+        """For reports: expose the raw value of an unsupported axis so a user can attach it."""
         data: dict[str, Any] = {
             "unit": self.unit,
             "range_min": self.range_min,
@@ -165,7 +166,7 @@ class HeatControl:
 
 @dataclass(slots=True)
 class NavienDevice:
-    """기기 하나. `reported` 는 MQTT 로 들어올 때마다 갈린다."""
+    """One device. `reported` changes with every MQTT message that arrives."""
 
     device_seq: int
     device_id: str
@@ -190,13 +191,13 @@ class NavienDevice:
     wifi_version: str | None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
     reported: dict[str, Any] = field(repr=False, default_factory=dict)
-    # **무엇을 보냈고 무엇이 돌아왔는지** 짧게 남긴다. 냉방은 값 체계를 실기기로
-    # 확인하지 못한 구간이라, 「보낸 값이 그대로 돌아오는가」를 봐야 닫힌다.
-    # 개인정보는 담지 않는다 — 모드 번호와 온도·단계 값뿐이다.
+    # A short record of **what was sent and what came back**. The cooling value scheme was
+    # never confirmed on a real device, and settling it means seeing whether a sent value
+    # returns unchanged. Nothing personal is kept — mode numbers, temperatures and steps only.
     command_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
     state_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
 
-    # -- 생성 --------------------------------------------------------------
+    # -- construction ------------------------------------------------------
 
     @classmethod
     def parse(cls, raw: dict[str, Any]) -> NavienDevice | None:
@@ -209,10 +210,10 @@ class NavienDevice:
         attrs = _dig(raw, "Properties", "registry", "attributes") or {}
         functions = attrs.get("functions") or {}
         mcu = attrs.get("mcu") or {}
-        # **문자열로 올 수도 있다.** 매트는 `{"mainItem": ..., "side": {...}}` 인데
-        # 별칭을 안 나눠 쓰는 계정에서 그냥 이름 하나로 오는 경우를 배제할 근거가
-        # 없다. 그때 `.get` 을 부르면 통합 전체가 설정 단계에서 죽는다 —
-        # 기기 하나가 아니라 **전부** 안 보인다. 문자열이면 이름으로 쓴다.
+        # **This can arrive as a string.** A mat sends `{"mainItem": ..., "side": {...}}`,
+        # but nothing rules out an account that never split its nicknames sending a single
+        # name instead. Calling `.get` on that kills the whole integration during setup — not
+        # one device but **all** of them disappear. A plain string is used as the name.
         raw_nick = _dig(raw, "Properties", "nickName")
         nick = raw_nick if isinstance(raw_nick, dict) else {}
         nick_text = raw_nick.strip() if isinstance(raw_nick, str) else ""
@@ -245,8 +246,8 @@ class NavienDevice:
             heat_control=HeatControl.parse(functions.get("heatControl")),
             cool_control=HeatControl.parse(functions.get("coolControl")),
             has_power_ctrl=bool(functions.get("powerCtrl")),
-            # 앱의 `Functions` 클래스에는 `beep` 필드가 아예 없다 — 서버는 주는데
-            # 앱이 안 읽는다. 우리는 음량 엔티티를 만들지 말지 가르는 데 쓴다.
+            # The app's `Functions` class has no `beep` field at all — the server sends it and
+            # the app never reads it. Here it decides whether a volume entity is created.
             has_beep=bool(functions.get("beep")),
             has_lock_mode=bool(functions.get("lockMode")),
             has_power_saving=bool(functions.get("powerSaving")),
@@ -261,33 +262,34 @@ class NavienDevice:
             raw=raw,
         )
 
-    # -- 상태 반영 ----------------------------------------------------------
+    # -- applying state ----------------------------------------------------
 
     def apply_reported(self, incoming: dict[str, Any]) -> None:
-        """들어온 상태를 **덮어쓰지 않고 겹쳐 쓴다.**
+        """Merge incoming state **rather than overwriting it.**
 
-        내 EME-500 두 대는 shadow 가 항상 전체를 준다 — `heater` 에 `single`·`left`·
-        `right` 가 늘 함께 온다. 그것을 보고 **매트 전체가 그렇다고 단정했다.**
+        The two EME-500 units here always get a complete shadow — `heater` always carries
+        `single`, `left` and `right` together. That led to **assuming every mat behaves that
+        way.**
 
-        틀렸다. 사계절(EMF520) 제보에서 `heater.right` 하나만 담긴 응답이 왔고,
-        통째로 갈아끼우는 바람에 `operationMode` · `season` · `heater.left` 가
-        사라졌다. 그래서 전원이 「알 수 없음」이 되고 좌우가 번갈아 비었다.
+        It was wrong. A four-season (EMF520) report contained a response holding only
+        `heater.right`, and replacing the whole document lost `operationMode`, `season` and
+        `heater.left`. Power then read as unknown and the two sides emptied in turn.
 
-        딕셔너리는 **깊이 상관없이** 겹쳐 쓴다 — `heater.right.temperature` 만 온
-        경우에도 `level` 이나 `enable` 을 잃지 않아야 한다.
-        목록은 통째로 바꾼다(부분 목록을 항목별로 섞으면 자리가 어긋난다).
+        Dictionaries merge **at any depth**: a message carrying only
+        `heater.right.temperature` must not cost us `level` or `enable`.
+        Lists are replaced wholesale — merging a partial list item by item misaligns it.
 
-        오래된 값이 남을 수 있다는 것은 감수한다. **전부 「알 수 없음」이 되는 것보다
-        낫다.**
+        Stale values may survive, and that is accepted. **It beats everything reading as
+        unknown.**
         """
         self.reported = _merge(self.reported or {}, incoming)
         self._note_state()
 
     def _note_state(self) -> None:
-        """상태가 바뀌면 한 줄 남긴다. 같은 값은 쌓지 않는다.
+        """Record one line when the state changes; identical values are not stacked.
 
-        사계절 냉방을 닫으려면 **`season` 값이 실제로 무엇인지**와 **보낸 값이
-        그대로 돌아오는지**를 봐야 한다. 그 순간의 값만으로는 알 수 없다.
+        Settling four-season cooling requires seeing **what `season` actually holds** and
+        **whether a sent value returns unchanged**. Neither can be told from a single moment.
         """
         entry: dict[str, Any] = {
             "operationMode": self.operation_mode,
@@ -310,7 +312,7 @@ class NavienDevice:
         del self.state_log[:-_LOG_KEEP]
 
     def note_command(self, desired: dict[str, Any]) -> None:
-        """보낸 명령을 한 줄 남긴다."""
+        """Record one line for a command that was sent."""
         heater = desired.get("heater") or {}
         self.command_log.append(
             {
@@ -334,7 +336,7 @@ class NavienDevice:
         )
         del self.command_log[:-_LOG_KEEP]
 
-    # -- 상태 --------------------------------------------------------------
+    # -- state -------------------------------------------------------------
 
     @property
     def zones(self) -> tuple[str, ...]:
@@ -346,7 +348,7 @@ class NavienDevice:
 
     @property
     def available(self) -> bool:
-        """기기가 `reported.connected` 로 직접 보고한 값을 우선한다."""
+        """Prefer what the device itself reported through `reported.connected`."""
         if "connected" in self.reported:
             return bool(self.reported.get("connected"))
         return self.connected_registry
@@ -362,29 +364,29 @@ class NavienDevice:
 
     @property
     def mode_name(self) -> str | None:
-        """운전 상태를 사람이 읽는 이름으로.
+        """The operating state as a human-readable name.
 
-        **`operationMode` 는 계절을 모른다.** 난방이든 냉방이든 운전 중이면 1 이고,
-        무엇을 하는지는 `season` 이 정한다. 그래서 표를 그대로 쓰면 냉방 중에도
-        「난방」으로 보인다 — 실기기 제보로 확인했다(EMF520).
+        **`operationMode` knows nothing about the season.** It reads 1 while running, whether
+        heating or cooling, and `season` decides which. Using the table as-is therefore showed
+        heating during cooling — confirmed by a real-device report (EMF520).
 
-        사계절 모델이 냉방일 때만 바꾼다. 나머지는 표 그대로다.
+        Only a four-season model in cooling is overridden; everything else follows the table.
         """
         mode = self.operation_mode
         if mode is None:
             return None
         if mode == MODE_HEAT and self.is_cooling:
-            # 운전 중(1)일 때 무엇을 하는지는 `season` 이 정한다.
+            # While running (1), `season` decides what it is actually doing.
             return "냉방"
         return MODE_NAMES.get(mode, f"알 수 없음({mode})")
 
     @property
     def is_four_season(self) -> bool:
-        """`coolControl` 이 오면 사계절 모델이다.
+        """The presence of `coolControl` marks a four-season model.
 
-        앱은 `modelCode` 하드코딩 표(`setModelCodeAndFunction`)로 판정하지만,
-        그 표는 앱 버전에 묶여 있어 새 모델을 못 잡는다. 서버가 주는
-        `coolControl` 유무가 더 오래 버틴다.
+        The app decides from a hard-coded `modelCode` table (`setModelCodeAndFunction`), but
+        that table is tied to an app version and cannot catch a new model. Whether the server
+        sends `coolControl` holds up far longer.
         """
         return self.cool_control is not None
 
@@ -395,15 +397,16 @@ class NavienDevice:
 
     @property
     def child_lock(self) -> bool | None:
-        """조작 잠금 상태. `True` 면 잠겨 있다."""
+        """Control-lock state. `True` means locked."""
         value = self.reported.get("childLock")
         return bool(value) if isinstance(value, bool) else None
 
     def build_child_lock_desired(self, locked: bool) -> dict[str, Any]:
-        """조작 잠금 desired (`lock-on` / `lock-off`).
+        """The control-lock desired (`lock-on` / `lock-off`).
 
-        **v0.12.0 에서 「WiFi 로는 못 잠근다」고 판단한 것을 정정한다.** 제보자가
-        앱 제어 화면에 자물쇠 버튼이 있는 사진을 보내 다시 뒤졌더니 있었다.
+        **This corrects v0.12.0's conclusion that the lock cannot be set over Wi-Fi.** A
+        reporter sent a photograph of the padlock button on the app's control screen, and a
+        second search found it.
 
             // MateWifiModelControlViewModel
             String str = !mateInfoData1.getLockState() ? "lock-on" : "lock-off";
@@ -412,15 +415,16 @@ class NavienDevice:
             r11 = Boolean.valueOf(areEqual(r35, "lock-on"));   // childLock
             r4  = new Desired(r11, new Event(modelCode), null × 12);
 
-        **계절 전환과 같은 모양**이고 토픽도 특별 분기가 없다 — `mateControlDevice`
-        의 기본 분기(`.../shadow/name/status/update`)로 간다. 우리가 전원·온도·계절에
-        이미 쓰는 그 토픽이다.
+        **It has the same shape as a season change** and needs no special topic — it goes
+        through the default branch of `mateControlDevice`
+        (`.../shadow/name/status/update`), the same topic already used for power, temperature
+        and season.
         """
         return {"childLock": bool(locked)}
 
     @property
     def volume(self) -> int | None:
-        """조작음 음량. 앱과 같은 0~3."""
+        """Button-sound volume, 0-3 as in the app."""
         value = self.reported.get("volume")
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return None
@@ -433,10 +437,10 @@ class NavienDevice:
         return MAT_VOLUME_NAMES.get(volume) if volume is not None else None
 
     def build_volume_desired(self, volume: int) -> dict[str, Any]:
-        """음량 desired (`control-volume`).
+        """The volume desired (`control-volume`).
 
-        앱 화면에 칸이 넷뿐이고 (`selectedIndex` 0·1·2·3) 그 값이 그대로
-        `Desired.volume` 에 실린다. **그 밖의 값은 보내지 않는다.**
+        The app's screen has exactly four steps (`selectedIndex` 0, 1, 2, 3) and puts that
+        value straight into `Desired.volume`. **Nothing else is ever sent.**
         """
         if volume not in MAT_VOLUME_NAMES:
             raise ValueError(f"확인된 음량 값이 아닙니다: {volume}")
@@ -451,31 +455,32 @@ class NavienDevice:
 
     @property
     def is_cooling(self) -> bool:
-        """냉방(COOL) 모드인가.
+        """Whether the mat is in COOL mode.
 
-        `season` 은 자동 상태가 아니라 **사용자가 앱에서 고르는 모드**다. 앱은
-        WARM / COOL 로 부르고 예약 목록도 모드별로 따로 관리한다.
+        `season` is not an automatic state but **a mode the user picks in the app**, which
+        calls them WARM and COOL and keeps a separate schedule list per mode.
 
-        **`SEASON_SUMMER`(2) 이고 냉방 기능이 있을 때만 냉방으로 본다.**
-        모르는 값이 오면 난방으로 두고 로그를 남긴다 — 냉방 범위를 잘못 적용하는
-        것보다 안전하다.
+        **Cooling is assumed only when `season` is `SEASON_SUMMER` (2) and the cooling
+        feature exists.** An unrecognised value falls back to heating and is logged — safer
+        than applying the cooling range by mistake.
 
-        `cool_control` 을 함께 보는 이유는, **냉방을 못 하는 기기가 `season` 을
-        보내오면 냉방으로 읽혀서** 운전 상태가 「냉방」으로 보이고 온도 범위도
-        엉뚱한 값으로 갈리기 때문이다. 그런 기기가 실제로 있는지는 모르지만,
-        없는 기능을 켜는 쪽으로 틀리지 않게 둔다.
+        `cool_control` is checked alongside because **a device that cannot cool but sends a
+        `season` would otherwise read as cooling**, showing the wrong operating state and
+        splitting the temperature range to the wrong bounds. Whether such a device exists is
+        unknown, but the error should not fall on the side of enabling a missing feature.
         """
         return self.season == SEASON_SUMMER and self.cool_control is not None
 
     @property
     def error_text(self) -> str | None:
-        """오류 코드의 이름. 모르면 `None`.
+        """The name of an error code, or `None` when unknown.
 
-        제보자가 기기 설명서에서 옮겨 준 표다. **온도형에만 붙인다** — 물탱크·
-        순환펌프·누수가 나오는 것으로 보아 온수·사계절 계열 설명서이고, 카본
-        (단계형)에 같은 번호가 같은 뜻이라는 근거가 없다.
+        The table was transcribed from a device manual by a reporter. **It applies only to
+        temperature mats**: its mentions of water tanks, circulation pumps and leaks mark it
+        as a hot-water or four-season manual, and there is no evidence the same numbers mean
+        the same things on a carbon (stepped) mat.
 
-        **상태값이 아니라 속성이다.** 숫자를 쓰던 자동화를 깨지 않는다.
+        **This is an attribute, not the state.** Automations using the number keep working.
         """
         control = self.heat_control
         if control is None or not control.is_celsius:
@@ -485,7 +490,7 @@ class NavienDevice:
 
     @property
     def has_unknown_season(self) -> bool:
-        """사계절 모델인데 `season` 값을 해석할 수 없는 상태인가."""
+        """A four-season model whose `season` value cannot be interpreted."""
         season = self.season
         return (
             self.is_four_season
@@ -495,7 +500,7 @@ class NavienDevice:
 
     @property
     def active_control(self) -> HeatControl | None:
-        """지금 적용되는 제어 서술자. 여름이면 `coolControl`."""
+        """The control descriptor in force — `coolControl` in summer."""
         if self.is_cooling and self.cool_control is not None:
             return self.cool_control
         return self.heat_control
@@ -506,7 +511,7 @@ class NavienDevice:
         return int(value) if isinstance(value, (int, float)) else None
 
     def zone_state(self, zone: str) -> dict[str, Any] | None:
-        """`heater.<zone>`. `null` 은 없는 것으로 취급한다."""
+        """`heater.<zone>`, where `null` counts as absent."""
         heater = self.reported.get("heater")
         if not isinstance(heater, dict):
             return None
@@ -514,23 +519,23 @@ class NavienDevice:
         return state if isinstance(state, dict) else None
 
     def _mirror_zone(self, zone: str) -> str | None:
-        """냉방에서 값을 가져올 반대쪽 구역.
+        """The opposite zone to borrow a value from while cooling.
 
-        **냉방은 좌우가 같은 온도로 동작한다** — 앱 도움말에 그렇게 적혀 있다
-        (「COOL 모드 … 매트의 좌우가 같은 온도로 동작합니다」). 그래서 서버가
-        한쪽만 채워 보내는 일이 있고, 그때 반대쪽 엔티티가 빈 채로 남는다.
+        **While cooling, both sides run at the same temperature** — the app's help text says
+        so ("COOL 모드 … 매트의 좌우가 같은 온도로 동작합니다"). The server therefore
+        sometimes fills in only one side, leaving the opposite entity empty.
 
-        추측이 아니라 **같은 값이라고 문서화된 것**을 옮겨 쓰는 것이다.
-        난방에서는 좌우가 독립이므로 절대 하지 않는다.
+        This is not a guess: it copies a value **documented as identical**. It is never done
+        while heating, where the two sides are independent.
         """
         if not self.is_cooling or not self.is_double:
             return None
         return ZONE_RIGHT if zone == ZONE_LEFT else ZONE_LEFT
 
     def zone_setting(self, zone: str) -> float | None:
-        """설정값. 단계형이면 `level.set`, 온도형이면 `temperature.set`.
+        """The setpoint: `level.set` on a stepped mat, `temperature.set` on a temperature mat.
 
-        단계형은 `temperature.current` 를 주지 않는다 — 설정값이 곧 표시값이다.
+        A stepped mat sends no `temperature.current` — the setpoint is the displayed value.
         """
         value = self._zone_setting_raw(zone)
         if value is None and (mirror := self._mirror_zone(zone)) is not None:
@@ -550,31 +555,31 @@ class NavienDevice:
         return None
 
     def zone_is_off(self, zone: str) -> bool | None:
-        """이 구역이 꺼져 있나. **모르면 `None`** — 껐다고 단정하지 않는다.
+        """Whether this zone is off. **`None` when unknown** — never assume it is off.
 
-        **`enable` 을 먼저 본다. 앱이 그렇게 한다.**
+        **`enable` is read first, because that is what the app does.**
 
-        `MateInfoData.setHeatType()` 은 켜짐/꺼짐을 오직 `enable` 로 가른다.
+        `MateInfoData.setHeatType()` decides on from off using `enable` alone.
 
             if (left.enable == TRUE  && right.enable == TRUE)  heatType = 4;
             if (left.enable == TRUE  && right.enable == FALSE) heatType = 2;
             if (left.enable == FALSE && right.enable == TRUE)  heatType = 3;
             else                                              heatType = 1;
 
-        `setMatLeftTemp()` 는 한 걸음 더 간다 — **꺼져 있으면 기기가 보낸 온도를
-        버리고 0 으로 덮는다.**
+        `setMatLeftTemp()` goes further: **when the zone is off it discards the temperature
+        the device sent and overwrites it with 0.**
 
             if (leftMatEnable) leftMatSettingTemp = set;
-            else               leftMatSettingTemp = 0;      // 화면에 「꺼짐」
+            else               leftMatSettingTemp = 0;      // draws "off" on screen
 
-        그 분기가 있다는 것은 **꺼진 구역이 정상 온도를 보고할 수 있다**는 뜻이다.
-        그래서 앱은 꺼짐 판단에 온도를 쓰지 않는다.
+        The existence of that branch means **a zone that is off can still report a normal
+        temperature**, which is why the app never decides "off" from the temperature.
 
-        v0.17.1 까지 우리는 온도로 판단했다. 같은 것을 `hvac_mode` 는 `enable` 로,
-        여기서는 온도로 봐서 **두 곳이 어긋나 있었다.** 앱 기준으로 맞춘다.
+        Up to v0.17.1 this decided from the temperature, while `hvac_mode` decided the same
+        question from `enable` — **the two disagreed.** Both now follow the app.
 
-        `enable` 이 안 오면 값으로 판단한다 — 단계형은 `level 0` 과 `enable false`
-        가 함께 움직이므로 어느 쪽으로 봐도 답이 같다(실기기 확인).
+        With no `enable`, the value decides. On a stepped mat `level 0` and `enable false`
+        move together, so either route gives the same answer (confirmed on a real device).
         """
         enabled = self.zone_enabled(zone)
         if enabled is not None:
@@ -589,24 +594,26 @@ class NavienDevice:
         return setting <= off
 
     def build_zone_off(self, zones: Iterable[str]) -> dict[str, Any]:
-        """구역을 끄는 desired 를 만든다.
+        """Build the desired that turns a zone off.
 
-        **`enable: false` 만 보내면 기기가 무시한다** (이슈 #16, EME-520 에서 세 번
-        보내 세 번 무시됨). 값을 `off_value` 로 내려야 실제로 꺼진다.
+        **`enable: false` on its own is ignored by the device** (issue #16: sent three times
+        on an EME-520, ignored three times). The value has to drop to `off_value` for the
+        zone to actually turn off.
 
-        **마지막 남은 구역은 끌 수 없다.** 기기가 막는다. 사장님 단계형 매트에서
-        실기기로 확인했다 — 좌측이 0 인 상태에서 우측을 0 으로 내리면 명령이 안
-        먹고 `0, 1` 로 남는다.
+        **The last remaining zone cannot be turned off** — the device refuses. Confirmed on a
+        real stepped mat: with the left side at 0, setting the right to 0 does not take, and
+        it stays at `0, 1`.
 
-        **전원을 대신 꺼주지 않는다.** 앱도 그렇게 하지 않는다 — 막고 알린다.
+        **Power is never switched off on the user's behalf.** The app does not do that
+        either; it refuses and explains.
 
-            if (heatType != 2 && heatType != 1) return true;   // 진행
+            if (heatType != 2 && heatType != 1) return true;   // proceed
             CustomToast.show(mate_dual_temp_batch_control_one_side_off);
-            return false;                                       // 막는다
+            return false;                                       // refuse
 
-        사용자가 시킨 것은 「구역 하나 끄기」인데 기기 전원을 끄는 것은 **시키지
-        않은 일**이다. 앱이 안내하는 대로 전원 스위치를 쓰라고 알린다.
-        `powerCtrl` 게이트를 걷어내서 이제 모든 매트에 그 스위치가 있다.
+        The user asked to turn one zone off; powering the device down is **something they did
+        not ask for**. Instead they are told to use the power switch, as the app advises. With
+        the `powerCtrl` gate removed, every mat now has that switch.
         """
         control = self.active_control
         if control is None or not control.is_known:
@@ -618,16 +625,16 @@ class NavienDevice:
             raise ValueError("이 기기의 꺼짐 값을 계산할 수 없습니다 (rangeMin 없음)")
 
         target = set(zones)
-        # 이번에 끄지 않는 구역 중 **켜져 있다고 확인된 것**이 하나라도 있나.
-        # 모르면(`None`) 켜져 있는 쪽으로 본다 — 막아서 못 쓰게 하는 것보다
-        # 보내보고 기기 판단에 맡기는 편이 낫다.
+        # Is any zone that is not being turned off **confirmed to be on**? An unknown (`None`)
+        # counts as on — better to send the command and let the device decide than to block a
+        # user out of a control.
         stays_on = any(
             self.zone_is_off(zone) is not True
             for zone in self.zones
             if zone not in target
         )
         if not stays_on:
-            # 앱 문구 그대로 (`strings.xml`).
+            # The app's exact wording (`strings.xml`).
             raise ValueError(
                 "이미 다른 편측이 운전대기 상태입니다. "
                 "난방을 끄시려면 매트 전원을 종료해 주세요."
@@ -642,20 +649,19 @@ class NavienDevice:
         return {"heater": heater}
 
     def build_zone_on(self, zones: Iterable[str]) -> dict[str, Any]:
-        """구역을 켜는 desired 전체를 만든다.
+        """Build the full desired that turns a zone on.
 
-        **끄는 쪽과 정확히 대칭이다.** 끌 때 값을 안 내려서 안 꺼졌던 것처럼,
-        켤 때 값을 안 올리면 안 켜진다 (이슈 #16, 제보자 7번).
+        **Exactly symmetric with turning off.** Just as not lowering the value failed to turn
+        a zone off, not raising it fails to turn one on (issue #16, reporter item 7).
 
-            보내던 것:  operationMode 1 + 온도 27.5   → 전원만 켜지고 구역은 꺼진 채
-            보내야 할 것: operationMode 1 + 온도 28     → 실제로 켜진다
+            what was sent:   operationMode 1 + temperature 27.5  -> powers on, zone stays off
+            what to send:    operationMode 1 + temperature 28    -> actually turns on
 
-        `27.5` 는 그 구역이 꺼져 있다는 뜻이므로, 그대로 다시 보내면 「꺼진 채로
-        있어라」가 된다. 앱에서 꺼짐 상태에서 `+` 를 누르면 `rangeMin` 이 되는
-        것과 같게 맞춘다.
+        `27.5` means that zone is off, so resending it says "stay off". This matches the app,
+        where pressing `+` from the off state lands on `rangeMin`.
 
-        **꺼져 있지 않은 구역은 값을 건드리지 않는다.** 사용자가 33도로 맞춰둔
-        구역을 켠다고 28도로 되돌리면 안 된다.
+        **A zone that is not off keeps its value.** Turning the mat on must not drag a zone
+        the user set to 33 back down to 28.
         """
         control = self.active_control
         if control is None or not control.is_known:
@@ -665,25 +671,25 @@ class NavienDevice:
         target = set(zones)
         changes: dict[str, float] = {}
         floor = control.range_min
-        # **기기가 아직 아무 상태도 안 보냈으면 여기서 값을 지어내지 않는다.**
-        # `build_heater_desired` 가 「전원 스위치로는 켤 수 있습니다」 안내를
-        # 띄우게 그대로 둔다 — 그 편이 사용자가 할 수 있는 것을 알려준다.
+        # **If the device has sent no state at all, do not invent a value here.** Let
+        # `build_heater_desired` raise its "the power switch can still turn it on" message —
+        # that tells the user something they can actually do.
         reported_heater = self.reported.get("heater")
         known = reported_heater if isinstance(reported_heater, dict) else {}
         if floor is not None:
             for zone in target:
                 if zone not in known:
                     continue
-                # **켜라고 한 구역은 반드시 명령에 넣는다.**
+                # **A zone the user asked to turn on always goes into the command.**
                 #
-                # `build_heater_desired` 는 값을 모르는 구역을 통째로 건너뛴다.
-                # 그래서 기기가 그 구역 온도를 안 보내주면 「켜줘」를 눌러도
-                # 명령에 그 구역이 없고, 전원만 켜진 채 구역은 그대로 남았다
-                # (이슈 #16 의 7번 후보). 켜라는 지시를 받았으면 최저값이라도
-                # 실어 보내는 것이 맞다.
+                # `build_heater_desired` skips any zone whose value it does not know. So when
+                # the device never sent that zone's temperature, pressing "on" produced a
+                # command without the zone in it: power came on and the zone stayed as it was
+                # (issue #16, candidate 7). Given an instruction to turn on, sending at least
+                # the minimum value is the right thing.
                 #
-                # **켜져 있다고 확인된 구역만 값을 안 건드린다** — 33도로
-                # 맞춰둔 쪽을 28로 되돌리면 안 된다.
+                # **Only a zone confirmed to be on keeps its value** — a side set to 33 must
+                # not be dragged back to 28.
                 if self.zone_is_off(zone) is not False:
                     changes[zone] = floor
         heater = self.build_heater_desired(
@@ -693,7 +699,7 @@ class NavienDevice:
         return {"operationMode": MODE_HEAT, "heater": heater}
 
     def zone_current(self, zone: str) -> float | None:
-        """현재값. 온도형만 온다. 단계형은 `None`."""
+        """The current value. Only temperature mats report one; a stepped mat gives `None`."""
         value = self._zone_current_raw(zone)
         if value is None and (mirror := self._mirror_zone(zone)) is not None:
             value = self._zone_current_raw(mirror)
@@ -723,11 +729,11 @@ class NavienDevice:
 
     @property
     def over_safe_value(self) -> bool:
-        """고온경고선을 넘었는지. 제어 상한이 아니라 경고 표시용이다.
+        """Whether the high-temperature warning line is crossed. A warning, not a control cap.
 
-        냉방 중에는 판정하지 않는다. `coolControl.safeValue` 가 무엇을 뜻하는지
-        확인되지 않았다 — 하한일 수도 있고 결로 기준일 수도 있다. 난방 기준으로
-        비교하면 냉방 설정을 과열로 잘못 알린다.
+        No judgement is made while cooling. What `coolControl.safeValue` means is unconfirmed
+        — it could be a lower bound or a condensation threshold. Comparing it as if it were a
+        heating threshold would report a cooling setpoint as overheating.
         """
         if self.is_cooling:
             return False
@@ -744,19 +750,19 @@ class NavienDevice:
         return SERVICE_NAMES.get(self.service_code, str(self.service_code))
 
     def build_season_desired(self, season: int) -> dict[str, Any]:
-        """계절(난방↔냉방) 전환 desired.
+        """The desired that switches season (heating to cooling and back).
 
-        **앱이 하는 것을 그대로 한다.** `MateConstants.mateMqttPayload("seasonSetting")`
-        가 만드는 것은 `Desired(event=..., season=...)` 하나뿐이고, 토픽도 우리가
-        이미 쓰는 shadow 업데이트와 같다. `event.modelCode` 는 `async_control` 이
-        모든 명령에 붙이고 있다 — 실기기로 검증된 경로다.
+        **It does exactly what the app does.** `MateConstants.mateMqttPayload("seasonSetting")`
+        produces nothing but `Desired(event=..., season=...)`, on the same shadow-update topic
+        already in use. `async_control` attaches `event.modelCode` to every command — a path
+        verified on a real device.
 
-        **값은 두 개뿐이다.** 앱 계절 설정 화면에 버튼이 둘이고
-        (`onWinterIconClick` → 0, `onSummerIconClick` → 2) 세 번째 값은 없다.
-        스마트싱스가 보여주는 `coolPlus` 는 그쪽 라벨이고 나비엔 값이 아니다 —
-        앱 문자열 전수 검색에서 0건이다.
+        **There are only two values.** The app's season screen has two buttons
+        (`onWinterIconClick` -> 0, `onSummerIconClick` -> 2) and no third. The `coolPlus` that
+        SmartThings displays is a label of theirs, not a Navien value — an exhaustive search of
+        the app's strings finds none.
 
-        그래서 **아는 값만 보낸다.** 모르는 값이 들어오면 거부한다.
+        So **only known values are sent**, and anything else is refused.
         """
         if season not in SEASON_NAMES:
             raise ValueError(f"확인된 계절 값이 아닙니다: {season}")
@@ -767,23 +773,23 @@ class NavienDevice:
         changes: dict[str, float] | None = None,
         enables: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
-        """`heater` desired 를 만든다.
+        """Build the `heater` desired.
 
-        앱은 바뀌지 않은 구역까지 현재값을 함께 보낸다. shadow 병합에 기대지 않고
-        같은 방식을 따른다 — 실측으로 검증한 형태다.
+        The app sends the current value of every zone, including the ones that did not change.
+        This follows the same approach rather than relying on shadow merging — that is the
+        form verified on a real device.
 
-        `enables` 로 구역별 `enable` 을 덮어쓸 수 있다. `enable: true` 는 실측으로
-        검증했으나 **`false` 는 검증하지 않았다** — 온도형 기기가 없어 확인할 수
-        없었다.
+        `enables` can override `enable` per zone. `enable: true` was verified on a real
+        device; **`false` was not**, because no temperature mat was available to test it.
         """
         changes = changes or {}
         enables = enables or {}
-        # 냉방이면 `coolControl` 을 쓴다. 설정값 경로는 난방과 같은
-        # `heater.<구역>.temperature.set` 이다 — 실기기 제보에서 냉방 설정값
-        # 24.5(냉방 범위 20~35) 가 그 경로로 오는 것을 관측했다.
+        # While cooling, `coolControl` applies. The setpoint path is the same as heating,
+        # `heater.<zone>.temperature.set` — a real-device report showed a cooling setpoint of
+        # 24.5 (cooling range 20-35) arriving on it.
         #
-        # 단계형(`1.0L`) 사계절 모델의 냉방은 아직 모른다. `select` 가 냉방에서
-        # 손을 떼므로 여기까지 오지 않는다.
+        # Cooling on a stepped (`1.0L`) four-season model is still unknown. `select` stays out
+        # of the way while cooling, so control never reaches here.
         control = self.active_control
         if control is None or not control.is_known:
             raise ValueError(f"제어 축을 모르는 기기입니다 (unit={control.unit if control else None})")
@@ -799,11 +805,12 @@ class NavienDevice:
             if zone in enables:
                 enabled = enables[zone]
             elif control.is_level and zone in changes:
-                # 단계형은 `level 0` 과 `enable false` 가 함께 움직인다 — 실측 확인.
-                # 앱 슬라이더의 맨 왼쪽 `운전 대기` 가 이 상태다.
+                # On a stepped mat `level 0` and `enable false` move together — confirmed on a
+                # real device. It is the leftmost position of the app's slider, 운전 대기.
                 #
-                # **바꾸는 구역에만 적용한다.** `zone in changes` 조건이 없으면,
-                # 한쪽을 대기로 내릴 때 반대쪽 `enable` 까지 덮어써서 같이 꺼진다.
+                # **Applied only to the zone being changed.** Without the `zone in changes`
+                # condition, dropping one side to standby would overwrite the other side's
+                # `enable` and switch it off too.
                 enabled = number > 0
             else:
                 current = self.zone_enabled(zone)
@@ -811,20 +818,21 @@ class NavienDevice:
 
             heater[zone] = {"enable": enabled, axis: {"set": number}}
         if not heater:
-            # **여기까지 오는 경우는 사실상 하나다** — 기기가 아직 상태를 한 번도
-            # 안 보냈다. 앱은 지금 설정값을 함께 실어 보내므로 우리도 그렇게 하는데,
-            # 그 값을 모르면 만들 수가 없다.
+            # **There is effectively one way to reach this**: the device has never sent any
+            # state. The app sends the current setpoints along with the command and this does
+            # the same, which is impossible without knowing them.
             #
-            # 기기 목록(REST)의 `connected` 는 **등록 여부에 가까워서** 기기가
-            # Wi-Fi 에서 빠져도 한동안 1 로 남는다. 그래서 엔티티는 멀쩡해
-            # 보이는데 누르면 여기서 걸린다.
+            # The `connected` flag in the REST device list is **closer to "is registered"**
+            # and stays at 1 for a while after a device drops off Wi-Fi. So the entity looks
+            # healthy and pressing it lands here.
             #
-            # 「보낼 구역 값이 없습니다」로만 알리면 사용자가 할 수 있는 게 없다.
-            # 무엇을 확인해야 하는지까지 적는다.
+            # Reporting only "no zone value to send" leaves the user with nothing to do, so
+            # the message says what to check as well.
             if not self.reported.get("heater"):
-                # **「전원」 스위치는 이 상황에서도 된다.** `operationMode` 만
-                # 보내므로 설정값을 몰라도 만들 수 있다. 켜지면 기기가 상태를
-                # 보내오고 그때부터 온도 조절도 된다 — 그 길을 알려준다.
+                # **The power switch still works in this situation.** It sends only
+                # `operationMode`, so it can be built without knowing any setpoint. Once on,
+                # the device sends state and temperature control starts working — the message
+                # points at that route.
                 raise ValueError(
                     "기기가 아직 상태를 보내오지 않아 온도를 함께 실을 수 "
                     "없습니다. 「전원」 스위치로는 켤 수 있습니다 — 켜면 기기가 "

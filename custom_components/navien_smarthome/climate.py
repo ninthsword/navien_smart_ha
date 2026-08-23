@@ -1,14 +1,16 @@
-"""온도형 매트의 온도조절기 (`heatControl.unit == "0.5C"`).
+"""Thermostats for temperature mats (`heatControl.unit == "0.5C"`).
 
-온도형은 `temperature.current` 를 함께 보내주므로 `climate` 가 맞다 — 서모스탯
-카드의 현재 온도 칸이 채워진다.
+A temperature mat also reports `temperature.current`, so `climate` is the right fit — the
+current-temperature field of the thermostat card gets filled in.
 
-단계형(`1.0L`)은 이 플랫폼을 만들지 않는다. 현재값이 오지 않아 카드 절반이 비고,
-단계를 도(°)로 표시하면 사용자가 오해한다. 그쪽은 `number` 슬라이더를 쓴다.
+Stepped mats (`1.0L`) get no entity on this platform. They send no current value, so half
+the card would stay empty, and showing a step in degrees would mislead the user. Those use a
+`number` slider instead.
 
-**주의 — 온도형 매트를 직접 눌러본 적은 없다.** 집에 단계형만 있다. 사계절
-모델(EMF520)의 난방·냉방 표시와 제어는 **제보로 확인됐다.**
-구조는 앱 코드로 확정했으나, 특히 `enable: false` 전송은 확인하지 못했다.
+**Caution: no temperature mat has ever been operated directly by us.** This household has
+only stepped mats. The heating and cooling display and control of the four-season model
+(EMF520) were **confirmed by a user report**. The structure was settled from the app code,
+but sending `enable: false` in particular was never confirmed.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ async def async_setup_entry(
 
 
 class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
-    """구역 하나의 난방 온도."""
+    """Heating temperature for one zone."""
 
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
@@ -72,24 +74,24 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         label = device.zone_names.get(zone) or ZONE_NAMES.get(zone, zone)
         self._attr_name = label if device.is_double else "난방"
 
-        # 범위를 `__init__` 에 고정하지 않는다. 사계절 모델은 사용자가 앱에서
-        # WARM/COOL 을 바꾸면 **범위 자체가 갈린다** (난방 28~45 / 냉방 20~35).
-        # 고정해두면 냉방 설정값이 자기 최소값보다 낮아 카드가 깨진다.
-        assert device.heat_control is not None  # setup 에서 걸러진다
+        # The range is not frozen in `__init__`. On a four-season model, switching WARM/COOL
+        # in the app **splits the range itself** (heating 28-45, cooling 20-35). Frozen, a
+        # cooling setpoint would fall below its own minimum and break the card.
+        assert device.heat_control is not None  # filtered out during setup
 
     @property
     def _control(self) -> Any:
-        """지금 적용되는 제어 서술자. 냉방이면 `coolControl`."""
+        """The control descriptor in force right now — `coolControl` while cooling."""
         device = self.device
         return device.active_control if device is not None else None
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
-        """냉방 중에는 냉방만, 그 밖에는 난방만 보여준다.
+        """Show cooling only while cooling, and heating otherwise.
 
-        `season`(WARM/COOL) 은 **앱에서 고르는 모드**이고 우리가 바꾸는 방법을
-        확인하지 못했다. 그래서 HA 에서 난방↔냉방 전환을 제공하지 않는다 —
-        고를 수 있는 것처럼 보이면 눌렀을 때 아무 일도 안 일어난다.
+        `season` (WARM/COOL) is **chosen in the app**, and no way to change it from here has
+        been confirmed. So HA offers no heating/cooling switch: making it look selectable
+        would mean nothing happens when it is pressed.
         """
         device = self.device
         cooling = device is not None and device.is_cooling
@@ -112,14 +114,15 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
 
     @property
     def available(self) -> bool:
-        """냉방 중에도 쓴다.
+        """Used while cooling too.
 
-        v0.9.0 까지는 냉방이면 손을 뗐다 — 값 체계를 몰랐기 때문이다. 이제
-        `coolControl`(범위·간격·고온경고선)이 서버에서 오고, 설정값이 난방과 같은
-        `heater.<구역>.temperature.set` 으로 오는 것을 실기기 제보로 관측했다.
+        Up to v0.9.0 this stayed out of the way during cooling, because the value scheme was
+        unknown. The server now sends `coolControl` (range, step, warning line), and a user
+        report on a real device showed the setpoint arriving through the same
+        `heater.<zone>.temperature.set` as heating.
 
-        다만 `season` 이 **`SEASON_SUMMER`(2)** 일 때만 냉방으로 다룬다. 값이
-        없거나 모르는 값이면 난방으로 두므로, 잘못된 범위를 쓸 일이 없다.
+        Cooling is assumed only when `season` is **`SEASON_SUMMER` (2)**. A missing or
+        unrecognised value falls back to heating, so the wrong range is never used.
         """
         return super().available
 
@@ -135,17 +138,16 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
 
     @property
     def hvac_mode(self) -> HVACMode | None:
-        """기기 전원과 구역 `enable` 을 함께 본다.
+        """Considers both the device power and the zone's `enable`.
 
-        기기가 꺼져 있으면 구역이 켜져 있어도 난방하지 않는다.
+        A powered-off device does not heat, even with the zone enabled.
         """
         device = self.device
         if device is None:
             return None
-        # **모르는 것을 「꺼짐」이라 하지 않는다.** `is_on` 은 `operationMode` 가
-        # 없을 때 `False` 를 돌려주는데, 그것을 그대로 쓰면 상태가 아직 안 온
-        # 기기를 껐다고 단정한다 — 사계절 제보에서 좌우 모두 「꺼짐」으로 보인
-        # 원인이다.
+        # **Unknown is not "off".** `is_on` returns `False` when `operationMode` is absent,
+        # and taking that at face value declares a device whose state has not arrived yet to
+        # be off — the cause of both zones showing as off in the four-season report.
         if device.operation_mode is None:
             return None
         if not device.is_on:
@@ -173,7 +175,7 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         attrs: dict[str, Any] = {"zone": self._zone}
         control = device.heat_control
         if control is not None and control.safe_value is not None:
-            # 고온경고 기준선. 상한이 아니다.
+            # The high-temperature warning line, not an upper bound.
             attrs["high_temp_warning_temperature"] = control.safe_value
         if device.is_four_season:
             attrs["four_season"] = True
@@ -182,25 +184,25 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
 
     @property
     def _target_zones(self) -> tuple[str, ...]:
-        """이 조작이 적용될 구역 — **언제나 이 구역 하나다.**
+        """The zones this operation applies to — **always just this one.**
 
-        v0.9.0~v0.11.0 은 냉방+좌우분리면 두 구역에 같은 값을 보냈다. 근거는 앱
-        안내문이었다.
+        v0.9.0 through v0.11.0 sent the same value to both zones when cooling on a split mat,
+        on the strength of a line in the app:
 
             COOL 모드 — 매트의 좌우가 같은 온도로 동작합니다
 
-        **모델 얘기를 빠뜨린 문구였다.** 나비엔 제품 페이지는 이렇게 적는다.
+        **That line leaves the model out.** Navien's product page says:
 
             0.5℃ 분리 냉난방 기술로 좌우 원하는 온도로
             해당 기능은 **사계절형 Pro 모델에만** 적용됩니다
 
-        즉 Pro 는 냉방에서도 좌우가 따로 가고 Air 는 같이 간다. **모델별 동작을
-        코드에 박아넣은 셈이었고**, 그건 이 통합이 하지 않기로 한 것이다.
-        서버가 Pro/Air 를 알려주지도 않는다.
+        So Pro keeps the sides independent even while cooling, and Air ties them together.
+        That amounted to **hard-coding per-model behaviour**, which this integration has
+        decided not to do — and the server does not even report Pro versus Air.
 
-        그래서 **누르신 구역에만 보낸다.** 기기가 좌우를 묶어 도는 모델이면
-        응답으로 두 값을 같게 돌려줄 것이고, 우리는 그것을 그대로 보여준다.
-        **기기가 하는 일을 앞질러 정하지 않는다.**
+        So the command goes **only to the zone that was touched.** A model that ties the sides
+        together will return both values equal, and that is what gets displayed. **Do not
+        pre-empt what the device does.**
         """
         return (self._zone,)
 
@@ -225,15 +227,15 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
             return
         zones = self._target_zones
         if hvac_mode is not HVACMode.OFF:
-            # 난방이든 냉방이든 켜는 방법은 같다. 난방·냉방을 가르는 것은 `season`
-            # 이고 그건 앱에서 고른다.
+            # Turning on works the same for heating and cooling. `season` decides which of
+            # the two it is, and that is chosen in the app.
             #
-            # **꺼져 있던 구역은 값도 함께 올려야 한다** (이슈 #16). 예전에는
-            # `enable: true` 만 보내고 온도는 27.5(=꺼짐) 그대로 다시 보내서,
-            # 기기 전원만 켜지고 그 구역은 꺼진 채로 남았다.
+            # **A zone that was off needs its value raised as well** (issue #16). This used
+            # to send `enable: true` while resending 27.5 (= off) as the temperature, so the
+            # device powered on with that zone still off.
             await self.coordinator.async_send(device, device.build_zone_on(zones))
             return
-        # **`enable: false` 만으로는 안 꺼진다** (이슈 #16). 값을 `off_value` 까지
-        # 내려야 기기가 받는다. 남는 구역이 없으면 전원 끄기로 돌아간다 —
-        # 판단은 `build_zone_off` 안에 있다.
+        # **`enable: false` alone does not turn it off** (issue #16). The device only accepts
+        # it once the value is lowered to `off_value`. With no zone left on, this falls back
+        # to powering the device off — that decision lives inside `build_zone_off`.
         await self.coordinator.async_send(device, device.build_zone_off(zones))

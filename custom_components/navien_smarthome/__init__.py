@@ -1,6 +1,6 @@
-"""나비엔 스마트 통합.
+"""Navien Smart integration.
 
-나비엔 스마트 앱이 쓰는 서버에 직접 붙는다. 공식 API 가 아니다.
+Talks straight to the servers the Navien Smart app uses. This is not an official API.
 """
 
 from __future__ import annotations
@@ -21,10 +21,11 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
-    # 온도형(`0.5C`)은 climate, 단계형(`1.0L`)은 select 로 갈린다. 둘 다 등록하고
-    # 각 플랫폼이 자기 축의 기기만 골라 간다.
+    # Temperature mats (`0.5C`) become climate, stepped mats (`1.0L`) become select.
+    # Both platforms are registered and each picks up only the devices on its own axis.
     Platform.CLIMATE,
-    # 에어원 목표 습도만 쓴다. 매트 단계는 `select` 다 — 단계는 연속량이 아니다.
+    # Only the Airone target humidity uses this. Mat steps are `select` — a step is not
+    # a continuous quantity.
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
@@ -35,8 +36,9 @@ NavienSmartConfigEntry = ConfigEntry[NavienSmartCoordinator]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) -> bool:
-    """자격증명으로 로그인하고 코디네이터를 세운다."""
-    # 폼 로그인이 쿠키를 물어야 해서 전용 세션을 쓴다. 공용 세션을 오염시키지 않는다.
+    """Log in with the stored credentials and stand up the coordinator."""
+    # Form login needs to hold cookies, so this uses its own session rather than
+    # polluting the shared one.
     http = async_create_clientsession(hass)
     api = NavienSmartApi(http, entry.data[CONF_USERNAME], entry.data[CONF_PASSWORD])
 
@@ -51,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) 
 
     coordinator = NavienSmartCoordinator(hass, entry, api, int(home_seq))
     await coordinator.async_config_entry_first_refresh()
-    # 구세대는 상태 요청에 답하지 않는다. 마지막으로 알던 값을 먼저 채운다.
+    # Older devices never answer a status request, so seed them with the last known values.
     await coordinator.async_restore_state()
 
     if not coordinator.data and not coordinator.airone and not coordinator.boilers:
@@ -64,7 +66,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) 
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # 엔티티가 준비된 뒤 구독을 시작한다.
+    # Subscribe only once the entities exist.
     await coordinator.async_start_mqtt()
     entry.async_on_unload(coordinator.async_stop_mqtt)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
