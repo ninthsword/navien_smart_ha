@@ -13,7 +13,7 @@ Every identifier is redacted, nicknames included — those often carry a person'
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -74,7 +74,8 @@ async def async_get_config_entry_diagnostics(
     out_of_scope: list[dict[str, Any]] = []
 
     for raw in coordinator.raw_devices:
-        service_code = raw.get("serviceCode")
+        raw_service_code = raw.get("serviceCode")
+        service_code = raw_service_code if isinstance(raw_service_code, int) else None
         if service_code in SUPPORTED_SERVICE_CODES:
             supported.append(async_redact_data(raw, TO_REDACT))
         elif service_code in REPORT_WANTED_SERVICE_CODES:
@@ -84,8 +85,14 @@ async def async_get_config_entry_diagnostics(
         else:
             out_of_scope.append(
                 {
-                    "serviceCode": service_code,
-                    "service": SERVICE_NAMES.get(service_code),
+                    # Keep the raw value as evidence when the server changes its type or
+                    # introduces a new code. Only table lookup uses the narrowed integer.
+                    "serviceCode": raw_service_code,
+                    "service": (
+                        SERVICE_NAMES.get(service_code)
+                        if service_code is not None
+                        else None
+                    ),
                     "modelName": raw.get("modelName"),
                     "modelCode": raw.get("modelCode"),
                 }
@@ -171,7 +178,9 @@ async def async_get_config_entry_diagnostics(
     # too.** The identifier values are collected first, then those strings are scrubbed from
     # the whole result. The topic shape (`dt/rc/7/**REDACTED**/did`) survives, so no evidence
     # for widening support is lost.
-    return _scrub(payload, _identifiers(coordinator.raw_devices))
+    return cast(
+        dict[str, Any], _scrub(payload, _identifiers(coordinator.raw_devices))
+    )
 
 
 def _identifiers(raw_devices: list[dict[str, Any]]) -> list[str]:

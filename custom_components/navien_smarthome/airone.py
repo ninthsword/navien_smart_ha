@@ -403,11 +403,12 @@ class AironeDevice:
         # The older generation nests one more `state` layer under `did` (observed on an
         # NRT-20DSW). Whichever one exists is used without checking the generation — either
         # way it only appears in one place.
-        did = (
+        raw_did = (
             _dig(raw, "Properties", "data", "did", "reported")
             or _dig(raw, "Properties", "data", "did", "state", "reported")
             or {}
         )
+        did = raw_did if isinstance(raw_did, dict) else {}
         controller = did.get("roomController")
         if not isinstance(controller, dict):
             # **Never give up on the device.** Missing capability metadata only means the
@@ -419,7 +420,8 @@ class AironeDevice:
             # entities at all, which is what "nothing shows up" was. Build what exists and
             # skip what does not.
             controller = {}
-        odu = did.get("odu") if isinstance(did.get("odu"), dict) else {}
+        raw_odu = did.get("odu")
+        odu = raw_odu if isinstance(raw_odu, dict) else {}
 
         modes = tuple(
             mode

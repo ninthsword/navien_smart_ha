@@ -67,7 +67,7 @@ SERVICE_HOMEAUTO: Final = 500
 SUPPORTED_SERVICE_CODES: Final = (SERVICE_BOILER, SERVICE_MATE, SERVICE_AIRONE)
 
 # Kinds that are worth a report but get no entities. Currently none.
-REPORT_WANTED_SERVICE_CODES: Final = ()
+REPORT_WANTED_SERVICE_CODES: Final[tuple[int, ...]] = ()
 
 # Out of scope: no report is requested and diagnostics keeps only a summary.
 OUT_OF_SCOPE_REASONS: Final = {
@@ -76,7 +76,7 @@ OUT_OF_SCOPE_REASONS: Final = {
 }
 
 # The status to state alongside a request for a report.
-REPORT_WANTED_NOTES: Final = {}
+REPORT_WANTED_NOTES: Final[dict[int, str]] = {}
 
 SERVICE_NAMES: Final = {
     SERVICE_BOILER: "보일러",

@@ -65,10 +65,12 @@ def _version_text(current: Any) -> str | None:
     """
     if not isinstance(current, dict):
         return None
-    parts = [current.get(key) for key in ("major", "minor", "build")]
-    if any(part is None for part in parts):
+    major = current.get("major")
+    minor = current.get("minor")
+    build = current.get("build")
+    if major is None or minor is None or build is None:
         return None
-    return ".".join(str(int(part)) for part in parts)
+    return ".".join(str(int(part)) for part in (major, minor, build))
 
 
 @dataclass(slots=True)
@@ -217,7 +219,8 @@ class NavienDevice:
         raw_nick = _dig(raw, "Properties", "nickName")
         nick = raw_nick if isinstance(raw_nick, dict) else {}
         nick_text = raw_nick.strip() if isinstance(raw_nick, str) else ""
-        side = nick.get("side") if isinstance(nick.get("side"), dict) else {}
+        raw_side = nick.get("side")
+        side = raw_side if isinstance(raw_side, dict) else {}
 
         capacity = mcu.get("capacity")
         if capacity == CAPACITY_DOUBLE or side:

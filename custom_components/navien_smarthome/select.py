@@ -113,7 +113,7 @@ class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
             return None
         # Unknown values leave it empty. `season_name` can produce text that is not in the
         # option list (such as "알 수 없음(3)"), and using that as the state contradicts the list.
-        return SEASON_NAMES.get(device.season)
+        return None if device.season is None else SEASON_NAMES.get(device.season)
 
     async def async_select_option(self, option: str) -> None:
         device = self.device

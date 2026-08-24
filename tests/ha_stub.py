@@ -98,6 +98,7 @@ stub(
 )
 stub("homeassistant.helpers.device_registry", DeviceInfo=dict, format_mac=lambda x: x)
 stub("homeassistant.helpers.storage", Store=Base)
+stub("homeassistant.helpers.recorder", get_instance=lambda hass: None)
 stub("homeassistant.helpers.debounce", Debouncer=Base)
 stub(
     "homeassistant.helpers.aiohttp_client",
@@ -172,6 +173,9 @@ stub(
     "homeassistant.components.climate",
     pkg=True,
     ClimateEntity=Base,
+)
+stub(
+    "homeassistant.components.climate.const",
     ClimateEntityFeature=enum(TARGET_TEMPERATURE=1, TURN_ON=2, TURN_OFF=4),
     HVACMode=enum(HEAT="heat", OFF="off", COOL="cool"),
     HVACAction=enum(HEATING="heating", IDLE="idle", OFF="off", COOLING="cooling"),

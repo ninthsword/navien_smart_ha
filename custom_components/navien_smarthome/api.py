@@ -256,9 +256,11 @@ class NavienSmartApi:
             if start == -1 or end <= start:
                 continue
             try:
-                return json.loads(line[start : end + 1])
+                data = json.loads(line[start : end + 1])
             except json.JSONDecodeError:
                 continue
+            if isinstance(data, dict):
+                return data
         return None
 
     async def _async_secured_sign_in(
@@ -271,7 +273,7 @@ class NavienSmartApi:
             json_body={"userId": user_id, "accountSeq": account_seq},
         )
         data = payload.get("data")
-        if not data:
+        if not isinstance(data, dict) or not data:
             raise NavienSmartAuthError("secured-sign-in 응답에 data 가 없습니다.")
         return data
 

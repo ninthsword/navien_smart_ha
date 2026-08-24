@@ -240,7 +240,7 @@ entities:
 
 ## 설치
 
-**Home Assistant 2025.2 이상이 필요합니다.**
+**Home Assistant 2026.8.0 이상이 필요합니다.**
 
 1. HACS → 사용자 지정 저장소에 이 저장소를 추가
 2. `Navien Smart` 설치 후 Home Assistant 재시작
@@ -420,12 +420,28 @@ HA 화면이 멈춰 보입니다.
 
 ## 시험
 
+빠른 회귀 시험은 외부 패키지 없이 Python 3.11 이상에서 실행됩니다.
+
 ```bash
 python3 tests/run.py
 ```
 
 **Home Assistant 를 설치하지 않아도 돌아갑니다.** 파이썬만 있으면 됩니다.
 자세한 것은 [`tests/README.md`](tests/README.md) 를 봐 주세요.
+
+실제 Home Assistant 2026.8 API 계약, 타입 검사, lint까지 확인하려면 Python 3.14와
+`uv`로 잠긴 개발 환경을 만듭니다.
+
+```bash
+uv venv --python 3.14
+uv pip sync --python .venv/bin/python --require-hashes requirements-dev.lock
+.venv/bin/pytest
+.venv/bin/mypy custom_components/navien_smarthome
+.venv/bin/ruff check custom_components tests tests_ha tools
+```
+
+`tests_ha/`는 Navien HTTP·MQTT 경계를 모두 mock한 채 실제 Home Assistant 코어와
+recorder를 사용합니다. 실제 계정이나 기기에 접속하지 않습니다.
 
 ---
 

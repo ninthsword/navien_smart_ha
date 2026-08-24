@@ -153,7 +153,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # The older generation never answers a `remote/status` request. The last state
         # received is stored and restored at startup — without it, power, mode and fan speed
         # all read as empty until the first command.
-        self._store: Store = Store(hass, 1, f"{DOMAIN}.airone_state")
+        self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.airone_state")
         # Devices whose state was restored. Diagnostics has to be able to tell whether a value
         # on screen came from a restore — power can read as on while the device is off.
         self.restored_devices: set[str] = set()
@@ -302,10 +302,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             # **The records carry over too.** Device objects are rebuilt on every poll, and
             # anything left off the carry-over list silently resets to zero — which is exactly
             # how the diagnostics records were being wiped every interval (v0.9.5).
-            if (old := previous.get(device.device_id)) is not None:
-                device.reported = old.reported
-                device.command_log = old.command_log
-                device.state_log = old.state_log
+            if (old_device := previous.get(device.device_id)) is not None:
+                device.reported = old_device.reported
+                device.command_log = old_device.command_log
+                device.state_log = old_device.state_log
 
             if device.is_four_season:
                 self._log_four_season(device)
@@ -543,14 +543,19 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         route is offered only for devices worth a report; out-of-scope devices are not given
         false hope.
         """
-        service_code = raw.get("serviceCode")
+        raw_service_code = raw.get("serviceCode")
+        service_code = raw_service_code if isinstance(raw_service_code, int) else None
         key = f"{raw.get('deviceSeq')}:unsupported"
         if key in self._skipped_logged:
             return
         self._skipped_logged.add(key)
-        name = SERVICE_NAMES.get(service_code, f"serviceCode {service_code}")
+        name = (
+            SERVICE_NAMES.get(service_code, f"serviceCode {service_code}")
+            if service_code is not None
+            else f"serviceCode {raw_service_code}"
+        )
 
-        if service_code in REPORT_WANTED_SERVICE_CODES:
+        if service_code is not None and service_code in REPORT_WANTED_SERVICE_CODES:
             _LOGGER.warning(
                 "%s 를 찾았습니다 (modelName=%s). 아직 지원하지 않습니다 — %s. "
                 "지원을 원하시면 설정 → 기기 및 서비스 → 나비엔 스마트 → "
@@ -566,7 +571,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             "%s (modelName=%s) 는 건너뜁니다 — %s.",
             name,
             raw.get("modelName"),
-            OUT_OF_SCOPE_REASONS.get(service_code, "이 통합의 범위가 아닙니다"),
+            (
+                OUT_OF_SCOPE_REASONS.get(service_code, "이 통합의 범위가 아닙니다")
+                if service_code is not None
+                else "이 통합의 범위가 아닙니다"
+            ),
         )
 
     def _log_four_season(self, device: NavienDevice) -> None:
@@ -852,7 +861,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self._schedule_boiler_silence_check(device)
         if is_gas_update:
             self._schedule_boiler_gas_refresh(device)
-            self.config_entry.async_create_background_task(
+            config_entry = self.config_entry
+            assert config_entry is not None
+            config_entry.async_create_background_task(
                 self.hass,
                 self._async_import_gas_statistics(device),
                 f"navien gas statistics {device.device_seq}",

@@ -10,9 +10,13 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfVolume
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    UnitOfTemperature,
+    UnitOfVolume,
+)
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
@@ -644,6 +648,11 @@ class _AirSensorMixin:
 
     _kind: str
     _numeric: bool
+    device: AironeDevice | None
+    _attr_unique_id: str | None
+    _attr_name: str | None
+    _attr_native_unit_of_measurement: str | None
+    _attr_state_class: SensorStateClass | None
 
     def _setup_air(self, device: AironeDevice, kind: str, unique_prefix: str) -> None:
         self._kind = kind
@@ -665,20 +674,21 @@ class _AirSensorMixin:
             as_number((raw or {}).get("value")) is not None if raw else True
         )
         if self._numeric:
-            self._attr_state_class = "measurement"
+            self._attr_state_class = SensorStateClass.MEASUREMENT
             if unit is not None:
                 self._attr_native_unit_of_measurement = unit
             # HA uses this for icons, history graphs and unit conversion. It only fits when
             # the unit matches, so it is attached only for numeric values.
             if device_class is not None:
-                self._attr_device_class = device_class
+                self._attr_device_class = SensorDeviceClass(device_class)
 
     @property
     def _raw(self) -> dict[str, Any] | None:
-        device = self.device  # type: ignore[attr-defined]
+        device = self.device
         if device is None:
             return None
-        return device.air_sensors.get(self._kind)
+        raw = device.air_sensors.get(self._kind)
+        return raw if isinstance(raw, dict) else None
 
     @property
     def native_value(self) -> float | str | None:
@@ -708,7 +718,9 @@ class _AirSensorMixin:
         return attrs
 
 
-class AironeAirSensor(_AirSensorMixin, AironeEntity, SensorEntity):
+class AironeAirSensor(  # type: ignore[misc]  # HA entity bases share typed class attributes.
+    _AirSensorMixin, AironeEntity, SensorEntity
+):
     """An air-quality item, attached to the main device when there is no air monitor."""
 
     def __init__(
@@ -721,7 +733,9 @@ class AironeAirSensor(_AirSensorMixin, AironeEntity, SensorEntity):
         self._setup_air(device, kind, device.device_id)
 
 
-class AironeMonitorSensor(_AirSensorMixin, AironeMonitorEntity, SensorEntity):
+class AironeMonitorSensor(  # type: ignore[misc]  # HA entity bases share typed class attributes.
+    _AirSensorMixin, AironeMonitorEntity, SensorEntity
+):
     """An air-quality item, attached to the air monitor device."""
 
     def __init__(
@@ -746,7 +760,14 @@ class AironeLegacySensor(AironeEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:code-braces"
 
-    def __init__(self, coordinator, device, key: str, label: str, table: str | None) -> None:
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: AironeDevice,
+        key: str,
+        label: str,
+        table: str | None,
+    ) -> None:
         super().__init__(coordinator, device)
         self._key = key
         self._table = LEGACY_VALUE_TABLES.get(table or "")
@@ -757,8 +778,11 @@ class AironeLegacySensor(AironeEntity, SensorEntity):
         # plausible. Only the number is kept.
 
     @property
-    def native_value(self):
-        value = self.device.legacy_extras.get(self._key)
+    def native_value(self) -> Any:
+        device = self.device
+        if device is None:
+            return None
+        value = device.legacy_extras.get(self._key)
         if self._table is None or value is None:
             return value
         # A value absent from the table is shown as its number — unknown values are not hidden.
@@ -775,7 +799,7 @@ class AironeFilterSensor(AironeEntity, SensorEntity):
 
     _attr_icon = "mdi:air-filter"
     _attr_native_unit_of_measurement = "%"
-    _attr_state_class = "measurement"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,

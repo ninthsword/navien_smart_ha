@@ -2,6 +2,8 @@
 
 ## Unreleased — NR-67D boiler support
 
+- Raises the minimum supported Home Assistant version to 2026.8.0 and adds locked
+  development dependencies, strict mypy, Ruff, hassfest, and real-HA contract tests to CI.
 - Reads the `smarttok` MQTT status confirmed on an `NR-67D` and surfaces it as temperature
   and humidity sensors.
 - Applies the observed scale factors: indoor temperature and humidity in 0.1 units, every

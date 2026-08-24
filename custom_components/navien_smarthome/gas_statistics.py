@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.models.statistics import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
@@ -30,6 +29,7 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.recorder import get_instance
 from homeassistant.util import dt as dt_util
 
 from .boiler import BoilerDevice, GasUsageBucket
@@ -150,7 +150,9 @@ async def _async_last_sum_before(
         )
         found = [row for row in rows.get(stat_id) or () if row.get("sum") is not None]
         if found:
-            return float(found[-1]["sum"])
+            total = found[-1].get("sum")
+            if total is not None:
+                return float(total)
     return 0.0
 
 

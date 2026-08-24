@@ -240,7 +240,8 @@ def normalize_legacy_status(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     controller: dict[str, Any] = {}
-    running = LEGACY_RUNNING_TO_V2.get(payload.get("isRunning"))
+    raw_running = payload.get("isRunning")
+    running = LEGACY_RUNNING_TO_V2.get(raw_running) if isinstance(raw_running, int) else None
     if running is not None:
         controller["running"] = running
     for source, target in LEGACY_STATUS_TO_CONTROLLER.items():
@@ -424,12 +425,14 @@ class NavienSmartMqtt:
         # This value has to go into the Airone control envelope for the server to answer.
         self._client_id = client_id
         try:
+            from paho.mqtt.enums import CallbackAPIVersion
+
             client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION2,
+                CallbackAPIVersion.VERSION2,
                 client_id=client_id,
                 transport="websockets",
             )
-        except AttributeError:  # paho-mqtt 1.x
+        except ImportError:  # paho-mqtt 1.x
             client = mqtt.Client(client_id=client_id, transport="websockets")
 
         client.on_connect = self._on_connect

@@ -907,6 +907,7 @@ def _safe_key(key: Any, index: int) -> str:
 def _safe_numeric_text(value: str) -> int | float | None:
     """Keep as numbers only the short numeric strings plausible as protocol values."""
     text = value.strip()
+    number: int | float
     try:
         if _INTEGER_TEXT.fullmatch(text):
             number = int(text)
@@ -939,15 +940,15 @@ def sanitize_boiler_value(value: Any, depth: int = 0) -> Any:
         return result
 
     if isinstance(value, list):
-        result = [
+        items = [
             sanitize_boiler_value(inner, depth + 1)
             for inner in value[:_MAX_LIST_ITEMS]
         ]
         if len(value) > _MAX_LIST_ITEMS:
-            result.append(
+            items.append(
                 {"kind": "truncated_items", "count": len(value) - _MAX_LIST_ITEMS}
             )
-        return result
+        return items
 
     if isinstance(value, bool) or value is None:
         return value

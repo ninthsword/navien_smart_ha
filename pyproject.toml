@@ -5,3 +5,15 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "ASYNC", "RUF"]
 ignore = ["E501", "RUF012"]
 external = ["BLE"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests_ha"]
+addopts = ["--disable-socket", "--allow-unix-socket"]
+
+[tool.mypy]
+python_version = "3.14"
+files = ["custom_components/navien_smarthome"]
+strict = true
+show_error_codes = true
+warn_unused_ignores = true
