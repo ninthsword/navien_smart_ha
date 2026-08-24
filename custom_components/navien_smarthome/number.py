@@ -143,7 +143,7 @@ class AironeHumidityNumber(AironeEntity, NumberEntity):
     _attr_name = "희망습도"
     _attr_icon = "mdi:water-percent"
     _attr_native_unit_of_measurement = "%"
-    # The app's −/+ buttons move in steps of 5. The server never reports a step, so follow
+    # The app's -/+ buttons move in steps of 5. The server never reports a step, so follow
     # the app.
     _attr_native_step = AIRONE_HUMIDITY_STEP
     _attr_mode = NumberMode.SLIDER

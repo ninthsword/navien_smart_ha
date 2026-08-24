@@ -398,15 +398,17 @@ class NavienSmartMqtt:
             _LOGGER.debug("%s초 후 MQTT 재접속", delay)
             await asyncio.sleep(delay)
 
-    async def _async_wait_connected(self, timeout: float = 15.0) -> None:
+    async def _async_wait_connected(self, timeout_seconds: float = 15.0) -> None:
         """Wait for CONNACK. The `_on_connect` callback is what sets `connected`."""
-        deadline = timeout
+        deadline = timeout_seconds
         while deadline > 0:
             if self._stopping or self.connected:
                 return
             await asyncio.sleep(0.2)
             deadline -= 0.2
-        raise TimeoutError(f"{timeout}초 안에 MQTT CONNACK 이 오지 않았습니다.")
+        raise TimeoutError(
+            f"{timeout_seconds}초 안에 MQTT CONNACK 이 오지 않았습니다."
+        )
 
     async def _async_connect_once(self) -> None:
         creds = await self._credentials_provider()

@@ -442,7 +442,7 @@ AIRONE_HUMIDITY_REPORT_TYPE: Final = 3
 # the same.
 AIRONE_AUTO_DRY_TYPE: Final = 4
 
-# The app's target-humidity −/+ buttons move in steps of 5
+# The app's target-humidity -/+ buttons move in steps of 5
 # (`AirOneControlFragment`: `setProgress(getProgress() ± 5)`). The server sends only min and
 # max and never a step, so the app is followed.
 AIRONE_HUMIDITY_STEP: Final = 5

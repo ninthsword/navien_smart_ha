@@ -413,7 +413,7 @@ class NavienDevice:
 
             // MateConstants
             r11 = Boolean.valueOf(areEqual(r35, "lock-on"));   // childLock
-            r4  = new Desired(r11, new Event(modelCode), null × 12);
+            r4  = new Desired(r11, new Event(modelCode), null x 12);
 
         **It has the same shape as a season change** and needs no special topic — it goes
         through the default branch of `mateControlDevice`

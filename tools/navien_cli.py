@@ -151,8 +151,10 @@ def _api(method: str, path: str, token: str, *, query: dict[str, Any] | None = N
     status, raw = _request(method, url, headers=headers, body=body)
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise NavienError(f"{path} 응답이 JSON 이 아니다 (HTTP {status}): {raw[:200]!r}")
+    except json.JSONDecodeError as err:
+        raise NavienError(
+            f"{path} 응답이 JSON 이 아니다 (HTTP {status}): {raw[:200]!r}"
+        ) from err
 
     code = data.get("code")
     if code == 200:
@@ -540,7 +542,7 @@ def cmd_control(args: argparse.Namespace) -> int:
     print(f"대상   : deviceSeq {args.device_seq}  \"{nickname}\"  {dev.get('modelName')}")
     print(f"unit   : {unit}  (범위 {lo}~{hi}, 고온경고선 {safe})")
     print(f"연결   : {dev.get('connected')}")
-    print(f"설정   : " + ", ".join(f"{z}={v}단계" for z, v in zones.items()))
+    print("설정   : " + ", ".join(f"{z}={v}단계" for z, v in zones.items()))
     if safe is not None and any(v > safe for v in zones.values()):
         print(f"  ※ 고온경고선({safe}) 을 넘는 값이 있다. 앱에서도 경고 표시가 뜨는 구간이다.")
     print()
@@ -677,12 +679,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
     """Subscribe to the shadow reports a device pushes. **Subscribe only — never publish.**"""
     try:
         import paho.mqtt.client as mqtt
-    except ImportError:
+    except ImportError as err:
         raise NavienError(
             "watch 에는 MQTT 클라이언트가 필요하다.\n"
             "  설치: python3 -m pip install paho-mqtt\n"
             "  (login·devices 는 설치 없이 동작한다)"
-        )
+        ) from err
 
     import uuid
 

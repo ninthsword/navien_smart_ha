@@ -19,17 +19,16 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .airone import AironeDevice
 from .api import (
     AwsCredentials,
     NavienSmartApi,
     NavienSmartAuthError,
     NavienSmartError,
 )
-from homeassistant.helpers.storage import Store
-
-from .airone import AironeDevice
 from .boiler import (
     BOILER_GAS_METER_UPDATE,
     BOILER_GAS_REFRESH_SECONDS,
@@ -38,7 +37,6 @@ from .boiler import (
     BOILER_SILENCE_REFRESH_SECONDS,
     BoilerDevice,
 )
-from .gas_statistics import async_import_gas_statistics
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
     AIRONE_CMD_CHANGE_MODE,
@@ -61,6 +59,7 @@ from .const import (
     TOPIC_PREFIX,
     UPDATE_INTERVAL_SECONDS,
 )
+from .gas_statistics import async_import_gas_statistics
 from .models import NavienDevice
 from .mqtt import NavienSmartMqtt
 

@@ -179,7 +179,10 @@ r.ok("gooutUse" in boiler_source, "it records that this must be read alongside t
 
 r.section("error codes transcribed from the manual")
 
-from navien_smarthome.boiler import BOILER_ERROR_NAMES, BOILER_STATE_HEATING  # noqa: E402
+from navien_smarthome.boiler import (  # noqa: E402
+    BOILER_ERROR_NAMES,
+    BOILER_STATE_HEATING,
+)
 
 r.ok(BOILER_STATE_HEATING == "연소", "the running state uses the manual's own wording")
 r.ok(BOILER_ERROR_NAMES[1] == "열교환기 과열", "E001 was transcribed")
