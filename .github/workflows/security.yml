@@ -1,0 +1,94 @@
+name: security
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          enable-cache: true
+      - name: Scan tracked source with Semgrep
+        env:
+          BASELINE_COMMIT: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SEMGREP_ENABLE_VERSION_CHECK: "0"
+        run: |
+          args=(
+            scan
+            --config p/default
+            --error
+            --metrics=off
+            --disable-nosem
+            --no-git-ignore
+            --x-ignore-semgrepignore-files
+          )
+          if git cat-file -e "${BASELINE_COMMIT}^{commit}"; then
+            args+=(--baseline-commit "${BASELINE_COMMIT}")
+          fi
+          uvx --from semgrep==1.174.0 semgrep "${args[@]}"
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Gitleaks 8.29.1
+        env:
+          GITLEAKS_VERSION: 8.29.1
+          GITLEAKS_SHA256: e4eb209d04e20339d77122a3bdf9cd41351255cfb27ebcb75e85325e04f88924
+        run: |
+          archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          install_dir="${RUNNER_TEMP}/gitleaks"
+          curl --fail --location --retry 3 --silent --show-error \
+            --output "${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --status
+          mkdir --parents "${install_dir}"
+          tar --extract --gzip --file "${archive}" --directory "${install_dir}" gitleaks
+          chmod +x "${install_dir}/gitleaks"
+      - name: Scan the event commit range with protected Gitleaks policy
+        env:
+          POLICY_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          git cat-file -e "${POLICY_SHA}^{commit}"
+          ignore_path="${RUNNER_TEMP}/.gitleaksignore"
+          config_path="${RUNNER_TEMP}/.gitleaks.toml"
+          if git cat-file -e "${POLICY_SHA}:.gitleaksignore"; then
+            git show "${POLICY_SHA}:.gitleaksignore" > "${ignore_path}"
+          else
+            : > "${ignore_path}"
+          fi
+          if git cat-file -e "${POLICY_SHA}:.gitleaks.toml"; then
+            git show "${POLICY_SHA}:.gitleaks.toml" > "${config_path}"
+          else
+            printf '%s\n' '[extend]' 'useDefault = true' > "${config_path}"
+          fi
+
+          "${RUNNER_TEMP}/gitleaks/gitleaks" git \
+            --redact \
+            --no-banner \
+            --no-color \
+            --ignore-gitleaks-allow \
+            --gitleaks-ignore-path "${ignore_path}" \
+            --config "${config_path}" \
+            --log-opts=--all

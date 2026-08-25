@@ -1,0 +1,44 @@
+name: security-policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  policy-guard:
+    runs-on: ubuntu-latest
+    steps:
+      # pull_request_target uses this workflow from the trusted base branch. Do not set ref:
+      # checking out or executing PR content here would defeat the policy boundary.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject pull requests that weaken security policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+          fetched_sha="$(git rev-parse FETCH_HEAD)"
+          if [ "${fetched_sha}" != "${HEAD_SHA}" ]; then
+            echo "Fetched pull request head does not match the event head."
+            exit 1
+          fi
+
+          protected_paths='(^|/)(\.gitleaksignore|\.gitleaks\.toml|\.semgrepignore)$|^\.github/workflows/'
+          if git log --format= --name-only "${BASE_SHA}..${HEAD_SHA}" | grep -E "${protected_paths}" > /dev/null; then
+            echo "Pull requests may not modify security policy files."
+            exit 1
+          fi
+
+          if git log --format= --patch --unified=0 "${BASE_SHA}..${HEAD_SHA}" |
+            grep -Ei '^\+[^+].*(gitleaks:allow|nosemgrep|nosem)([^[:alnum:]_]|$)' > /dev/null; then
+            echo "Pull requests may not add inline scanner-suppression markers."
+            exit 1
+          fi
