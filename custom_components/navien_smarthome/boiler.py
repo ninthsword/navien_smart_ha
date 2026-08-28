@@ -144,6 +144,9 @@ _SAFE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
 _INTEGER_TEXT = re.compile(r"-?\d{1,6}")
 _FLOAT_TEXT = re.compile(r"-?\d{1,4}\.\d{1,3}")
 _IDENTIFIER_KEY = re.compile(r"(?:[0-9a-fA-F]{12,}|\d{10,})")
+_MIXED_IDENTIFIER_KEY = re.compile(
+    r"(?=[A-Za-z0-9]{12,})(?=(?:\D*\d){4})[A-Za-z0-9]{12,}"
+)
 
 # Key names are kept because the structure cannot be understood without them, but the values
 # beneath them do not even reveal their type. Case and ``-``/``_`` differences are normalised
@@ -874,6 +877,9 @@ def extract_boiler_status(
     except (json.JSONDecodeError, UnicodeDecodeError):
         _bump(stats, "dropped_not_json")
         return None
+    if not isinstance(event, dict):
+        _bump(stats, "dropped_not_object")
+        return None
     response = _dig(event, "payload", "response")
     status = response.get("status") if isinstance(response, dict) else None
     gas_meter = response.get("gasMeter") if isinstance(response, dict) else None
@@ -896,10 +902,15 @@ def _normalized_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]", "", key.lower())
 
 
-def _safe_key(key: Any, index: int) -> str:
+def safe_diagnostic_key(key: Any, index: int) -> str:
     """Keep only keys that look like field names, redacting identifiers used as dict keys."""
     text = str(key)
-    if not _SAFE_KEY.fullmatch(text) or _IDENTIFIER_KEY.search(text):
+    compact = re.sub(r"[^A-Za-z0-9]", "", text)
+    if (
+        not _SAFE_KEY.fullmatch(text)
+        or _IDENTIFIER_KEY.search(text)
+        or _MIXED_IDENTIFIER_KEY.search(compact)
+    ):
         return f"<key:{index}>"
     return text
 
@@ -930,7 +941,7 @@ def sanitize_boiler_value(value: Any, depth: int = 0) -> Any:
         for index, (raw_key, inner) in enumerate(value.items()):
             if index >= _MAX_DICT_ITEMS:
                 break
-            key = _safe_key(raw_key, index)
+            key = safe_diagnostic_key(raw_key, index)
             if _normalized_key(str(raw_key)) in _SENSITIVE_KEYS:
                 result[key] = {"kind": "redacted"}
             else:

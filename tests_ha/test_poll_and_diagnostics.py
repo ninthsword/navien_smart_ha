@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
+from copy import deepcopy
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.core import HomeAssistant
 
@@ -26,9 +27,19 @@ async def test_poll_rebuild_retains_live_state_and_records(
     airone.air_sensor_errors = 3
     boiler.gas_meter = {"thisYearMonthTotalGasUsage": 74}
     boiler.gas_received_at = 123.0
+    boiler.apply_status(
+        {"command": 33554438, "mqttOnlyField": 7, "operationMode": 2},
+        now=150.0,
+    )
+    rest_boiler = deepcopy(boiler.raw)
+    del rest_boiler["Properties"]["did"]["response"]["macAddress"]
+    rest_boiler["Properties"]["did"]["response"]["status"] = {
+        "operationMode": 4,
+        "restOnlyField": 9,
+    }
 
     coordinator.api.async_get_devices = AsyncMock(
-        return_value=[mat.raw, airone.raw, boiler.raw]
+        return_value=[mat.raw, airone.raw, rest_boiler]
     )
     coordinator._async_update_air_sensors = AsyncMock()
 
@@ -46,9 +57,21 @@ async def test_poll_rebuild_retains_live_state_and_records(
     assert rebuilt_airone.known_sensor_kinds == airone.known_sensor_kinds
     assert rebuilt_airone.air_sensor_errors == 3
     assert rebuilt_boiler is not boiler
-    assert rebuilt_boiler.status == boiler.status
+    assert rebuilt_boiler.status["mqttOnlyField"] == 7
+    assert rebuilt_boiler.status["command"] == 33554438
+    assert rebuilt_boiler.status["restOnlyField"] == 9
+    assert rebuilt_boiler.status["operationMode"] == 2
+    assert rebuilt_boiler.status_received_at == 150.0
+    assert rebuilt_boiler.physical_device_id == boiler.physical_device_id
+    assert rebuilt_boiler.observed_commands == {33554438: 1}
     assert rebuilt_boiler.gas_meter == boiler.gas_meter
     assert rebuilt_boiler.gas_received_at == 123.0
+
+    with patch.object(coordinator, "_schedule_boiler_silence_check"):
+        coordinator._handle_boiler_reported(
+            boiler.physical_device_id or "", {"mqttAfterPoll": 11}
+        )
+    assert rebuilt_boiler.status["mqttAfterPoll"] == 11
 
 
 async def test_diagnostics_redacts_keys_and_embedded_identifiers(

@@ -36,6 +36,7 @@ from .boiler import (
     BOILER_READBACK_DELAY_SECONDS,
     BOILER_SILENCE_REFRESH_SECONDS,
     BoilerDevice,
+    safe_diagnostic_key,
 )
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
@@ -81,7 +82,10 @@ def _key_map(raw: dict[str, Any], depth: int = 5) -> str:
     def walk(value: Any, level: int) -> Any:
         if not isinstance(value, dict) or level <= 0:
             return "..." if isinstance(value, dict) else type(value).__name__
-        return {key: walk(inner, level - 1) for key, inner in value.items()}
+        return {
+            safe_diagnostic_key(key, index): walk(inner, level - 1)
+            for index, (key, inner) in enumerate(value.items())
+        }
 
     return str(walk(raw.get("Properties"), depth))
 
@@ -256,15 +260,21 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     self.unsupported.append(raw)
                     continue
                 if (old := previous_boilers.get(boiler.device_id)) is not None:
-                    # Do not lose MQTT state when the REST response carries only `feature`.
-                    if not boiler.status:
-                        boiler.status = old.status
+                    # REST may return a partial server cache. Before MQTT has spoken it is the
+                    # best available snapshot; afterwards it can only fill gaps in the live
+                    # state. A REST poll never refreshes the actual-MQTT timestamp.
+                    boiler.status = (
+                        {**old.status, **boiler.status}
+                        if old.status_received_at is None
+                        else {**boiler.status, **old.status}
+                    )
                     if boiler.physical_device_id is None:
                         boiler.physical_device_id = old.physical_device_id
                     boiler.status_received_at = old.status_received_at
                     boiler.last_communication_at = old.last_communication_at
                     boiler.gas_meter = old.gas_meter
                     boiler.gas_received_at = old.gas_received_at
+                    boiler.observed_commands = old.observed_commands
                 boilers[boiler.device_id] = boiler
                 continue
 
@@ -428,10 +438,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return
         self._skipped_logged.add(key)
         _LOGGER.info(
-            "환기청정을 찾았습니다 (%s, modelCode=%s). 운전 모드 %d가지를 서버 "
+            "환기청정을 찾았습니다 (modelCode=%s). 운전 모드 %d가지를 서버 "
             "정보에서 찾았습니다. 값이 앱과 다르거나 조작이 안 되면 이슈로 "
             "알려 주세요.",
-            device.nickname,
             device.model_code,
             len(device.selectable_modes),
         )
@@ -512,10 +521,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return
         self._skipped_logged.add(key)
         _LOGGER.warning(
-            "%s 에서 전에 받던 공기질 항목이 오지 않습니다: %s. "
+            "환기청정 기기에서 전에 받던 공기질 항목이 오지 않습니다: %s. "
             "에어모니터와 룸콘 사이 통신을 확인해 주세요 — 값이 돌아오면 "
             "센서도 함께 돌아옵니다",
-            device.nickname,
             ", ".join(AIRONE_SENSOR_KINDS[k][0] for k in missing),
         )
 
@@ -530,10 +538,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return
         self._skipped_logged.add(key)
         _LOGGER.info(
-            "%s 는 공기질 센서를 갖고 있지 않다고 알려왔습니다 "
+            "환기청정 기기가 공기질 센서를 갖고 있지 않다고 알려왔습니다 "
             "(룸콘 센서 목록 비어 있음, 에어모니터 없음). 공기질을 조회하지 "
             "않습니다. 앱에는 공기질이 보이는데 HA 에 없다면 제보해 주세요",
-            device.nickname,
         )
 
     def _log_unsupported(self, raw: dict[str, Any]) -> None:
@@ -590,11 +597,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self._skipped_logged.add(key)
         cool = device.cool_control
         _LOGGER.info(
-            "사계절 모델을 찾았습니다 (%s, modelCode=%s). 냉방(COOL) 범위는 "
+            "사계절 모델을 찾았습니다 (modelCode=%s). 냉방(COOL) 범위는 "
             "%s~%s 입니다. 앱에서 COOL 로 바꾸시면 HA 도 그 범위로 따라갑니다 — "
             "**냉방에서는 좌우가 같은 온도로 동작하므로** 어느 쪽을 조작해도 "
             "양쪽에 같은 값이 갑니다.",
-            device.nickname,
             device.model_code,
             cool.range_min if cool else "?",
             cool.range_max if cool else "?",
@@ -612,10 +618,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return
         self._skipped_logged.add(key)
         _LOGGER.warning(
-            "%s 의 season 값 %s 를 해석하지 못해 난방으로 다룹니다 "
+            "기기의 season 값 %s 를 해석하지 못해 난방으로 다룹니다 "
             "(아는 값: 0 난방 / 2 냉방). 냉방 중이신데 이 로그가 보이면 "
             "이 줄과 통계정보를 이슈에 붙여 주세요 — 바로 넓힐 수 있습니다.",
-            device.nickname,
             device.season,
         )
 
@@ -1242,11 +1247,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             # the homeSeq. The diagnostics export redacts those very values, so the two
             # disagreed. The **shape** of the topic is enough to narrow down the cause.
             _LOGGER.warning(
-                "%s 에 상태를 요청했지만 %d초 안에 응답이 오지 않았습니다. "
+                "환기청정 기기에 상태를 요청했지만 %d초 안에 응답이 오지 않았습니다. "
                 "요청은 정상 전송됐습니다 — 보낸 곳: %s, 듣는 곳: **REDACTED**/%s/#. "
                 "엔티티가 「알 수 없음」으로 남습니다. 이 로그와 통계정보를 "
                 "이슈에 붙여 주시면 원인을 좁힐 수 있습니다.",
-                target.nickname,
                 AIRONE_SILENCE_CHECK_SECONDS,
                 AIRONE_TOPIC_FMT.format(
                     model_code=target.model_code,

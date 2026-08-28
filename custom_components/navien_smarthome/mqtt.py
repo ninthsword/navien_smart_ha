@@ -32,7 +32,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util.ssl import get_default_context
 
 from .api import AwsCredentials
-from .boiler import BOILER_TOPIC_PREFIX, extract_boiler_status, observe_boiler_message
+from .boiler import (
+    BOILER_TOPIC_PREFIX,
+    extract_boiler_status,
+    observe_boiler_message,
+    safe_diagnostic_key,
+)
 from .const import (
     IOT_ENDPOINT,
     IOT_REGION,
@@ -128,7 +133,9 @@ def build_signed_ws_path(creds: AwsCredentials, region: str = IOT_REGION) -> str
     )
 
 
-def extract_reported(payload: bytes, topic: str) -> tuple[str, dict[str, Any]] | None:
+def extract_reported(
+    payload: bytes, topic: str, stats: dict[str, Any] | None = None
+) -> tuple[str, dict[str, Any]] | None:
     """Let through only the events worth using.
 
     Two conditions have to hold: the shadow topic is `/update/accepted` or `/get/accepted`,
@@ -141,24 +148,50 @@ def extract_reported(payload: bytes, topic: str) -> tuple[str, dict[str, Any]] |
         event = json.loads(payload)
     except (json.JSONDecodeError, UnicodeDecodeError):
         _LOGGER.debug("JSON 이 아닌 MQTT 메시지 무시: topic=%s", topic)
+        _bump(stats, "dropped_not_json")
         return None
 
-    shadow_topic = event.get("topic") or ""
-    if not shadow_topic.endswith(_ACCEPTED_SUFFIXES):
+    if not isinstance(event, dict):
+        _LOGGER.debug("객체가 아닌 MQTT 이벤트 무시")
+        _bump(stats, "dropped_not_object")
         return None
 
-    state = ((event.get("payload") or {}).get("state")) or {}
+    shadow_topic = event.get("topic")
+    if not isinstance(shadow_topic, str) or not shadow_topic.endswith(
+        _ACCEPTED_SUFFIXES
+    ):
+        _bump(stats, "dropped_no_reported")
+        return None
+
+    event_payload = event.get("payload")
+    if not isinstance(event_payload, dict):
+        _bump(stats, "dropped_no_reported")
+        return None
+    state = event_payload.get("state")
+    if not isinstance(state, dict):
+        _bump(stats, "dropped_no_reported")
+        return None
     reported = state.get("reported")
     if not isinstance(reported, dict):
         # This event fires when the command lands in the shadow. The device does not know yet.
+        _bump(stats, "dropped_no_reported")
         return None
 
-    device_id = (reported.get("info") or {}).get("deviceId")
+    info = reported.get("info")
+    if info is not None and not isinstance(info, dict):
+        _bump(stats, "dropped_no_reported")
+        return None
+    device_id = info.get("deviceId") if isinstance(info, dict) else None
+    if device_id is not None and not isinstance(device_id, str):
+        _bump(stats, "dropped_no_reported")
+        return None
     if not device_id:
         # The last topic segment is the deviceId — `{homeSeq}/mate/{deviceId}`.
         device_id = topic.rsplit("/", 1)[-1]
     if not device_id:
+        _bump(stats, "dropped_no_reported")
         return None
+    _bump(stats, "accepted")
     return device_id, reported
 
 
@@ -178,7 +211,7 @@ def extract_airone_reported(
         _bump(stats, "dropped_not_json")
         return None
     if not isinstance(event, dict):
-        _bump(stats, "dropped_not_json")
+        _bump(stats, "dropped_not_object")
         return None
 
     inner = event.get("payload")
@@ -202,16 +235,19 @@ def extract_airone_reported(
         # **Never discarded silently.** As DEBUG this left no trace on a default install, so
         # a report could not tell us why state was not arriving. Only key names are logged,
         # never values.
+        safe_keys = [
+            safe_diagnostic_key(key, index)
+            for index, key in enumerate(sorted(reported, key=str))
+        ]
         _LOGGER.warning(
             "에어원 상태 메시지의 모양을 알지 못해 쓰지 못했습니다 "
-            "(topic 끝=%s, 최상위 키=%s). 이 로그를 이슈에 붙여 주시면 "
+            "(메시지 종류=에어원, 최상위 키=%s). 이 로그를 이슈에 붙여 주시면 "
             "바로 넓힐 수 있습니다.",
-            topic.rsplit("/", 1)[-1],
-            sorted(reported),
+            safe_keys,
         )
         _bump(stats, "dropped_unknown_shape")
         if stats is not None:
-            stats["last_unknown_shape_keys"] = sorted(reported)
+            stats["last_unknown_shape_keys"] = safe_keys
         return None
 
     # The last segment of `{homeSeq}/airone/{deviceId}` is the deviceId from the device list.
@@ -480,12 +516,14 @@ class NavienSmartMqtt:
             return
 
         _bump(self.stats, "mate_received")
-        result = extract_reported(message.payload, message.topic)
+        mate_stats: dict[str, Any] = {}
+        result = extract_reported(message.payload, message.topic, mate_stats)
+        for key in mate_stats:
+            _bump(self.stats, f"mate_{key}")
         if result is None:
             # Discarded events are logged too. Without this, "no state arrives" could not be
             # told from "it arrives and is dropped", which dragged out debugging.
             _LOGGER.debug("MQTT 이벤트 무시 (reported 없음): %s", message.topic)
-            _bump(self.stats, "mate_dropped_no_reported")
             return
         device_id, reported = result
         _LOGGER.debug(
