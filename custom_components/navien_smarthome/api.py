@@ -122,10 +122,19 @@ class AwsCredentials:
 
     @classmethod
     def from_auth_info(cls, info: dict[str, Any]) -> AwsCredentials | None:
-        try:
-            return cls(info["accessKeyId"], info["secretKey"], info["sessionToken"])
-        except KeyError:
+        access_key_id = info.get("accessKeyId")
+        secret_key = info.get("secretKey")
+        session_token = info.get("sessionToken")
+        if not (
+            isinstance(access_key_id, str)
+            and access_key_id
+            and isinstance(secret_key, str)
+            and secret_key
+            and isinstance(session_token, str)
+            and session_token
+        ):
             return None
+        return cls(access_key_id, secret_key, session_token)
 
 
 @dataclass(slots=True)
@@ -180,9 +189,28 @@ class NavienSmartApi:
                 login["accessToken"], login["loginId"], login["userSeq"]
             )
 
-            homes = data.get("home") or []
+            raw_homes = data.get("home")
+            homes: list[dict[str, Any]] = []
+            if isinstance(raw_homes, list):
+                for raw_home in raw_homes:
+                    if not isinstance(raw_home, dict):
+                        continue
+                    raw_home_seq = raw_home.get("homeSeq")
+                    if isinstance(raw_home_seq, bool):
+                        continue
+                    if isinstance(raw_home_seq, int):
+                        home_seq = raw_home_seq
+                    elif isinstance(raw_home_seq, str) and raw_home_seq.isdecimal():
+                        home_seq = int(raw_home_seq)
+                    else:
+                        continue
+                    home = dict(raw_home)
+                    home["homeSeq"] = home_seq
+                    homes.append(home)
             if not homes:
                 raise NavienSmartAuthError("계정에 등록된 home 이 없습니다.")
+
+            auth_info = data.get("authInfo")
 
             self._session = NavienSmartSession(
                 access_token=login["accessToken"],
@@ -191,7 +219,11 @@ class NavienSmartApi:
                 account_seq=login["userSeq"],
                 user_seq=data["userInfo"]["userSeq"],
                 homes=homes,
-                aws=AwsCredentials.from_auth_info(data.get("authInfo") or {}),
+                aws=(
+                    AwsCredentials.from_auth_info(auth_info)
+                    if isinstance(auth_info, dict)
+                    else None
+                ),
             )
             _LOGGER.debug(
                 "로그인 완료: userSeq=%s home %s개",
@@ -282,13 +314,32 @@ class NavienSmartApi:
 
         `/auth/token/refresh` returns only an accessToken and no AWS credentials, so calling
         `secured-sign-in` again is the only path — confirmed against the live service.
+
+        The access token used for that call can expire independently of the MQTT credentials.
+        Route it through the same authenticated-request path as every other REST call so a
+        `404`/`407` response logs in once and retries with the new token.
         """
         session = self._require_session()
-        data = await self._async_secured_sign_in(
-            session.access_token, session.user_id, session.account_seq
+        payload, response_session = await self._async_authed_request_with_session(
+            "POST",
+            "/users/secured-sign-in",
+            json_body={"userId": session.user_id, "accountSeq": session.account_seq},
         )
-        session.aws = AwsCredentials.from_auth_info(data.get("authInfo") or {})
-        return session.aws
+        data = payload.get("data")
+        if not isinstance(data, dict) or not data:
+            raise NavienSmartAuthError("secured-sign-in 응답에 data 가 없습니다.")
+        current = self._require_session()
+        auth_info = data.get("authInfo")
+        credentials = (
+            AwsCredentials.from_auth_info(auth_info)
+            if isinstance(auth_info, dict)
+            else None
+        )
+        # A partial success response must not discard credentials that may still work. The
+        # caller can keep the current MQTT session and retry the refresh on the next connect.
+        if credentials is not None and current is response_session:
+            current.aws = credentials
+        return current.aws
 
     # -- requests ----------------------------------------------------------
 
@@ -353,26 +404,49 @@ class NavienSmartApi:
     async def _async_authed_request(
         self, method: str, path: str, **kwargs: Any
     ) -> dict[str, Any]:
+        payload, _response_session = await self._async_authed_request_with_session(
+            method, path, **kwargs
+        )
+        return payload
+
+    async def _async_authed_request_with_session(
+        self, method: str, path: str, **kwargs: Any
+    ) -> tuple[dict[str, Any], NavienSmartSession]:
         """On an expired token or a stolen session, log in once more and retry.
 
         With one session per account, opening the app produces a `404`. That is common enough
-        to recover from quietly.
+        to recover from quietly. The returned session is the exact one whose access token
+        produced the response, so a concurrent login cannot receive stale AWS credentials.
         """
         session = self._require_session()
         try:
-            return await self._async_request(method, path, token=session.access_token, **kwargs)
+            payload = await self._async_request(
+                method, path, token=session.access_token, **kwargs
+            )
+            return payload, session
         except NavienSmartApiError as err:
             if err.code not in (CODE_TOKEN_EXPIRED, CODE_NOT_AUTHORIZED):
                 raise
             _LOGGER.debug("세션 무효(code=%s) — 재로그인 후 재시도", err.code)
-            home_seq = session.homes[0].get("homeSeq") if session.homes else None
+            home_seq = next(
+                (
+                    home.get("homeSeq")
+                    for home in session.homes
+                    if isinstance(home, dict) and home.get("homeSeq") is not None
+                ),
+                None,
+            )
             refreshed = await self.async_login()
             # Keep the home the user chose.
             if home_seq is not None:
-                refreshed.homes.sort(key=lambda h: h.get("homeSeq") != home_seq)
-            return await self._async_request(
+                refreshed.homes.sort(
+                    key=lambda home: not isinstance(home, dict)
+                    or home.get("homeSeq") != home_seq
+                )
+            payload = await self._async_request(
                 method, path, token=refreshed.access_token, **kwargs
             )
+            return payload, refreshed
 
     # -- devices -----------------------------------------------------------
 
