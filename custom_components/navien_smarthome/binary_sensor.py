@@ -41,6 +41,7 @@ async def async_setup_entry(
 
     for boiler in coordinator.boilers.values():
         entities.append(BoilerHotWaterRunning(coordinator, boiler))
+        entities.append(BoilerHotWaterSustained(coordinator, boiler))
         entities.append(BoilerFaultProblem(coordinator, boiler))
 
     async_add_entities(entities)
@@ -169,6 +170,23 @@ class BoilerHotWaterRunning(BoilerEntity, BinarySensorEntity):
         if device is None or (sustained := device.hot_water_sustained) is None:
             return None
         return {"연속 사용": sustained}
+
+
+class BoilerHotWaterSustained(BoilerEntity, BinarySensorEntity):
+    """Whether hot-water use is currently reported as sustained."""
+
+    _attr_name = "온수 연속 사용"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_icon = "mdi:water-sync"
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_hot_water_sustained"
+
+    @property
+    def is_on(self) -> bool | None:
+        device = self.device
+        return None if device is None else device.hot_water_sustained
 
 
 class BoilerFaultProblem(BoilerEntity, BinarySensorEntity):
