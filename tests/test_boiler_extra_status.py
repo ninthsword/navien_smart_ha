@@ -8,8 +8,10 @@ ones **unnamed, as raw values**, is a rule of this repository.
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 
 from harness import Report, source
+from navien_smarthome.binary_sensor import BoilerHotWaterSustained
 from navien_smarthome.boiler import BoilerDevice
 
 r = Report()
@@ -219,7 +221,32 @@ for name in (
 
 binary_setup = source("binary_sensor.py").split("async_add_entities(entities)")[0]
 r.ok("BoilerHotWaterRunning" in binary_setup, "the hot-water-in-use sensor is registered")
+r.ok("BoilerHotWaterSustained" in binary_setup, "the sustained hot-water sensor is registered")
 r.ok("BoilerFaultProblem" in binary_setup, "the fault-status sensor is registered")
+
+
+r.section("sustained hot-water entity")
+
+sustained_device = make_boiler()
+sustained_coordinator = SimpleNamespace(boilers={sustained_device.device_id: sustained_device})
+sustained = BoilerHotWaterSustained(sustained_coordinator, sustained_device)
+sustained.coordinator = sustained_coordinator
+r.ok(sustained.is_on is None, "missing sustained status stays unknown")
+sustained_device.apply_status({"DHWUseSustained": 1}, now=390.0)
+r.ok(sustained.is_on is False, "1 means sustained use is off")
+sustained_device.apply_status({"DHWUseSustained": 2}, now=400.0)
+r.ok(sustained.is_on is True, "2 means sustained use is on")
+sustained_device.apply_status({"DHWUseSustained": 7}, now=410.0)
+r.ok(sustained.is_on is None, "an unknown sustained value stays unknown")
+r.ok(sustained._attr_name == "온수 연속 사용", "the user-visible name describes sustained use")
+r.ok(
+    sustained._attr_unique_id.endswith("_hot_water_sustained"),
+    "the unique ID is deterministic",
+)
+r.ok(
+    "async_set" not in source("binary_sensor.py").split("class BoilerHotWaterSustained")[1],
+    "the entity has no control path",
+)
 
 
 sys.exit(r.finish())
