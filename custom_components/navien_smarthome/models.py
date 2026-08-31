@@ -581,12 +581,19 @@ class NavienDevice:
         Up to v0.17.1 this decided from the temperature, while `hvac_mode` decided the same
         question from `enable` — **the two disagreed.** Both now follow the app.
 
-        With no `enable`, the value decides. On a stepped mat `level 0` and `enable false`
-        move together, so either route gives the same answer (confirmed on a real device).
+        **`enable` is meaningful only while the device is powered on.** It means "heating now",
+        not "configured off"; when the device is off, every zone reports `false` regardless of
+        its remembered setpoint. Use the value while powered off so turning the device back on
+        does not erase a zone's configured target.
+
+        With no `enable`, the value decides as before. On a stepped mat `level 0` and
+        `enable false` move together, so either route gives the same answer (confirmed on a
+        real device).
         """
-        enabled = self.zone_enabled(zone)
-        if enabled is not None:
-            return not enabled
+        if self.is_on:
+            enabled = self.zone_enabled(zone)
+            if enabled is not None:
+                return not enabled
         control = self.active_control
         if control is None:
             return None

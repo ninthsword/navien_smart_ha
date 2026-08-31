@@ -13,9 +13,8 @@ mat.
     temperature (28-50, step 0.5)  28 - 0.5 = 27.5
 
 The app sends the temperature and `enable` **together** (`enable = value >= rangeMin`) and
-reads **only `enable`** when interpreting state. It does not trust the temperature a
-powered-off zone reports and overwrites the display with "off". So `enable` is what decides
-off here as well.
+uses `enable` while the device is powered on. When the whole device is off, the device reports
+`enable: false` for every zone, so the remembered setpoint decides whether a zone is off.
 
 **Both sides cannot be turned off at once** — the device refuses (confirmed on real
 hardware). The app does not power the device down on the user's behalf either; it just
@@ -71,7 +70,7 @@ r.ok(sent["heater"]["left"]["temperature"]["set"] == 33.0, "the left side stays 
 r.ok("operationMode" not in sent, "turning one side off leaves the power alone")
 
 
-r.section("off is decided by enable, so display and command agree")
+r.section("on-state off is decided by enable, so display and command agree")
 
 # A powered-off zone can report a temperature inside the normal range. That is why the app
 # uses `enable`.
@@ -84,6 +83,20 @@ r.ok(odd.zone_is_off("left") is True, "enable is trusted, so it reads as off")
 zone_is_off = MODELS.split("def zone_is_off")[1].split("\n    def ")[0]
 r.ok("zone_enabled" in zone_is_off, "zone_is_off consults enable")
 r.ok("zone_enabled" in CLIMATE, "hvac_mode consults enable too, so the two agree")
+
+normal = make_mat(**TEMP, capacity=2, zones={"left": 30.0, "right": 27.5})
+r.ok(normal.zone_is_off("left") is False, "a running zone above its off value is on")
+r.ok(normal.zone_is_off("right") is True, "a running zone at its off value is off")
+r.ok(
+    normal.build_zone_off(["right"])
+    == {
+        "heater": {
+            "left": {"enable": True, "temperature": {"set": 30.0}},
+            "right": {"enable": False, "temperature": {"set": 27.5}},
+        }
+    },
+    "the normal zone-off command payload is unchanged",
+)
 
 
 r.section("turning on raises a powered-off zone to the minimum")
@@ -104,6 +117,82 @@ r.ok(missing.zone_is_off("left") is True, "enable still shows it is off")
 sent = missing.build_zone_on(["left"])
 r.ok("left" in sent["heater"], "an instruction to turn on always includes that zone")
 r.ok(sent["heater"]["left"]["temperature"]["set"] == 28, "the minimum value is sent with it")
+
+
+r.section("device-off reports do not erase remembered zone settings")
+
+sleeping = make_mat(**TEMP, capacity=2, zones={"left": 33.0, "right": 27.5})
+sleeping.apply_reported(
+    {
+        "operationMode": 0,
+        "heater": {
+            "left": {"enable": False, "temperature": {"set": 33.0}},
+            "right": {"enable": False, "temperature": {"set": 27.5}},
+        },
+    }
+)
+r.ok(sleeping.is_on is False, "the device is powered off")
+r.ok(sleeping.zone_is_off("left") is False, "a remembered 33-degree zone stays on-state")
+r.ok(sleeping.zone_is_off("right") is True, "the remembered off value stays off")
+r.ok(
+    sleeping.build_zone_on(["left"])
+    == {
+        "operationMode": 1,
+        "heater": {
+            "left": {"enable": True, "temperature": {"set": 33.0}},
+            "right": {"enable": False, "temperature": {"set": 27.5}},
+        },
+    },
+    "power-on preserves the remembered setpoint and command shape",
+)
+
+both_active = make_mat(**TEMP, capacity=2, zones={"left": 33.0, "right": 31.0})
+both_active.apply_reported(
+    {
+        "operationMode": 0,
+        "heater": {
+            "left": {"enable": False, "temperature": {"set": 33.0}},
+            "right": {"enable": False, "temperature": {"set": 31.0}},
+        },
+    }
+)
+r.ok(both_active.zone_is_off("left") is False, "the left active setpoint survives device-off")
+r.ok(both_active.zone_is_off("right") is False, "the right active setpoint survives device-off")
+r.ok(
+    both_active.build_zone_on(["left"])["heater"]
+    == {
+        "left": {"enable": True, "temperature": {"set": 33.0}},
+        "right": {"enable": False, "temperature": {"set": 31.0}},
+    },
+    "power-on preserves both active split-zone setpoints",
+)
+
+single_sleeping = make_mat(**TEMP, capacity=1, zones={"single": 40.0})
+single_sleeping.apply_reported(
+    {
+        "operationMode": 0,
+        "heater": {"single": {"enable": False, "temperature": {"set": 40.0}}},
+    }
+)
+r.ok(single_sleeping.zone_is_off("single") is False, "a single active setpoint survives device-off")
+r.ok(
+    single_sleeping.build_zone_on(["single"])["heater"]["single"]
+    == {"enable": True, "temperature": {"set": 40.0}},
+    "single-zone power-on preserves its active setpoint",
+)
+
+# Missing or malformed power/zone fields remain unknown instead of trusting a stale flag or
+# inventing a temperature.
+malformed = make_mat(**TEMP, capacity=2, zones={"left": 30.0, "right": 27.5})
+malformed.apply_reported(
+    {
+        "operationMode": "not-a-mode",
+        "heater": {"left": {"enable": None, "temperature": None}},
+    }
+)
+r.ok(malformed.operation_mode is None, "a malformed power value is treated as unknown")
+r.ok(malformed.zone_is_off("left") is None, "missing zone value stays unknown")
+r.ok(malformed.zone_is_off("right") is True, "a valid off value remains usable")
 
 # With no state ever received, no value is invented — an explanation goes out instead.
 # Turning off has a fixed value to send and can be built without state; turning on cannot,
