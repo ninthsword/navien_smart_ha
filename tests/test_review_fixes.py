@@ -6,10 +6,17 @@ next person with no way to know why that line cannot be deleted.
 
 from __future__ import annotations
 
+import argparse
 import ast
+import io
 import sys
+import types
+from contextlib import redirect_stdout
+from unittest.mock import Mock, patch
 
 from harness import Report, source
+
+from tools import navien_cli as cli
 
 r = Report()
 
@@ -176,8 +183,8 @@ def check_aws_refresh_reauth(code: int) -> bool:
         api._session = fresh
         return fresh
 
-    api._async_request = request  # type: ignore[method-assign]
-    api.async_login = login  # type: ignore[method-assign]
+    api._async_request = request
+    api.async_login = login
     credentials = asyncio.run(api.async_refresh_aws_credentials())
     return (
         calls == ["old-token", "fresh-token"]
@@ -233,8 +240,8 @@ async def successful_request(*args: object, **kwargs: object) -> dict[str, objec
     return valid_aws_payload()
 
 
-api_once._async_request = successful_request  # type: ignore[method-assign]
-api_once.async_login = forbidden_login  # type: ignore[method-assign]
+api_once._async_request = successful_request
+api_once.async_login = forbidden_login
 once_credentials = asyncio.run(api_once.async_refresh_aws_credentials())
 r.ok(
     once_calls == ["old-token"]
@@ -252,8 +259,8 @@ async def bad_request(*args: object, **kwargs: object) -> dict[str, object]:
     raise NavienSmartApiError(400, "bad request")
 
 
-api_bad._async_request = bad_request  # type: ignore[method-assign]
-api_bad.async_login = forbidden_login  # type: ignore[method-assign]
+api_bad._async_request = bad_request
+api_bad.async_login = forbidden_login
 try:
     asyncio.run(api_bad.async_refresh_aws_credentials())
 except NavienSmartApiError as err:
@@ -272,8 +279,8 @@ async def partial_request(*args: object, **kwargs: object) -> dict[str, object]:
     return {"data": {"authInfo": {"accessKeyId": "partial"}}}
 
 
-api_partial._async_request = partial_request  # type: ignore[method-assign]
-api_partial.async_login = forbidden_login  # type: ignore[method-assign]
+api_partial._async_request = partial_request
+api_partial.async_login = forbidden_login
 partial_after = asyncio.run(api_partial.async_refresh_aws_credentials())
 r.ok(
     partial_after is partial_before and session_partial.aws is partial_before,
@@ -302,8 +309,8 @@ for label, invalid_value in (
             }
         }
 
-    api_invalid._async_request = invalid_request  # type: ignore[method-assign]
-    api_invalid.async_login = forbidden_login  # type: ignore[method-assign]
+    api_invalid._async_request = invalid_request
+    api_invalid.async_login = forbidden_login
     invalid_after = asyncio.run(api_invalid.async_refresh_aws_credentials())
     r.ok(
         invalid_after is invalid_before and session_invalid.aws is invalid_before,
@@ -322,7 +329,7 @@ async def racing_request(*args: object, **kwargs: object) -> dict[str, object]:
     return valid_aws_payload()
 
 
-api_race._async_request = racing_request  # type: ignore[method-assign]
+api_race._async_request = racing_request
 race_result = asyncio.run(api_race.async_refresh_aws_credentials())
 r.ok(
     race_result is race_fresh_credentials
@@ -357,8 +364,8 @@ async def homes_login() -> NavienSmartSession:
     return fresh_homes_session
 
 
-api_homes._async_request = homes_request  # type: ignore[method-assign]
-api_homes.async_login = homes_login  # type: ignore[method-assign]
+api_homes._async_request = homes_request
+api_homes.async_login = homes_login
 homes_result = asyncio.run(api_homes._async_authed_request("GET", "/devices"))
 r.ok(
     homes_result == {"code": 200}
@@ -389,7 +396,7 @@ async def homes_sign_in(*args: object) -> dict[str, object]:
     }
 
 
-api_login._async_form_login = homes_form_login  # type: ignore[method-assign]
+api_login._async_form_login = homes_form_login
 api_login._async_secured_sign_in = homes_sign_in  # type: ignore[method-assign]
 filtered_session = asyncio.run(api_login.async_login())
 r.ok(
@@ -493,6 +500,63 @@ for module, name in (
     ("airone.py", "LEGACY_EXTRA_FIELDS"),
 ):
     r.ok(name not in source(module), f"{module} does not import {name}")
+
+
+r.section("CLI missing metadata and MQTT version compatibility")
+
+for model_code in (None, "invalid", "999", "1901"):
+    fake_device = {"serviceCode": 300, "modelCode": model_code}
+    fake_session = {"homes": [{"homeSeq": 7}], "userSeq": 42, "accessToken": "synthetic"}
+    with (
+        patch.object(cli, "_load_session", return_value=fake_session),
+        patch.object(cli, "_find_device", return_value=fake_device),
+    ):
+        try:
+            cli._airone_prepare(argparse.Namespace(home_seq=None, device_seq=1))
+            accepted = True
+        except cli.NavienError:
+            accepted = False
+    r.ok(accepted is (model_code == "1901"), f"CLI model {model_code!r} keeps fail-closed validation")
+
+output = io.StringIO()
+with redirect_stdout(output):
+    cli._print_device({"Properties": {"registry": {"attributes": {
+        "functions": {"heatControl": {"unit": None}}
+    }}}}, redact=True)
+r.ok("미확인" in output.getvalue(), "missing CLI service metadata remains unknown")
+r.ok("제어 축 미확인" in output.getvalue(), "missing CLI unit does not invent an axis")
+
+for modern in (False, True):
+    client = Mock()
+    client.connect.side_effect = lambda *_args, _client=client, **_kwargs: _client.on_connect(_client, None, None, 0)
+    factory = Mock(return_value=client)
+    paho = types.ModuleType("paho")
+    mqtt = types.ModuleType("paho.mqtt")
+    mqtt_client = types.ModuleType("paho.mqtt.client")
+    paho.__dict__.update(__path__=[], mqtt=mqtt)
+    mqtt.__dict__.update(__path__=[], client=mqtt_client)
+    mqtt_client.__dict__.update(Client=factory)
+    modules = {"paho": paho, "paho.mqtt": mqtt, "paho.mqtt.client": mqtt_client}
+    if modern:
+        enums = types.ModuleType("paho.mqtt.enums")
+        enums.__dict__.update(CallbackAPIVersion=types.SimpleNamespace(VERSION2=2))
+        mqtt_client.__dict__.update(CallbackAPIVersion=vars(enums)["CallbackAPIVersion"])
+        modules["paho.mqtt.enums"] = enums
+    args = argparse.Namespace(region="synthetic", endpoint="broker.invalid", home_seq=7,
+                              prefix="mate", seconds=0)
+    with (
+        patch.dict(sys.modules, modules),
+        patch.object(cli, "_load_session", return_value={"aws": {"synthetic": True}, "userSeq": 42}),
+        patch.object(cli, "_sigv4_ws_path", return_value="/synthetic"),
+        redirect_stdout(io.StringIO()),
+    ):
+        result = cli.cmd_watch(args)
+    r.ok(result == 0, f"CLI MQTT {'2.x' if modern else '1.x'} callback setup succeeds")
+    r.ok(factory.call_args is not None and factory.call_args.args == ((2,) if modern else ()),
+         "the matching callback API constructor is selected")
+    client.subscribe.assert_called_once_with("7/mate/+", qos=0)
+    client.publish.assert_not_called()
+    r.ok(True, "synthetic MQTT watch subscribes and never publishes")
 
 
 sys.exit(r.finish())

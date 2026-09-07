@@ -1,0 +1,21 @@
+{
+  "include": [
+    "custom_components/navien_smarthome",
+    "tests",
+    "tests_ha",
+    "tools"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.venv"
+  ],
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "standard",
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportUnnecessaryTypeIgnoreComment": "error",
+  "extraPaths": [
+    "custom_components"
+  ]
+}

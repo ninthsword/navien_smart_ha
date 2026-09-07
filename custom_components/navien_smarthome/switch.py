@@ -73,7 +73,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BoilerPowerSwitch(BoilerEntity, SwitchEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerPowerSwitch(BoilerEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """NR-67D power, the same control as the power button at the top of the app."""
 
     _attr_name = "전원"
@@ -84,7 +85,8 @@ class BoilerPowerSwitch(BoilerEntity, SwitchEntity):
         self._attr_unique_id = f"{device.device_id}_boiler_power"
 
     @property
-    def is_on(self) -> bool | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.switch_state("power")
 
@@ -99,7 +101,8 @@ class BoilerPowerSwitch(BoilerEntity, SwitchEntity):
             await self.coordinator.async_boiler_power(device, False)
 
 
-class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """A 1/2-valued switch in the fast-hot-water family, confirmed against the app."""
 
     def __init__(
@@ -117,7 +120,8 @@ class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):
         self._attr_unique_id = f"{device.device_id}_{kind}"
 
     @property
-    def is_on(self) -> bool | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.switch_state(self._kind)
 
@@ -133,7 +137,8 @@ class BoilerFeatureSwitch(BoilerEntity, SwitchEntity):
             await self.coordinator.async_boiler_switch(device, self._kind, turn_on)
 
 
-class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Turns power off and on through `operationMode` 0/1."""
 
     # **This is the device's primary entity.** With no name of its own, HA shows the device
@@ -159,14 +164,16 @@ class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):
         self._attr_unique_id = f"{device.device_id}_power"
 
     @property
-    def is_on(self) -> bool | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None or device.operation_mode is None:
             return None
         return device.is_on
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -185,7 +192,8 @@ class NavienSmartPowerSwitch(NavienSmartEntity, SwitchEntity):
         await self.coordinator.async_send(device, {"operationMode": mode})
 
 
-class NavienSmartChildLockSwitch(NavienSmartEntity, SwitchEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class NavienSmartChildLockSwitch(NavienSmartEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Control lock, which locks the buttons on the device itself.
 
     **v0.12.0 shipped this as a read-only sensor. That was wrong.** The app has a padlock
@@ -203,7 +211,8 @@ class NavienSmartChildLockSwitch(NavienSmartEntity, SwitchEntity):
         self._attr_name = "조작 잠금"
 
     @property
-    def is_on(self) -> bool | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return device.child_lock if device is not None else None
 
@@ -222,7 +231,8 @@ class NavienSmartChildLockSwitch(NavienSmartEntity, SwitchEntity):
         )
 
 
-class AironePowerSwitch(AironeEntity, SwitchEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class AironePowerSwitch(AironeEntity, SwitchEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Turns power off and on through `running` 1/2.
 
     The older generation inverts this value (running = 2). The coordinator filters those out,
@@ -241,14 +251,16 @@ class AironePowerSwitch(AironeEntity, SwitchEntity):
         self._attr_unique_id = f"{device.device_id}_power"
 
     @property
-    def is_on(self) -> bool | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None or device.running is None:
             return None
         return device.is_on
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None

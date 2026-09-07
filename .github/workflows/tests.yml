@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   fast-tests:
     runs-on: ubuntu-latest
@@ -48,6 +51,14 @@ jobs:
           enable-cache: true
       - run: uv venv --python python
       - run: uv pip sync --python .venv/bin/python --require-hashes requirements-dev.lock
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: devtools/pyright/package-lock.json
+      - run: npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+      - name: Pyright for all maintained Python
+        run: devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --outputjson
       - name: Strict mypy against Home Assistant 2026.8
         run: .venv/bin/mypy custom_components/navien_smarthome
       - name: Home Assistant 2026.8 contract tests

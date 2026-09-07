@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SESSION_FILE = ROOT / ".navien_cli.json"
 ENV_FILE = ROOT / ".env"
 
-SERVICE_NAMES = {100: "보일러", 200: "숙면매트", 300: "환기청정(에어원)", 500: "스마트홈"}
+SERVICE_NAMES: dict[int | None, str] = {100: "보일러", 200: "숙면매트", 300: "환기청정(에어원)", 500: "스마트홈"}
 MODEL_TYPES = {"em": "카본", "wm": "온수", "fm": "사계절"}
 
 # The mat modelCode table from notes/api-spec.md. For diagnostic display only; nothing
@@ -411,8 +411,11 @@ def _print_device(dev: dict[str, Any], redact: bool) -> None:
         if not isinstance(ctl, dict):
             continue
         unit = ctl.get("unit")
-        axis = {"1.0L": "단계 (level, 정수, 1 간격)",
-                "0.5C": "온도 (temperature, 실수, 0.5°C 간격)"}.get(unit)
+        axes: dict[str | None, str] = {
+            "1.0L": "단계 (level, 정수, 1 간격)",
+            "0.5C": "온도 (temperature, 실수, 0.5°C 간격)",
+        }
+        axis = axes.get(unit)
         print(f"     {label}:")
         print(f"        unit      : {_fmt(unit)}"
               + (f"   → {axis}" if axis else "   → ★ 처음 보는 값. 제어 축 미확인"))
@@ -711,10 +714,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
     print()
 
     try:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+        from paho.mqtt.enums import CallbackAPIVersion
+
+        client = mqtt.Client(CallbackAPIVersion.VERSION2,
                              client_id=client_id, transport="websockets")
         v2 = True
-    except AttributeError:  # paho-mqtt 1.x
+    except (ImportError, AttributeError):  # paho-mqtt 1.x
         client = mqtt.Client(client_id=client_id, transport="websockets")
         v2 = False
 
@@ -831,7 +836,8 @@ def _airone_prepare(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str,
             "이 명령은 환기청정(300) 전용이다."
         )
     try:
-        model_code = int(dev.get("modelCode"))
+        raw_model_code = dev.get("modelCode")
+        model_code = int(raw_model_code if raw_model_code is not None else "")
     except (TypeError, ValueError):
         raise NavienError(f"modelCode '{dev.get('modelCode')}' 를 숫자로 읽지 못했다.") from None
     if model_code < 1000:

@@ -446,6 +446,23 @@ uv pip sync --python .venv/bin/python --require-hashes requirements-dev.lock
 `tests_ha/`는 Navien HTTP·MQTT 경계를 모두 mock한 채 실제 Home Assistant 코어와
 recorder를 사용합니다. 실제 계정이나 기기에 접속하지 않습니다.
 
+### Pyright development check
+
+Pyright 1.1.413 checks all 37 maintained Python files, including the offline suite,
+real Home Assistant tests and CLI source. Use Node.js 24 and the existing hash-locked
+Python 3.14 development environment above, with uv 0.12.5:
+
+```sh
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --outputjson
+```
+
+The private npm package lives under `devtools/pyright`. Existing strict mypy, Ruff,
+Python 3.11/3.14 offline tests and real Home Assistant tests remain required. The
+`custom_components` search path mirrors the offline harness imports; only generated
+cache and environment directories are excluded. Type checking the CLI does not run
+it or connect to an account or device.
+
 ---
 
 ## 개발자용 CLI
