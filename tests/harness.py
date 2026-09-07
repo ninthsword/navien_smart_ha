@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ha_stub  # noqa: E402,F401  (importing it is what registers the stubs)
 
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "custom_components"))
 
 SRC = ROOT / "custom_components" / "navien_smarthome"

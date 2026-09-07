@@ -8,11 +8,12 @@ ones **unnamed, as raw values**, is a rule of this repository.
 from __future__ import annotations
 
 import sys
-from types import SimpleNamespace
+from unittest.mock import create_autospec
 
 from harness import Report, source
 from navien_smarthome.binary_sensor import BoilerHotWaterSustained
 from navien_smarthome.boiler import BoilerDevice
+from navien_smarthome.coordinator import NavienSmartCoordinator
 
 r = Report()
 
@@ -228,7 +229,7 @@ r.ok("BoilerFaultProblem" in binary_setup, "the fault-status sensor is registere
 r.section("sustained hot-water entity")
 
 sustained_device = make_boiler()
-sustained_coordinator = SimpleNamespace(boilers={sustained_device.device_id: sustained_device})
+sustained_coordinator = create_autospec(NavienSmartCoordinator, instance=True,boilers={sustained_device.device_id: sustained_device})
 sustained = BoilerHotWaterSustained(sustained_coordinator, sustained_device)
 sustained.coordinator = sustained_coordinator
 r.ok(sustained.is_on is None, "missing sustained status stays unknown")
@@ -240,7 +241,7 @@ sustained_device.apply_status({"DHWUseSustained": 7}, now=410.0)
 r.ok(sustained.is_on is None, "an unknown sustained value stays unknown")
 r.ok(sustained._attr_name == "온수 연속 사용", "the user-visible name describes sustained use")
 r.ok(
-    sustained._attr_unique_id.endswith("_hot_water_sustained"),
+    (sustained._attr_unique_id or "").endswith("_hot_water_sustained"),
     "the unique ID is deterministic",
 )
 r.ok(

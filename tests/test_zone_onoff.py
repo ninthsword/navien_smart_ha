@@ -24,14 +24,21 @@ explains. What the user asked for was one zone off, not the device off.
 from __future__ import annotations
 
 import sys
+from typing import TypedDict
 
 from harness import Report, make_mat, source
 
 r = Report()
 
+class _ControlRange(TypedDict):
+    unit: str
+    range_min: float
+    range_max: float
+
+
 # reference values from real devices
-TEMP = dict(unit="0.5C", range_min=28, range_max=50)   # EME-520 / EMF520
-LEVEL = dict(unit="1.0L", range_min=1, range_max=8)    # EME-500 (carbon)
+TEMP = _ControlRange(unit="0.5C", range_min=28, range_max=50)   # EME-520 / EMF520
+LEVEL = _ControlRange(unit="1.0L", range_min=1, range_max=8)    # EME-500 (carbon)
 
 MODELS = source("models.py")
 CLIMATE = source("climate.py")

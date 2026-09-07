@@ -154,7 +154,7 @@ r.ok(device.operation_mode_name is None, "an unrecognised operating mode gets no
 device.apply_status({"operationMode": 6, "operationBusy": 2})
 r.ok(device.status_age is not None, "when MQTT state arrived is kept for diagnostics")
 r.ok(device.error_code == 0 and device.available, "a connected device that received state is available")
-r.ok(device.switch_state("power"), "any operationMode other than off means powered on")
+r.ok(device.switch_state("power") is True, "any operationMode other than off means powered on")
 r.ok(device.switch_state("fast_dhw") is False, "fast hot water 1 means off")
 r.ok(device.switch_state("smart_fast_dhw") is False, "smart operation 1 means off")
 r.ok(device.switch_state("dhw_boost") is True, "turbo hot water 2 means on")

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder.statistics import (
+    StatisticsRow,
+    statistics_during_period,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.recorder import get_instance
 from homeassistant.util import dt as dt_util
@@ -34,7 +37,7 @@ def day_row(day: int, total: int) -> dict[str, int]:
 
 async def read_total_rows(
     hass: HomeAssistant, stat_id: str
-) -> list[dict[str, float]]:
+) -> list[StatisticsRow]:
     """Read the imported rows on the recorder executor."""
     start = dt_util.start_of_local_day(date(2026, 8, 1))
     result = await get_instance(hass).async_add_executor_job(
@@ -68,7 +71,7 @@ async def test_gas_rewrite_keeps_the_preceding_cumulative_sum(
     assert await async_import_gas_statistics(hass, boiler) == 2
     await async_recorder_block_till_done(hass)
     rows = await read_total_rows(hass, stat_id)
-    assert [(row["state"], row["sum"]) for row in rows] == [
+    assert [(row.get("state"), row.get("sum")) for row in rows] == [
         (1.0, 1.0),
         (2.0, 3.0),
     ]
@@ -85,7 +88,7 @@ async def test_gas_rewrite_keeps_the_preceding_cumulative_sum(
     await async_recorder_block_till_done(hass)
     rows = await read_total_rows(hass, stat_id)
 
-    assert [(row["state"], row["sum"]) for row in rows] == [
+    assert [(row.get("state"), row.get("sum")) for row in rows] == [
         (1.0, 1.0),
         (2.5, 3.5),
         (4.0, 7.5),

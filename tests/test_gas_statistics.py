@@ -42,7 +42,7 @@ def make_boiler() -> BoilerDevice:
     return device
 
 
-def day_row(year: int, month: int, day: int, total, heat=0, water=None):
+def day_row(year: int, month: int, day: int, total, heat: int | None = 0, water=None):
     return {
         "year": year,
         "month": month,

@@ -92,15 +92,18 @@ class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
         return device.temperature_bounds(self._kind) or self._fallback_bounds
 
     @property
-    def native_min_value(self) -> float:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_min_value(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self._bounds()[0]
 
     @property
-    def native_max_value(self) -> float:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_max_value(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self._bounds()[1]
 
     @property
-    def available(self) -> bool:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return (
             super().available
@@ -109,7 +112,8 @@ class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
         )
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -118,7 +122,8 @@ class BoilerTemperatureNumber(BoilerEntity, NumberEntity):
         return device.ondol_target_temperature
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -170,12 +175,14 @@ class AironeHumidityNumber(AironeEntity, NumberEntity):
         return device.humidity_bounds(device.mode, device.option)
 
     @property
-    def available(self) -> bool:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Stay out of the way outside the dehumidify family — the app shows humidity only there."""
         return super().available and self._bounds is not None
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -183,7 +190,8 @@ class AironeHumidityNumber(AironeEntity, NumberEntity):
         return None if value is None else float(value)
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         bounds = self._bounds
         if bounds is None:
             return None

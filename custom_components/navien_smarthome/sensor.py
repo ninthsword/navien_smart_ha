@@ -115,7 +115,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class BoilerOperatingStateSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerOperatingStateSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Boiler power and heating state, confirmed from the app's display logic."""
 
     _attr_name = "운전 상태"
@@ -127,12 +128,14 @@ class BoilerOperatingStateSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_operating_state"
 
     @property
-    def native_value(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.operating_state
 
     @property
-    def icon(self) -> str:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def icon(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
         if self.native_value == BOILER_STATE_OFF:
             return "mdi:radiator-off"
         if self.native_value == BOILER_STATE_HEATING:
@@ -140,7 +143,8 @@ class BoilerOperatingStateSensor(BoilerEntity, SensorEntity):
         return "mdi:radiator-disabled"
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -150,7 +154,8 @@ class BoilerOperatingStateSensor(BoilerEntity, SensorEntity):
         }
 
 
-class BoilerOperatingModeSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerOperatingModeSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The selected operating mode, confirmed from the NR-67D app and manual."""
 
     _attr_name = "운전 모드"
@@ -163,19 +168,22 @@ class BoilerOperatingModeSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_operating_mode"
 
     @property
-    def native_value(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.operation_mode_name
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
         return {"operation_mode": device.operation_mode}
 
 
-class BoilerTemperatureSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerTemperatureSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """One boiler temperature whose scale factor was confirmed on a real device."""
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -198,12 +206,14 @@ class BoilerTemperatureSensor(BoilerEntity, SensorEntity):
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else getattr(device, self._key)
 
 
-class BoilerFlowRateSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerFlowRateSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Heating and hot-water flow. The unit was never confirmed, so it is shown only as L/min."""
 
     _attr_native_unit_of_measurement = "L/min"
@@ -225,12 +235,14 @@ class BoilerFlowRateSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_{key}"
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else getattr(device, self._key)
 
 
-class BoilerWifiSignalSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerWifiSignalSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Room-controller Wi-Fi signal. **The unit was never confirmed, so only the number is kept.**"""
 
     _attr_name = "Wi-Fi 신호"
@@ -243,12 +255,14 @@ class BoilerWifiSignalSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_wifi_rssi"
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.wifi_rssi
 
 
-class BoilerHeatingIntensitySensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerHeatingIntensitySensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The heating-intensity setting, shown as a raw step with no label.
 
     Neither the app nor the manual names the steps, and the range the server sends has a
@@ -265,12 +279,14 @@ class BoilerHeatingIntensitySensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_heating_intensity"
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.heating_intensity
 
 
-class BoilerReservationSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerReservationSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Read the schedule setting, and only read it.
 
     **Never write it.** A schedule is a separate protocol that overwrites the whole timetable
@@ -287,7 +303,8 @@ class BoilerReservationSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_reservation"
 
     @property
-    def native_value(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -302,7 +319,8 @@ class BoilerReservationSensor(BoilerEntity, SensorEntity):
         return ", ".join(enabled) if enabled else "없음"
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -315,7 +333,8 @@ class BoilerReservationSensor(BoilerEntity, SensorEntity):
         return attrs or None
 
 
-class BoilerHumiditySensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerHumiditySensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Indoor humidity as reported by the room controller."""
 
     _attr_name = "실내 습도"
@@ -329,12 +348,14 @@ class BoilerHumiditySensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_indoor_humidity"
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.indoor_humidity
 
 
-class BoilerModeSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerModeSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The operating-mode code, with no guess at what it means."""
 
     _attr_name = "운전 모드 코드"
@@ -346,12 +367,14 @@ class BoilerModeSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_operation_mode"
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.operation_mode
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -369,7 +392,8 @@ class BoilerModeSensor(BoilerEntity, SensorEntity):
         }
 
 
-class BoilerErrorSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerErrorSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The boiler's primary error code. Zero means the device reported itself healthy."""
 
     _attr_name = "오류 코드"
@@ -381,12 +405,14 @@ class BoilerErrorSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_error_code"
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.error_code
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -401,7 +427,8 @@ class BoilerErrorSensor(BoilerEntity, SensorEntity):
         return attrs or None
 
 
-class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """This month's cumulative boiler gas usage, as shown on the app's gas-usage screen."""
 
     _attr_name = "이번 달 가스 사용량"
@@ -417,12 +444,14 @@ class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_monthly_gas_usage"
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.gas_total_month
 
     @property
-    def last_reset(self) -> datetime | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def last_reset(self) -> datetime | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """When the current cycle began — midnight on the first of this month.
 
         ``TOTAL`` treats a cycle as finished **only when ``last_reset`` changes** (HA's
@@ -436,7 +465,8 @@ class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
         return dt_util.start_of_local_day(start)
 
     @property
-    def extra_state_attributes(self) -> dict[str, float] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, float] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -447,7 +477,8 @@ class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):
         return {key: value for key, value in values.items() if value is not None} or None
 
 
-class BoilerDailyGasSensor(BoilerEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerDailyGasSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Today's boiler gas usage, for the local date Home Assistant is on."""
 
     _attr_name = "오늘 가스 사용량"
@@ -468,17 +499,20 @@ class BoilerDailyGasSensor(BoilerEntity, SensorEntity):
         return None if device is None else device.gas_day(dt_util.now().date())
 
     @property
-    def native_value(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         values = self._today_values()
         return None if values is None else values[0]
 
     @property
-    def last_reset(self) -> datetime | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def last_reset(self) -> datetime | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Midnight today. This has to be exported for the same reason as the monthly sensor."""
         return dt_util.start_of_local_day()
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         values = self._today_values()
         if values is None:
             return None
@@ -505,7 +539,8 @@ class BoilerDailyGasSensor(BoilerEntity, SensorEntity):
         self.async_write_ha_state()
 
 
-class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """`operationMode` rendered as a human-readable name."""
 
     _attr_name = "운전상태"
@@ -520,12 +555,14 @@ class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):
         # dying with an exception.
 
     @property
-    def native_value(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.mode_name
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -553,7 +590,8 @@ class NavienSmartModeSensor(NavienSmartEntity, SensorEntity):
         return attrs
 
 
-class NavienSmartErrorSensor(NavienSmartEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class NavienSmartErrorSensor(NavienSmartEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """`errorCode`. Zero means healthy."""
 
     _attr_name = "오류 코드"
@@ -565,12 +603,14 @@ class NavienSmartErrorSensor(NavienSmartEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_error_code"
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.error_code
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Attach the error name as an attribute.
 
         **The state stays a number.** Turning it into text would break automations already
@@ -584,7 +624,8 @@ class NavienSmartErrorSensor(NavienSmartEntity, SensorEntity):
         return None if text is None else {"error_text": text}
 
 
-class AironeStateSensor(AironeEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class AironeStateSensor(AironeEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """`running` rendered as a human-readable name: running, stopped, or away."""
 
     _attr_name = "운전상태"
@@ -595,12 +636,14 @@ class AironeStateSensor(AironeEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_state"
 
     @property
-    def native_value(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.running_name
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -626,7 +669,8 @@ class AironeStateSensor(AironeEntity, SensorEntity):
         return attrs
 
 
-class AironeErrorSensor(AironeEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class AironeErrorSensor(AironeEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Error code. Zero means healthy."""
 
     _attr_name = "오류 코드"
@@ -638,7 +682,8 @@ class AironeErrorSensor(AironeEntity, SensorEntity):
         self._attr_unique_id = f"{device.device_id}_error_code"
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.error_code
 
@@ -749,7 +794,8 @@ class AironeMonitorSensor(  # type: ignore[misc]  # HA entity bases share typed 
         self._setup_air(device, kind, self._monitor_id)
 
 
-class AironeLegacySensor(AironeEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class AironeLegacySensor(AironeEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Values that only the older status frame carries.
 
     Only the ones whose meaning is confirmed get a name, and the values are shown raw rather
@@ -778,7 +824,8 @@ class AironeLegacySensor(AironeEntity, SensorEntity):
         # plausible. Only the number is kept.
 
     @property
-    def native_value(self) -> Any:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> Any:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -789,7 +836,8 @@ class AironeLegacySensor(AironeEntity, SensorEntity):
         return self._table.get(value, value)
 
 
-class AironeFilterSensor(AironeEntity, SensorEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class AironeFilterSensor(AironeEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Filter life **remaining**, in percent — one per filter the outdoor unit reports.
 
     **The field name means the opposite of what it says.** The value comes from
@@ -824,12 +872,14 @@ class AironeFilterSensor(AironeEntity, SensorEntity):
         return filters[self._index] if self._index < len(filters) else None
 
     @property
-    def native_value(self) -> int | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> int | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         raw = self._raw
         return None if raw is None else raw.get("percent")
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         raw = self._raw
         if raw is None:
             return None

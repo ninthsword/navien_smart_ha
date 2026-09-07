@@ -66,9 +66,15 @@ async def test_representative_entity_state_metadata_and_unique_ids(
     from homeassistant.helpers import entity_registry as er
 
     registry = er.async_get(hass)
-    assert registry.async_get(mat).unique_id == "AABBCCDDEEFF_left_thermostat"
-    assert registry.async_get(air).unique_id == "AIRONE001_air_co2"
-    assert registry.async_get(boiler).unique_id == "0011223344556272_indoor_temperature"
+    mat_entry = registry.async_get(mat)
+    assert mat_entry is not None
+    assert mat_entry.unique_id == "AABBCCDDEEFF_left_thermostat"
+    air_entry = registry.async_get(air)
+    assert air_entry is not None
+    assert air_entry.unique_id == "AIRONE001_air_co2"
+    boiler_entry = registry.async_get(boiler)
+    assert boiler_entry is not None
+    assert boiler_entry.unique_id == "0011223344556272_indoor_temperature"
 
 
 async def test_unavailable_and_recovery_propagate_to_real_states(
@@ -78,17 +84,23 @@ async def test_unavailable_and_recovery_propagate_to_real_states(
     coordinator = loaded_entry.runtime_data
     entity_id = entity_id_for_unique_id(hass, "switch", "AABBCCDDEEFF_power")
     mat = coordinator.data["AABBCCDDEEFF"]
-    assert hass.states.get(entity_id).state == "on"
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == "on"
 
     mat.apply_reported({"connected": False})
     coordinator.async_update_listeners()
     await hass.async_block_till_done()
-    assert hass.states.get(entity_id).state == "unavailable"
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == "unavailable"
 
     mat.apply_reported({"connected": True})
     coordinator.async_update_listeners()
     await hass.async_block_till_done()
-    assert hass.states.get(entity_id).state == "on"
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == "on"
 
 
 async def test_entity_commands_build_verified_payloads(
@@ -108,12 +120,14 @@ async def test_entity_commands_build_verified_payloads(
     await hass.services.async_call(
         "switch", "turn_off", {"entity_id": mat_switch}, blocking=True
     )
+    assert coordinator.api.async_control.await_args is not None
     assert coordinator.api.async_control.await_args.args[2] == {"operationMode": 0}
 
     air_switch = entity_id_for_unique_id(hass, "switch", "AIRONE001_power")
     await hass.services.async_call(
         "switch", "turn_off", {"entity_id": air_switch}, blocking=True
     )
+    assert coordinator.api.async_airone_request.await_args is not None
     air_call = coordinator.api.async_airone_request.await_args.kwargs
     assert air_call["command"] == "power"
     assert air_call["desired"] == {
@@ -127,6 +141,7 @@ async def test_entity_commands_build_verified_payloads(
     await hass.services.async_call(
         "switch", "turn_off", {"entity_id": boiler_switch}, blocking=True
     )
+    assert coordinator.api.async_boiler_request.await_args is not None
     boiler_call = coordinator.api.async_boiler_request.await_args.kwargs
     assert boiler_call["device_seq"] == 3
     assert boiler_call["service_code"] == 100

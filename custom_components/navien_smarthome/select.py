@@ -81,7 +81,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The season of a four-season mat — heating or cooling.
 
     **This is not modelled as `climate` heat/cool.** The season is not what the device is
@@ -107,7 +108,8 @@ class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
         self._attr_name = "계절"
 
     @property
-    def current_option(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def current_option(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -127,7 +129,8 @@ class NavienSmartSeasonSelect(NavienSmartEntity, SelectEntity):
                 return
 
 
-class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Button sound volume — mute, 1, 2, 3.
 
     The steps match the app's volume screen: `MateDeviceSettingSoundVolumeFragment` puts the
@@ -159,7 +162,8 @@ class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):
         self._attr_name = "조작음 음량"
 
     @property
-    def current_option(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def current_option(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return device.volume_name if device is not None else None
 
@@ -204,7 +208,8 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         self._attr_options = [level_label(value) for value in self._levels]
 
     @property
-    def available(self) -> bool:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Stay out of the way while cooling.
 
         **Stepped mats remain blocked.** The cooling value scheme was only confirmed for
@@ -218,7 +223,8 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         return super().available and device is not None and not device.is_cooling
 
     @property
-    def current_option(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def current_option(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None or device.is_cooling:
             return None
@@ -230,7 +236,8 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         return label if label in (self._attr_options or []) else None
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -274,7 +281,8 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         await self.coordinator.async_send(device, {"heater": heater})
 
 
-class AironeModeSelect(AironeEntity, SelectEntity):
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class AironeModeSelect(AironeEntity, SelectEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Operating mode.
 
     The options are built **only from server metadata** (`did.roomController.mode`). No model
@@ -295,7 +303,8 @@ class AironeModeSelect(AironeEntity, SelectEntity):
         self._attr_options = [mode.label for mode in self._modes]
 
     @property
-    def current_option(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def current_option(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None or device.mode is None:
             return None
@@ -310,7 +319,8 @@ class AironeModeSelect(AironeEntity, SelectEntity):
         return None
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -359,11 +369,13 @@ class AironeFanSelect(AironeEntity, SelectEntity):
         return device.fan_choices(device.mode, device.option)
 
     @property
-    def options(self) -> list[str]:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def options(self) -> list[str]:  # pyright: ignore[reportIncompatibleVariableOverride]
         return [choice.label for choice in self._choices]
 
     @property
-    def available(self) -> bool:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Step aside **only when there is nothing to choose at all.**
 
         **One option and no options are different things.** In sleep mode the app still shows
@@ -377,7 +389,8 @@ class AironeFanSelect(AironeEntity, SelectEntity):
         return super().available and bool(self._choices)
 
     @property
-    def current_option(self) -> str | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def current_option(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
@@ -385,7 +398,8 @@ class AironeFanSelect(AironeEntity, SelectEntity):
         return label if label in self.options else None
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None

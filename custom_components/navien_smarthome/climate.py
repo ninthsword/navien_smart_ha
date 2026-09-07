@@ -86,7 +86,8 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         return device.active_control if device is not None else None
 
     @property
-    def hvac_modes(self) -> list[HVACMode]:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def hvac_modes(self) -> list[HVACMode]:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Show cooling only while cooling, and heating otherwise.
 
         `season` (WARM/COOL) is **chosen in the app**, and no way to change it from here has
@@ -98,22 +99,26 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         return [HVACMode.OFF, HVACMode.COOL if cooling else HVACMode.HEAT]
 
     @property
-    def min_temp(self) -> float:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def min_temp(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
         control = self._control
         return float((control.range_min if control else None) or 20)
 
     @property
-    def max_temp(self) -> float:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def max_temp(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
         control = self._control
         return float((control.range_max if control else None) or 45)
 
     @property
-    def target_temperature_step(self) -> float:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def target_temperature_step(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
         control = self._control
         return control.step if control else 0.5
 
     @property
-    def available(self) -> bool:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Used while cooling too.
 
         Up to v0.9.0 this stayed out of the way during cooling, because the value scheme was
@@ -127,17 +132,20 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         return super().available
 
     @property
-    def current_temperature(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def current_temperature(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.zone_current(self._zone)
 
     @property
-    def target_temperature(self) -> float | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def target_temperature(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else device.zone_setting(self._zone)
 
     @property
-    def hvac_mode(self) -> HVACMode | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def hvac_mode(self) -> HVACMode | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         """Considers both the device power and the zone's `enable`.
 
         A powered-off device does not heat, even with the zone enabled.
@@ -157,7 +165,8 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         return running if enabled is not False else HVACMode.OFF
 
     @property
-    def hvac_action(self) -> HVACAction | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def hvac_action(self) -> HVACAction | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         mode = self.hvac_mode
         if mode is None:
             return None
@@ -168,7 +177,8 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         return HVACAction.OFF
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         if device is None:
             return None
