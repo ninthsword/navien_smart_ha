@@ -3,7 +3,9 @@
     "custom_components/navien_smarthome",
     "tests",
     "tests_ha",
-    "tools"
+    "tools",
+    ".github/security/owner-policy-guard.py",
+    "tests_security"
   ],
   "exclude": [
     "**/node_modules",
