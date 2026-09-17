@@ -58,8 +58,43 @@ jobs:
           cache-dependency-path: devtools/pyright/package-lock.json
       - run: npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
       - name: Pyright for all maintained Python
-        run: devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --outputjson
+        run: devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv/bin/python --outputjson
       - name: Strict mypy against Home Assistant 2026.8
         run: .venv/bin/mypy custom_components/navien_smarthome
       - name: Home Assistant 2026.8 contract tests
         run: .venv/bin/pytest --log-disable=sqlalchemy.engine.Engine
+
+  home-assistant-2026-9:
+    name: Home Assistant 2026.9.2 compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked compatibility dependencies
+        run: |
+          python -m pip install uv==0.12.5
+          uv venv --python 3.14.7 .venv-ha2026.9
+          uv pip sync --python .venv-ha2026.9/bin/python --require-hashes requirements-ha2026.9.lock
+          npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+      - name: Check installed core version
+        run: .venv-ha2026.9/bin/python -c 'from importlib.metadata import version; assert version("homeassistant") == "2026.9.2"'
+      - name: Check compatibility types
+        run: |
+          devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.9/bin/python
+      - name: Run offline and real Home Assistant tests in separate processes
+        run: |
+          .venv-ha2026.9/bin/python -B tests/run.py
+          .venv-ha2026.9/bin/python -B -m pytest -p no:cacheprovider --log-disable=sqlalchemy.engine.Engine tests_ha
+      - name: Lint compatibility sources
+        run: .venv-ha2026.9/bin/ruff check --no-cache custom_components tests tests_ha tools
+      - name: Check integration types against Home Assistant 2026.9
+        run: .venv-ha2026.9/bin/mypy --cache-dir=/dev/null custom_components

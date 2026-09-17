@@ -60,6 +60,25 @@ class NavienSmartEntity(CoordinatorEntity[NavienSmartCoordinator]):
         return super().available and device is not None and device.available
 
 
+def airone_device_info(device: AironeDevice) -> DeviceInfo:
+    """Share complete parent metadata between setup and platform entities."""
+    firmware = device.rc_version
+    if firmware and device.odu_version:
+        firmware = f"{firmware} (실외기 {device.odu_version})"
+    elif not firmware and device.odu_version:
+        firmware = f"실외기 {device.odu_version}"
+
+    return DeviceInfo(
+        identifiers={(DOMAIN, device.device_id)},
+        manufacturer="경동나비엔",
+        name=device.nickname,
+        model=device.model_name,
+        model_id=device.model_code or None,
+        serial_number=device.device_id,
+        sw_version=firmware,
+    )
+
+
 class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
     """Base for Airone entities.
 
@@ -75,21 +94,7 @@ class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
         self._device_id = device.device_id
         self._attr_unique_id = f"{device.device_id}"
 
-        firmware = device.rc_version
-        if firmware and device.odu_version:
-            firmware = f"{firmware} (실외기 {device.odu_version})"
-        elif not firmware and device.odu_version:
-            firmware = f"실외기 {device.odu_version}"
-
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            manufacturer="경동나비엔",
-            name=device.nickname,
-            model=device.model_name,
-            model_id=device.model_code or None,
-            serial_number=device.device_id,
-            sw_version=firmware,
-        )
+        self._attr_device_info = airone_device_info(device)
 
     @property
     def device(self) -> AironeDevice | None:
@@ -133,7 +138,7 @@ class AironeMonitorEntity(CoordinatorEntity[NavienSmartCoordinator]):
     """Base for the air monitor (the air-quality sensor unit) entities.
 
     It is modelled as a **separate device** from the main unit: the app registers and pairs
-    it separately, and it carries its own model name and firmware. `via_device` records the
+    it separately, and it carries its own model name and firmware. `via_device_id` records the
     relationship to the main unit.
 
     Its `modelCode` is below 1000 (observed: NAA-21DM = 35), but it **takes no commands**,
@@ -163,7 +168,7 @@ class AironeMonitorEntity(CoordinatorEntity[NavienSmartCoordinator]):
             model_id=str(model_code) if model_code is not None else None,
             serial_number=monitor_id,
             sw_version=monitor.get("version") or None,
-            via_device=(DOMAIN, device.device_id),
+            via_device_id=coordinator.airone_device_registry_ids[device.device_id],
         )
 
     @property
