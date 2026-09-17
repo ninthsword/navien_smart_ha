@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import HomeAssistant
@@ -149,3 +150,113 @@ async def test_entity_commands_build_verified_payloads(
     assert payload["clientID"] == "mobile-contract-client"
     assert payload["request"]["mode"] == "power-off"
     assert payload["request"]["command"] == 33554433
+
+
+async def test_parent_registered_before_forwarding(hass, config_entry, devices):
+    """Catch missing explicit registration independently of platform load order."""
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.navien_smarthome import async_setup_entry
+    from custom_components.navien_smarthome.const import DOMAIN
+    from custom_components.navien_smarthome.coordinator import NavienSmartCoordinator
+
+    airone = devices[1]
+
+    async def refresh(coordinator):
+        coordinator.airone = {airone.device_id: airone}
+        coordinator.async_set_updated_data({})
+
+    async def forward(entry, platforms):
+        parent = next((item for item in dr.async_entries_for_config_entry(
+            dr.async_get(hass), entry.entry_id
+        ) if (DOMAIN, airone.device_id) in item.identifiers), None)
+        assert parent is not None, "AIRONE_PARENT_NOT_REGISTERED_BEFORE_FORWARD"
+        assert entry.runtime_data.airone_device_registry_ids[airone.device_id] == parent.id
+        assert parent.name == airone.nickname
+        assert parent.model == airone.model_name
+        assert parent.model_id == airone.model_code
+        assert parent.serial_number == airone.device_id
+
+    with (
+        patch("custom_components.navien_smarthome.NavienSmartApi.async_login", new=AsyncMock()),
+        patch.object(NavienSmartCoordinator, "async_config_entry_first_refresh", refresh),
+        patch.object(NavienSmartCoordinator, "async_restore_state", new=AsyncMock()),
+        patch.object(NavienSmartCoordinator, "async_start_mqtt", new=AsyncMock()),
+        patch.object(hass.config_entries, "async_forward_entry_setups", forward),
+    ):
+        assert await async_setup_entry(hass, config_entry)
+
+
+@pytest.fixture(params=["MONITOR001", None, ""])
+def monitor_case(hass, config_entry, devices, request):
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.navien_smarthome.const import DOMAIN
+
+    airone = devices[1]
+    monitor = {"deviceId": request.param, "modelCode": 35, "version": "1.2"}
+    airone.air_monitors = (monitor,)
+    identifier = request.param or "AIRONE001_airmonitor"
+    registry = dr.async_get(hass)
+    parent = registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers={(DOMAIN, airone.device_id)}
+    )
+    child = registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, identifier)},
+        via_device_id=parent.id,
+    )
+    return parent, child, identifier, monitor
+
+
+@pytest.fixture
+async def monitored_entry(monitor_case, loaded_entry):
+    return loaded_entry, monitor_case
+
+
+async def test_monitor_registry_identity_survives_reload(hass, monitored_entry, devices):
+    """An existing monitor remains separate and attached to the same parent."""
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.navien_smarthome.entity import AironeMonitorEntity
+
+    entry, (parent, child, identifier, monitor) = monitored_entry
+    entity_id = entity_id_for_unique_id(hass, "sensor", f"{identifier}_air_co2")
+    entity = er.async_get(hass).async_get(entity_id)
+    assert entity is not None and entity.device_id == child.id
+    assert child.id != parent.id
+    registered = dr.async_get(hass).async_get(child.id)
+    assert isinstance(registered, dr.DeviceEntry)
+    assert registered.via_device_id == parent.id
+    info = AironeMonitorEntity(entry.runtime_data, devices[1], monitor).device_info
+    assert info is not None and info.get("via_device_id") == parent.id
+    assert "via_device" not in info
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    reloaded = er.async_get(hass).async_get(entity_id)
+    assert reloaded is not None and reloaded.id == entity.id
+    assert reloaded.device_id == child.id
+    assert entry.runtime_data.airone_device_registry_ids["AIRONE001"] == parent.id
+    registered = dr.async_get(hass).async_get(child.id)
+    assert isinstance(registered, dr.DeviceEntry)
+    assert registered.via_device_id == parent.id
+
+
+async def test_absent_monitor_keeps_sensor_on_parent(hass, loaded_entry):
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.navien_smarthome.const import DOMAIN
+
+    registry = dr.async_get(hass)
+    parent = next(item for item in dr.async_entries_for_config_entry(
+        registry, loaded_entry.entry_id
+    ) if (DOMAIN, "AIRONE001") in item.identifiers)
+    assert parent is not None
+    sensor = er.async_get(hass).async_get(
+        entity_id_for_unique_id(hass, "sensor", "AIRONE001_air_co2")
+    )
+    assert sensor is not None and sensor.device_id == parent.id
+    assert not any((DOMAIN, "AIRONE001_airmonitor") in item.identifiers
+                   for item in dr.async_entries_for_config_entry(registry, loaded_entry.entry_id))

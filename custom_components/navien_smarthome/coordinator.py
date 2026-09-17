@@ -131,6 +131,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # Airone has a different state scheme from a mat and is never mixed into the same
         # dict. Leaving the verified mat path undisturbed comes first.
         self.airone: dict[str, AironeDevice] = {}
+        self.airone_device_registry_ids: dict[str, str] = {}
         # Boilers are controlled only through the confirmed modelCode=20 commands. Received
         # MQTT structures are de-identified and kept briefly, and confirmed state also reaches
         # the sensors.

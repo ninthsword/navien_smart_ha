@@ -11,11 +11,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import NavienSmartApi, NavienSmartAuthError, NavienSmartError
 from .const import CONF_HOME_SEQ
 from .coordinator import NavienSmartCoordinator
+from .entity import airone_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +64,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) 
             "건너뛴 기기가 있으면 위 경고를 확인해 주세요.",
             home_seq,
         )
+
+    registry = dr.async_get(hass)
+    for device in coordinator.airone.values():
+        parent = registry.async_get_or_create(
+            config_entry_id=entry.entry_id, **airone_device_info(device)
+        )
+        coordinator.airone_device_registry_ids[device.device_id] = parent.id
 
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

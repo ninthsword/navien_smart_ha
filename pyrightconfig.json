@@ -10,12 +10,11 @@
   "exclude": [
     "**/node_modules",
     "**/__pycache__",
-    "**/.venv"
+    "**/.venv",
+    "**/.venv-ha2026.9"
   ],
   "pythonVersion": "3.14",
   "typeCheckingMode": "standard",
-  "venvPath": ".",
-  "venv": ".venv",
   "reportUnnecessaryTypeIgnoreComment": "error",
   "extraPaths": [
     "custom_components"

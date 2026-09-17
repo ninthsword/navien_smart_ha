@@ -454,7 +454,7 @@ Python 3.14 development environment above, with uv 0.12.5:
 
 ```sh
 npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
-devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --outputjson
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv/bin/python --outputjson
 ```
 
 The private npm package lives under `devtools/pyright`. Existing strict mypy, Ruff,
@@ -487,3 +487,22 @@ python3 tools/navien_cli.py airone-modes --device-seq N   # 환기청정 지원 
 MIT. 이 프로젝트는 경동나비엔과 무관하며 앱 동작을 분석해 만든 비공식 통합입니다.
 [kyle-seongwoo-jun/homebridge-navien-smart](https://github.com/kyle-seongwoo-jun/homebridge-navien-smart)
 의 인증 흐름 분석을 참고했습니다.
+
+
+## Home Assistant 2026.9 호환성 검증
+
+기존 2026.8 최소 버전 검증은 유지합니다. 2026.9.2 검증은 Python 3.14.7과
+별도 해시 잠금 파일을 사용하며, 실제 서비스나 장치에 연결하지 않습니다.
+`uv==0.12.5`, Node.js 24와 저장소의 잠긴 Pyright 의존성을 사용합니다.
+
+```sh
+uv venv --python 3.14.7 .venv-ha2026.9
+uv pip sync --python .venv-ha2026.9/bin/python --require-hashes requirements-ha2026.9.lock
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+.venv-ha2026.9/bin/python -B tests/run.py
+.venv-ha2026.9/bin/python -B -m pytest -p no:cacheprovider --log-disable=sqlalchemy.engine.Engine tests_ha
+```
+
+가벼운 기존 테스트와 실제 Home Assistant pytest 테스트는 별도 프로세스에서
+실행합니다. 새 pytest 파일은 2026.9 작업에서 명시적으로 타입 검사하며,
+기존 2026.8 환경에 pytest 플러그인을 추가하지 않습니다.
