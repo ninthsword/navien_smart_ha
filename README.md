@@ -506,3 +506,52 @@ npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
 가벼운 기존 테스트와 실제 Home Assistant pytest 테스트는 별도 프로세스에서
 실행합니다. 새 pytest 파일은 2026.9 작업에서 명시적으로 타입 검사하며,
 기존 2026.8 환경에 pytest 플러그인을 추가하지 않습니다.
+
+## Home Assistant 2026.10 호환성 검증
+
+기존 검증 환경과 별도로 안정판 Home Assistant 2026.10.0, Python 3.14.7,
+`uv==0.12.5`, Node.js 24를 사용합니다. 새 의존성 입력과 해시 잠금 파일은
+`requirements-ha2026.10.in`, `requirements-ha2026.10.lock`입니다.
+
+테스트 플러그인 `pytest-homeassistant-custom-component==0.13.370`의 메타데이터는
+`homeassistant==2026.10.0b4`를 요구하므로, 단일 코어 버전만 지정한
+`requirements-ha2026.10-overrides.in`으로 안정판을 선택합니다. CI는 설치된
+Python·코어·플러그인 버전을 확인하고 전체 의존성 메타데이터를 검사합니다.
+플러그인의 이 베타 버전 요구와 설치된 안정판 사이의 불일치가 정확히 하나일
+때만 허용하며, 누락된 의존성이나 다른 버전 불일치는 실패로 처리합니다.
+
+의존성 입력을 변경할 때는 같은 도구와 재정의 파일로 잠금을 다시 생성하세요.
+
+```sh
+uv pip compile --python 3.14.7 --generate-hashes --override requirements-ha2026.10-overrides.in requirements-ha2026.10.in -o requirements-ha2026.10.lock
+```
+
+전용 환경에서 `devtools/ha2026_10_typing.py`를 먼저 실행하세요. HA의 런타임
+재노출과 Probatio 별칭을 타입 검사기가 인식하도록, 설치된 소스에서 `.pyi`
+파일 네 개를 생성합니다. 원본 런타임 `.py`와 배포 메타데이터는 해시로
+보호하며, 코어·플러그인·Probatio 버전과 실제 객체의 동일성도 확인합니다.
+다른 가상환경, 예상과 다른 import 구조나 기존 타입 파일은 실패로 처리합니다.
+동일한 생성 결과가 이미 있으면 다시 쓰지 않습니다. 이어지는 가드 테스트는
+임시 파일과 새 프로세스로 실패 조건을 검사합니다. 이 준비는 2026.10 환경에만
+적용되며, 기존 검증 환경과 통합구성요소의 런타임 import는 그대로 유지합니다.
+
+다음 명령은 외부 서비스나 장치에 연결하지 않고, 기존 오프라인 테스트와 실제
+Home Assistant 테스트를 별도 프로세스로 실행합니다. CI는 같은 검사에 위의
+버전 및 메타데이터 검사를 추가합니다.
+
+```sh
+python -m pip install uv==0.12.5
+uv venv --python 3.14.7 .venv-ha2026.10
+uv pip sync --python .venv-ha2026.10/bin/python --require-hashes requirements-ha2026.10.lock
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+.venv-ha2026.10/bin/python -B devtools/ha2026_10_typing.py
+.venv-ha2026.10/bin/python -B -m unittest discover -s devtools -p test_ha2026_10_typing.py -v
+.venv-ha2026.10/bin/python -B -m pytest --collect-only -p no:cacheprovider --disable-socket --allow-unix-socket --log-disable=sqlalchemy.engine.Engine tests_ha
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.10/bin/python
+.venv-ha2026.10/bin/python -B tests/run.py
+.venv-ha2026.10/bin/python -B -m pytest -p no:cacheprovider --disable-socket --allow-unix-socket --log-disable=sqlalchemy.engine.Engine tests_ha
+.venv-ha2026.10/bin/ruff check --no-cache custom_components tests tests_ha tools
+.venv-ha2026.10/bin/mypy --cache-dir=/dev/null custom_components
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.10/bin/python devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
+.venv-ha2026.10/bin/ruff check --no-cache devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
+```

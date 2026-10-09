@@ -31,6 +31,7 @@ venv/
 
 # 작업 지시서 (개인 정보 포함)
 CLAUDE.md
+CLAUDE.local.md
 AGENTS.md
 .claude/
 
@@ -39,3 +40,4 @@ AGENTS.md
 
 # Generated project-local type-checker dependencies
 /devtools/pyright/node_modules/
+/.venv-ha2026.10/
