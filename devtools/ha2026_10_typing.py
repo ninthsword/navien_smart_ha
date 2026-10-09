@@ -77,10 +77,23 @@ def runtime_identities() -> dict[str, ModuleType]:
     voluptuous = importlib.import_module("voluptuous")
     for symbol in VOLUPTUOUS_EXPORTS:
         require(getattr(voluptuous, symbol) is getattr(probatio, symbol), f"Runtime alias differs: {symbol}")
+    component_modules = {
+        "binary_sensor": (
+            importlib.import_module("homeassistant.components.binary_sensor"),
+            importlib.import_module("homeassistant.components.binary_sensor.const"),
+        ),
+        "switch": (
+            importlib.import_module("homeassistant.components.switch"),
+            importlib.import_module("homeassistant.components.switch.const"),
+        ),
+        "fan": (
+            importlib.import_module("homeassistant.components.fan"),
+            importlib.import_module("homeassistant.components.fan.const"),
+        ),
+    }
     components = {}
     for component, symbol in COMPONENT_EXPORTS:
-        module = importlib.import_module(f"homeassistant.components.{component}")
-        const = importlib.import_module(f"homeassistant.components.{component}.const")
+        module, const = component_modules[component]
         require(getattr(module, symbol) is getattr(const, symbol), f"Runtime enum identity differs: {symbol}")
         components[component] = module
     return components
