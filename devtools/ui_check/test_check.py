@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import logging
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import types
@@ -48,6 +51,43 @@ NAVIEN_SOURCE = "def _async_update_data():\n    raise ValueError('synthetic Navi
 TASK_RECORD = f"{STAMP} ERROR (MainThread) [homeassistant] Error doing job: Task exception was never retrieved"
 
 
+# The format string and datefmt HA's console and log file use (homeassistant/bootstrap.py).
+HA_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)s (%(threadName)s) [%(name)s] %(message)s"
+HA_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+
+def logged(logger_name: str, level: int, message: str, thread_name: str | None = None) -> list[str]:
+    """The lines Python's logging module writes for one record through HA's formatter.
+
+    With `thread_name`, the record is logged from a thread of that name.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter(HA_FORMAT, datefmt=HA_DATEFMT))
+    logger = logging.getLogger(logger_name)
+    saved = (logger.level, logger.propagate)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    try:
+        if thread_name is None:
+            logger.log(level, message)
+        else:
+            thread = threading.Thread(target=logger.log, args=(level, message), name=thread_name)
+            thread.start()
+            thread.join()
+    finally:
+        logger.removeHandler(handler)
+        logger.level, logger.propagate = saved
+    return stream.getvalue().splitlines()
+
+
+# Records of a logger outside custom_components whose first message line does not name the domain;
+# only the continuation line does.
+CONTINUATION = "  config entry 나비엔: navien_smarthome"
+MULTILINE_MESSAGE = f"Error setting up entry 나비엔 스마트\n{CONTINUATION}"
+
+
 def navien_function() -> types.FunctionType:
     """Return a function compiled with a file name inside custom_components/navien_smarthome."""
     module = compile(NAVIEN_SOURCE, NAVIEN_FILE, "exec")
@@ -82,13 +122,15 @@ def navien_frames(lines: list[str]) -> list[str]:
 class ScanLogTest(unittest.TestCase):
     def test_reports_navien_error_critical_and_frame(self) -> None:
         lines = [NAVIEN_ERROR, NAVIEN_CRITICAL, "Traceback (most recent call last):", NAVIEN_FRAME]
-        self.assertEqual(check.scan_log(lines), [NAVIEN_ERROR, NAVIEN_CRITICAL, NAVIEN_FRAME])
+        critical_record = "\n".join(lines[1:])
+        self.assertEqual(check.scan_log(lines), [NAVIEN_ERROR, critical_record, NAVIEN_FRAME])
 
     def test_reports_frames_of_a_formatted_exception(self) -> None:
         lines = formatted(raised(navien_function()))
         frames = navien_frames(lines)
         self.assertTrue(frames)
-        self.assertEqual(check.scan_log(lines), frames)
+        # The task record names the domain through its traceback's continuation lines.
+        self.assertEqual(check.scan_log(lines), ["\n".join(lines), *frames])
 
     def test_reports_frames_of_an_exception_group(self) -> None:
         lines = formatted(raised(group_of_navien_errors))
@@ -96,7 +138,43 @@ class ScanLogTest(unittest.TestCase):
         self.assertEqual(len(frames), 2)
         self.assertTrue(all(frame.lstrip().startswith("|") for frame in frames))
         self.assertNotIn("navien_smarthome", lines[0])
-        self.assertEqual(check.scan_log(lines), frames)
+        self.assertEqual(check.scan_log(lines), ["\n".join(lines), *frames])
+
+    def assert_found_only_through_continuation(self, level: int) -> None:
+        lines = logged("homeassistant.setup", level, MULTILINE_MESSAGE)
+        self.assertEqual(len(lines), 2)
+        self.assertIsNotNone(check.RECORD.match(lines[0]))
+        self.assertIn(f"{logging.getLevelName(level)} (", lines[0])
+        self.assertNotIn("navien_smarthome", lines[0])
+        self.assertEqual(lines[1], CONTINUATION)
+        self.assertEqual(check.scan_log(lines), ["\n".join(lines)])
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertEqual(check.scan_log([line]), [])
+
+    def test_reports_multiline_error_naming_domain_on_continuation(self) -> None:
+        self.assert_found_only_through_continuation(logging.ERROR)
+
+    def test_reports_multiline_critical_naming_domain_on_continuation(self) -> None:
+        self.assert_found_only_through_continuation(logging.CRITICAL)
+
+    def test_reports_error_logged_from_a_thread_named_with_parentheses(self) -> None:
+        lines = logged("homeassistant.setup", logging.ERROR, MULTILINE_MESSAGE, "Thread-3 (_run)")
+        self.assertEqual(len(lines), 2)
+        self.assertIn("(Thread-3 (_run))", lines[0])
+        self.assertIsNotNone(check.RECORD.match(lines[0]))
+        self.assertEqual(check.scan_log(lines), ["\n".join(lines)])
+
+    def test_ignores_multiline_warning_naming_domain_on_continuation(self) -> None:
+        lines = logged("homeassistant.setup", logging.WARNING, MULTILINE_MESSAGE)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("navien_smarthome", lines[1])
+        self.assertEqual(check.scan_log(lines), [])
+
+    def test_ignores_multiline_error_of_another_logger_without_domain(self) -> None:
+        lines = logged("homeassistant.components.met", logging.ERROR, "Error fetching met data\n  timeout")
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(check.scan_log(lines), [])
 
     def test_ignores_foreign_errors_and_custom_warning(self) -> None:
         self.assertEqual(check.scan_log([MET_ERROR, RADIO_ERROR, CUSTOM_WARNING]), [])
@@ -115,6 +193,12 @@ class LogVerdictTest(unittest.TestCase):
         verdict = self.verdict(CUSTOM_WARNING, MET_ERROR, RADIO_ERROR, NAVIEN_ERROR)
         self.assertIsNotNone(verdict)
         self.assertIn(NAVIEN_ERROR, verdict or "")
+
+    def test_multiline_error_naming_domain_on_continuation_fails(self) -> None:
+        record = logged("homeassistant.setup", logging.ERROR, MULTILINE_MESSAGE)
+        verdict = self.verdict(CUSTOM_WARNING, *record)
+        self.assertIsNotNone(verdict)
+        self.assertIn(CONTINUATION, verdict or "")
 
     def test_missing_custom_warning_fails(self) -> None:
         verdict = self.verdict(MET_ERROR, RADIO_ERROR)
@@ -135,9 +219,10 @@ class WaitReadyTest(unittest.TestCase):
 class FakeProcess:
     """Stands in for the HA child: its first wait is interrupted, as by Ctrl-C."""
 
-    def __init__(self) -> None:
+    def __init__(self, wait_errors: tuple[BaseException, ...] = (KeyboardInterrupt(),)) -> None:
         self.calls: list[str] = []
         self.returncode: int | None = None
+        self.wait_errors = list(wait_errors)
 
     def poll(self) -> int | None:
         return self.returncode
@@ -151,8 +236,8 @@ class FakeProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         self.calls.append("wait")
-        if self.calls.count("wait") == 1:
-            raise KeyboardInterrupt
+        if self.wait_errors:
+            raise self.wait_errors.pop(0)
         return self.returncode or 0
 
 
@@ -162,6 +247,14 @@ class StopTest(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             check.stop(cast("subprocess.Popen[bytes]", process))
         self.assertEqual(process.calls, ["terminate", "wait", "kill", "wait"])
+
+    def test_interrupted_wait_after_kill_reaps_then_propagates(self) -> None:
+        process = FakeProcess(
+            (subprocess.TimeoutExpired("hass", check.STOP_TIMEOUT), KeyboardInterrupt())
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            check.stop(cast("subprocess.Popen[bytes]", process))
+        self.assertEqual(process.calls, ["terminate", "wait", "kill", "wait", "wait"])
 
 
 class RefusedOutTest(unittest.TestCase):
@@ -182,6 +275,24 @@ class RefusedOutTest(unittest.TestCase):
             self.assertFalse(Path(out, check.LOG_NAME).exists())
             self.assertEqual(sorted(p.name for p in Path(out).iterdir()), ["earlier.png"])
             self.assertLess(time.monotonic() - started, 30)
+
+    def test_regular_file_dir_is_refused_before_home_assistant_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as parent:
+            out = Path(parent, "shots")
+            out.write_bytes(b"earlier")
+            result = subprocess.run(
+                [sys.executable, "-B", str(HERE / "check.py"), "--out", str(out)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("FAIL", result.stderr)
+            self.assertNotIn("PASS", result.stdout)
+            self.assertTrue(out.is_file())
+            self.assertEqual(out.read_bytes(), b"earlier")
+            self.assertEqual(sorted(p.name for p in Path(parent).iterdir()), ["shots"])
 
     def test_unusable_dir_fails_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as parent:

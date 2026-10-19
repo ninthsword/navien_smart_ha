@@ -1,4 +1,4 @@
-"""Offline check: run Home Assistant with synthetic Navien devices and drive its frontend.
+"""UI check: run Home Assistant with synthetic Navien devices and drive its frontend.
 
 Usage: python devtools/ui_check/check.py --out DIR
 DIR must be absent or empty. Starts devtools/ui_check/run_hass.py on 127.0.0.1 with a fresh
@@ -46,8 +46,13 @@ frontend:
 config:
 recorder:
 """
-# HA's console format: "%(asctime)s.%(msecs)03d %(levelname)s (%(threadName)s) [%(name)s] %(message)s"
-RECORD = re.compile(r"^\S+ \S+ (?P<level>[A-Z]+) \(")
+# A record's header line in HA's console format (homeassistant/bootstrap.py):
+# "%(asctime)s.%(msecs)03d %(levelname)s (%(threadName)s) [%(name)s] %(message)s", datefmt
+# "%Y-%m-%d %H:%M:%S". Every following line up to the next header line belongs to the record. A thread
+# name may hold parentheses (Python names unnamed threads "Thread-3 (_run)").
+RECORD = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (?P<level>[A-Z]+) \(.*?\) \[[^\]]*\]( |$)"
+)
 # A traceback frame as Python's traceback module formats it: "  File "...", line N, in f", and the
 # same line behind the "|" margins it adds for the sub-exceptions of an ExceptionGroup.
 NAVIEN_FRAME = re.compile(
@@ -59,15 +64,30 @@ CUSTOM_WARNING = re.compile(
 )
 
 
+def log_records(lines: Iterable[str]) -> list[list[str]]:
+    """Group log lines into records: a header line plus its continuation lines."""
+    records: list[list[str]] = []
+    for line in lines:
+        if RECORD.match(line):
+            records.append([line])
+        elif records:
+            records[-1].append(line)
+    return records
+
+
 def scan_log(lines: Iterable[str]) -> list[str]:
     """Return each ERROR/CRITICAL record naming navien_smarthome and each Navien traceback frame."""
+    lines = list(lines)
     found = []
-    for line in lines:
-        record = RECORD.match(line)
-        if record and record["level"] in ("ERROR", "CRITICAL") and "navien_smarthome" in line:
-            found.append(line)
-        elif NAVIEN_FRAME.match(line):
-            found.append(line)
+    for record in log_records(lines):
+        header = RECORD.match(record[0])
+        if (
+            header
+            and header["level"] in ("ERROR", "CRITICAL")
+            and any("navien_smarthome" in line for line in record)
+        ):
+            found.append("\n".join(record))
+    found.extend(line for line in lines if NAVIEN_FRAME.match(line))
     return found
 
 
@@ -124,7 +144,11 @@ def stop(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=STOP_TIMEOUT)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait()
+        try:
+            process.wait()
+        except BaseException:
+            process.wait()
+            raise
     except BaseException:
         if process.poll() is None:
             process.kill()

@@ -1,4 +1,4 @@
-# Offline Home Assistant UI check (devtools/ui_check): the HA 2026.10 test stack, HA's own
+# Home Assistant UI check (devtools/ui_check): the HA 2026.10 test stack, HA's own
 # frontend and the packages of the integrations HA loads by default, plus Playwright.
 pytest-homeassistant-custom-component==0.13.370
 homeassistant==2026.10.0
