@@ -1,0 +1,16 @@
+# Offline Home Assistant UI check (devtools/ui_check): the HA 2026.10 test stack, HA's own
+# frontend and the packages of the integrations HA loads by default, plus Playwright.
+pytest-homeassistant-custom-component==0.13.370
+homeassistant==2026.10.0
+home-assistant-frontend==20260930.2
+gazetteer-matcher==1.1.0
+hassil==3.12.1
+home-assistant-intents==2026.10.6
+PyTurboJPEG==1.8.3
+ha-ffmpeg==3.2.2
+infrared-protocols==10.1.0
+rf-protocols==4.3.0
+mutagen==1.48.1
+pymicro-vad==1.0.1
+pyspeex-noise==1.0.2
+playwright==1.61.0

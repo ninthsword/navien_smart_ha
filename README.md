@@ -446,6 +446,25 @@ uv pip sync --python .venv/bin/python --require-hashes requirements-dev.lock
 `tests_ha/`는 Navien HTTP·MQTT 경계를 모두 mock한 채 실제 Home Assistant 코어와
 recorder를 사용합니다. 실제 계정이나 기기에 접속하지 않습니다.
 
+### 화면 검증
+
+실제 Home Assistant 2026.10 을 자체 화면 그대로 띄우고, 가짜 나비엔 기기(매트, 에어원,
+보일러 하나씩)를 붙여 사람처럼 조작합니다. 로그인한 뒤 통합 구성 요소 추가로 Navien Smart 를
+설정 흐름대로 등록하고, 한국어 문구와 기기 세 대가 화면에 보이는지 확인합니다. 기기 페이지는
+데스크톱 폭과 휴대폰 폭에서 각각 열어 보고, 화면마다 스크린샷을 남깁니다. 나비엔 서버,
+실제로 쓰는 Home Assistant, 기기에는 접속하지 않습니다.
+
+```bash
+uv venv --python 3.14.7 .venv-ui
+uv pip sync --python .venv-ui/bin/python --require-hashes requirements-ui.lock
+.venv-ui/bin/python -m playwright install chromium
+.venv-ui/bin/python -B devtools/ui_check/check.py --out /tmp/navien-ui-check
+```
+
+`--out` 에는 없거나 비어 있는 디렉터리를 주세요. 스크린샷과 Home Assistant 로그가 그 안에
+남습니다. GitHub Actions 도 push 와 pull request 마다 이 검증을 돌리고, 스크린샷을 7일 동안
+보관합니다.
+
 ### Pyright development check
 
 Pyright 1.1.413 checks all 37 maintained Python files, including the offline suite,
