@@ -1,0 +1,49 @@
+name: Home Assistant UI check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-check:
+    name: Home Assistant 2026.10 screens with synthetic Navien devices
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked UI check dependencies
+        run: |
+          python -m pip install uv==0.12.5
+          uv venv --python 3.14.7 .venv-ui
+          uv pip sync --python .venv-ui/bin/python --require-hashes requirements-ui.lock
+          npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+      - name: Lint UI check sources
+        run: uvx --from ruff==0.16.4 ruff check devtools/ui_check
+      - name: Check UI check types and failure path
+        run: |
+          devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ui/bin/python devtools/ui_check
+          .venv-ui/bin/python -B -m unittest discover -s devtools/ui_check -p 'test_*.py' -v
+      - name: Install Chromium
+        run: .venv-ui/bin/python -m playwright install --with-deps chromium
+      - name: Drive Home Assistant's screens
+        run: .venv-ui/bin/python -B devtools/ui_check/check.py --out "$RUNNER_TEMP/ui-check"
+      - name: Keep screenshots and the Home Assistant log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-check-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/ui-check
