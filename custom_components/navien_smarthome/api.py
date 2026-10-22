@@ -1,13 +1,14 @@
-"""나비엔 스마트 REST 클라이언트.
+"""Navien Smart REST client.
 
-인증 흐름은 두 단계다.
+Authentication happens in two stages.
 
-1. `member.naviensmartcontrol.com/member/login` 폼 POST — 쿠키를 물고 리다이렉트를
-   따라간 뒤 HTML 의 `var message = {...}` 에서 토큰을 긁는다.
-2. `POST /users/secured-sign-in` — home 목록과 **AWS IoT 임시 자격증명**을 받는다.
+1. A form POST to `member.naviensmartcontrol.com/member/login` — hold the cookies, follow
+   the redirect, and scrape the token out of `var message = {...}` in the HTML.
+2. `POST /users/secured-sign-in` — returns the home list and **temporary AWS IoT
+   credentials**.
 
-`accountSeq` 는 1단계 응답의 `userSeq` 이고, 2단계 응답의 `userInfo.userSeq` 와는
-다른 값이다. 헷갈리기 쉬우니 이름을 구분해 둔다.
+`accountSeq` is the `userSeq` from the first response, and differs from the
+`userInfo.userSeq` in the second. They are easy to confuse, so the names are kept apart.
 """
 
 from __future__ import annotations
@@ -25,12 +26,12 @@ import aiohttp
 from .const import (
     AIRONE_LEGACY_TOPIC_FMT,
     AIRONE_TOPIC_FMT,
-    LEGACY_CONTROLLER_TO_REQUEST,
-    LEGACY_RUNNING_TO_REQUEST,
     API_URL,
     CODE_NOT_AUTHORIZED,
     CODE_SUCCESS,
     CODE_TOKEN_EXPIRED,
+    LEGACY_CONTROLLER_TO_REQUEST,
+    LEGACY_RUNNING_TO_REQUEST,
     LOGIN_URL,
     REQUEST_TIMEOUT_SECONDS,
     USER_AGENT,
@@ -45,14 +46,14 @@ _MESSAGE_MARKER = "var message = "
 
 
 def extract_airs(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """`/air-sensor` 응답에서 공기질 항목 목록을 꺼낸다.
+    """Pull the list of air-quality items out of an `/air-sensor` response.
 
-    실기기 제보로 확인한 형태:
+    The shape confirmed by a real-device report:
         `data.sensorList[]` → `{ zoneId, updateTime, airMonitor{}, airs[] }`
 
-    처음에 `data.airs` 로 짐작했다가 **값을 하나도 못 읽었다.** 에어모니터가 붙어
-    있는데도 공기질 센서가 안 생기던 원인이다. 존이 여럿일 수 있어 목록을 모두
-    훑고, 앞선 짐작도 폴백으로 남긴다.
+    The first guess was `data.airs`, and it **read nothing at all** — the reason air-quality
+    sensors never appeared even with an air monitor attached. There can be several zones, so
+    the whole list is walked, and the earlier guess stays as a fallback.
     """
     data = payload.get("data")
     if not isinstance(data, dict):
@@ -74,18 +75,19 @@ def extract_airs(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class NavienSmartError(Exception):
-    """통합 내부 공통 예외."""
+    """Base exception for this integration."""
 
 
 class NavienSmartAuthError(NavienSmartError):
-    """자격증명이 잘못되었거나 세션이 무효해진 경우."""
+    """The credentials are wrong, or the session became invalid."""
 
 
 def _legacy_request(desired: dict[str, Any]) -> dict[str, Any]:
-    """신형 `desired` 를 구세대 `request` 로 옮긴다.
+    """Translate a newer `desired` into the older `request` form.
 
-    호출자는 세대를 모르고 `roomController` 하나만 만든다. 봉투 차이는 전송
-    직전 여기서만 흡수한다 — 세대 분기가 모델까지 번지지 않게 한다.
+    Callers know nothing about generations and build a single `roomController`. The envelope
+    difference is absorbed here, just before sending, so generation branching never spreads
+    into the models.
     """
     controller = desired.get("roomController")
     if not isinstance(controller, dict):
@@ -93,7 +95,8 @@ def _legacy_request(desired: dict[str, Any]) -> dict[str, Any]:
     request: dict[str, Any] = {}
     running = controller.get("running")
     if running is not None:
-        # 구세대는 운전 값이 반대다. 안 뒤집으면 전원이 거꾸로 나간다.
+        # The older generation inverts the running value; without flipping it, power goes out
+        # backwards.
         request["power"] = LEGACY_RUNNING_TO_REQUEST.get(running, running)
     for source, target in LEGACY_CONTROLLER_TO_REQUEST.items():
         if source in controller:
@@ -102,7 +105,7 @@ def _legacy_request(desired: dict[str, Any]) -> dict[str, Any]:
 
 
 class NavienSmartApiError(NavienSmartError):
-    """서버가 성공이 아닌 code 를 돌려준 경우."""
+    """The server returned a code other than success."""
 
     def __init__(self, code: int | None, message: str) -> None:
         super().__init__(message)
@@ -111,7 +114,7 @@ class NavienSmartApiError(NavienSmartError):
 
 @dataclass(slots=True)
 class AwsCredentials:
-    """AWS IoT 접속용 임시 자격증명."""
+    """Temporary credentials for connecting to AWS IoT."""
 
     access_key_id: str
     secret_key: str
@@ -119,15 +122,24 @@ class AwsCredentials:
 
     @classmethod
     def from_auth_info(cls, info: dict[str, Any]) -> AwsCredentials | None:
-        try:
-            return cls(info["accessKeyId"], info["secretKey"], info["sessionToken"])
-        except KeyError:
+        access_key_id = info.get("accessKeyId")
+        secret_key = info.get("secretKey")
+        session_token = info.get("sessionToken")
+        if not (
+            isinstance(access_key_id, str)
+            and access_key_id
+            and isinstance(secret_key, str)
+            and secret_key
+            and isinstance(session_token, str)
+            and session_token
+        ):
             return None
+        return cls(access_key_id, secret_key, session_token)
 
 
 @dataclass(slots=True)
 class NavienSmartSession:
-    """로그인 결과. `home_seq` 는 사용자가 고른 값으로 덮어쓸 수 있다."""
+    """The result of logging in. `home_seq` may be overwritten with the user's choice."""
 
     access_token: str
     refresh_token: str | None
@@ -139,7 +151,7 @@ class NavienSmartSession:
 
 
 class NavienSmartApi:
-    """REST 호출을 담당한다. MQTT 는 `mqtt.py` 가 맡는다."""
+    """Owns the REST calls. MQTT belongs to `mqtt.py`."""
 
     def __init__(
         self,
@@ -157,19 +169,48 @@ class NavienSmartApi:
     def session(self) -> NavienSmartSession | None:
         return self._session
 
-    # -- 인증 --------------------------------------------------------------
+    # -- authentication ----------------------------------------------------
 
     async def async_login(self) -> NavienSmartSession:
-        """1·2단계를 모두 수행하고 세션을 갈아끼운다."""
+        """Run both stages and swap in the new session.
+
+        **If a login that started earlier has finished, use it.** The server allows one
+        session per account, so requests that failed at the same time would invalidate each
+        other by each logging in. If the session already changed by the time the lock is
+        acquired, that one is good enough.
+        """
+        seen = self._session
         async with self._lock:
+            if self._session is not None and self._session is not seen:
+                # Another request fetched a fresh one while this was waiting.
+                return self._session
             login = await self._async_form_login()
             data = await self._async_secured_sign_in(
                 login["accessToken"], login["loginId"], login["userSeq"]
             )
 
-            homes = data.get("home") or []
+            raw_homes = data.get("home")
+            homes: list[dict[str, Any]] = []
+            if isinstance(raw_homes, list):
+                for raw_home in raw_homes:
+                    if not isinstance(raw_home, dict):
+                        continue
+                    raw_home_seq = raw_home.get("homeSeq")
+                    if isinstance(raw_home_seq, bool):
+                        continue
+                    if isinstance(raw_home_seq, int):
+                        home_seq = raw_home_seq
+                    elif isinstance(raw_home_seq, str) and raw_home_seq.isdecimal():
+                        home_seq = int(raw_home_seq)
+                    else:
+                        continue
+                    home = dict(raw_home)
+                    home["homeSeq"] = home_seq
+                    homes.append(home)
             if not homes:
                 raise NavienSmartAuthError("계정에 등록된 home 이 없습니다.")
+
+            auth_info = data.get("authInfo")
 
             self._session = NavienSmartSession(
                 access_token=login["accessToken"],
@@ -178,7 +219,11 @@ class NavienSmartApi:
                 account_seq=login["userSeq"],
                 user_seq=data["userInfo"]["userSeq"],
                 homes=homes,
-                aws=AwsCredentials.from_auth_info(data.get("authInfo") or {}),
+                aws=(
+                    AwsCredentials.from_auth_info(auth_info)
+                    if isinstance(auth_info, dict)
+                    else None
+                ),
             )
             _LOGGER.debug(
                 "로그인 완료: userSeq=%s home %s개",
@@ -188,7 +233,7 @@ class NavienSmartApi:
             return self._session
 
     async def _async_form_login(self) -> dict[str, Any]:
-        """폼 로그인. 쿠키 세션이 필요하므로 전용 ClientSession 을 받아 쓴다."""
+        """Form login. It needs a cookie session, so it takes a dedicated ClientSession."""
         try:
             async with self._http.post(
                 f"{LOGIN_URL}/member/login",
@@ -209,7 +254,7 @@ class NavienSmartApi:
             raise self._auth_error_from_html(html)
 
         if "passwordChg" in html:
-            # 계정 상태를 바꾸는 요청(`/pwchgLate`)은 통합이 대신 하지 않는다.
+            # The integration never issues requests that change account state (`/pwchgLate`).
             raise NavienSmartAuthError(
                 "서버가 비밀번호 변경을 요구합니다. 앱이나 웹에서 먼저 처리해 주세요."
             )
@@ -243,9 +288,11 @@ class NavienSmartApi:
             if start == -1 or end <= start:
                 continue
             try:
-                return json.loads(line[start : end + 1])
+                data = json.loads(line[start : end + 1])
             except json.JSONDecodeError:
                 continue
+            if isinstance(data, dict):
+                return data
         return None
 
     async def _async_secured_sign_in(
@@ -258,24 +305,43 @@ class NavienSmartApi:
             json_body={"userId": user_id, "accountSeq": account_seq},
         )
         data = payload.get("data")
-        if not data:
+        if not isinstance(data, dict) or not data:
             raise NavienSmartAuthError("secured-sign-in 응답에 data 가 없습니다.")
         return data
 
     async def async_refresh_aws_credentials(self) -> AwsCredentials | None:
-        """AWS 자격증명을 다시 받는다.
+        """Fetch fresh AWS credentials.
 
-        `/auth/token/refresh` 는 accessToken 만 주고 AWS 자격증명을 주지 않는다.
-        따라서 `secured-sign-in` 을 다시 부르는 것이 유일한 경로다 — 실측 확인.
+        `/auth/token/refresh` returns only an accessToken and no AWS credentials, so calling
+        `secured-sign-in` again is the only path — confirmed against the live service.
+
+        The access token used for that call can expire independently of the MQTT credentials.
+        Route it through the same authenticated-request path as every other REST call so a
+        `404`/`407` response logs in once and retries with the new token.
         """
         session = self._require_session()
-        data = await self._async_secured_sign_in(
-            session.access_token, session.user_id, session.account_seq
+        payload, response_session = await self._async_authed_request_with_session(
+            "POST",
+            "/users/secured-sign-in",
+            json_body={"userId": session.user_id, "accountSeq": session.account_seq},
         )
-        session.aws = AwsCredentials.from_auth_info(data.get("authInfo") or {})
-        return session.aws
+        data = payload.get("data")
+        if not isinstance(data, dict) or not data:
+            raise NavienSmartAuthError("secured-sign-in 응답에 data 가 없습니다.")
+        current = self._require_session()
+        auth_info = data.get("authInfo")
+        credentials = (
+            AwsCredentials.from_auth_info(auth_info)
+            if isinstance(auth_info, dict)
+            else None
+        )
+        # A partial success response must not discard credentials that may still work. The
+        # caller can keep the current MQTT session and retry the refresh on the next connect.
+        if credentials is not None and current is response_session:
+            current.aws = credentials
+        return current.aws
 
-    # -- 요청 --------------------------------------------------------------
+    # -- requests ----------------------------------------------------------
 
     def _require_session(self) -> NavienSmartSession:
         if self._session is None:
@@ -312,9 +378,9 @@ class NavienSmartApi:
             ) as resp:
                 text = await resp.text()
         except (aiohttp.ClientError, TimeoutError) as err:
-            # **`TimeoutError` 를 빠뜨리면 아무 기록도 남지 않는다.**
-            # `aiohttp.ClientError` 의 하위가 아니라(`OSError` 계열) 여기서
-            # 걸리지 않고 통째로 빠져나가, 실패 횟수도 로그도 남지 않았다.
+            # **Leaving `TimeoutError` out records nothing at all.** It is not a subclass of
+            # `aiohttp.ClientError` (it descends from `OSError`), so it escaped this handler
+            # entirely and neither the failure count nor a log line survived.
             raise NavienSmartError(f"{path} 요청 실패: {err}") from err
 
         try:
@@ -322,9 +388,9 @@ class NavienSmartApi:
         except json.JSONDecodeError as err:
             raise NavienSmartError(f"{path} 응답이 JSON 이 아닙니다.") from err
 
-        # **JSON 이라고 다 객체는 아니다.** `null` · 배열 · 숫자도 통과한다.
-        # 그대로 `.get` 을 부르면 `AttributeError` 가 나는데, 그건 우리 예외가
-        # 아니라 실패 횟수에도 로그에도 안 남고 갱신만 조용히 멈춘다.
+        # **Valid JSON is not necessarily an object.** `null`, arrays and numbers parse too.
+        # Calling `.get` on those raises `AttributeError`, which is not one of our exceptions,
+        # so it lands in neither the failure count nor the log and silently stops refreshing.
         if not isinstance(payload, dict):
             raise NavienSmartError(
                 f"{path} 응답이 객체가 아닙니다 ({type(payload).__name__})."
@@ -338,28 +404,51 @@ class NavienSmartApi:
     async def _async_authed_request(
         self, method: str, path: str, **kwargs: Any
     ) -> dict[str, Any]:
-        """토큰 만료·세션 탈취를 만나면 한 번 재로그인하고 재시도한다.
+        payload, _response_session = await self._async_authed_request_with_session(
+            method, path, **kwargs
+        )
+        return payload
 
-        계정당 세션이 하나뿐이라, 사용자가 앱을 열면 `404` 가 온다. 흔한 일이므로
-        조용히 복구한다.
+    async def _async_authed_request_with_session(
+        self, method: str, path: str, **kwargs: Any
+    ) -> tuple[dict[str, Any], NavienSmartSession]:
+        """On an expired token or a stolen session, log in once more and retry.
+
+        With one session per account, opening the app produces a `404`. That is common enough
+        to recover from quietly. The returned session is the exact one whose access token
+        produced the response, so a concurrent login cannot receive stale AWS credentials.
         """
         session = self._require_session()
         try:
-            return await self._async_request(method, path, token=session.access_token, **kwargs)
+            payload = await self._async_request(
+                method, path, token=session.access_token, **kwargs
+            )
+            return payload, session
         except NavienSmartApiError as err:
             if err.code not in (CODE_TOKEN_EXPIRED, CODE_NOT_AUTHORIZED):
                 raise
             _LOGGER.debug("세션 무효(code=%s) — 재로그인 후 재시도", err.code)
-            home_seq = session.homes[0].get("homeSeq") if session.homes else None
+            home_seq = next(
+                (
+                    home.get("homeSeq")
+                    for home in session.homes
+                    if isinstance(home, dict) and home.get("homeSeq") is not None
+                ),
+                None,
+            )
             refreshed = await self.async_login()
-            # 사용자가 고른 home 을 유지한다.
+            # Keep the home the user chose.
             if home_seq is not None:
-                refreshed.homes.sort(key=lambda h: h.get("homeSeq") != home_seq)
-            return await self._async_request(
+                refreshed.homes.sort(
+                    key=lambda home: not isinstance(home, dict)
+                    or home.get("homeSeq") != home_seq
+                )
+            payload = await self._async_request(
                 method, path, token=refreshed.access_token, **kwargs
             )
+            return payload, refreshed
 
-    # -- 기기 --------------------------------------------------------------
+    # -- devices -----------------------------------------------------------
 
     async def async_get_devices(self, home_seq: int) -> list[dict[str, Any]]:
         session = self._require_session()
@@ -376,10 +465,11 @@ class NavienSmartApi:
         device: dict[str, Any],
         desired: dict[str, Any],
     ) -> None:
-        """`desired` 를 shadow 로 중계한다.
+        """Relay a `desired` to the shadow.
 
-        `event.modelCode` 는 모든 명령에 붙는다. `beep` 는 붙이지 않는다 —
-        앱은 2024년 이후 모델에만 붙이고, 없어도 동작하는 것을 실측으로 확인했다.
+        `event.modelCode` goes on every command. `beep` does not: the app attaches it only to
+        models from 2024 onwards, and commands were confirmed to work without it on a real
+        device.
         """
         session = self._require_session()
         device_seq = device["deviceSeq"]
@@ -397,7 +487,7 @@ class NavienSmartApi:
                 }
             },
         }
-        # 앱은 topic 의 '/' 를 '\/' 로 이스케이프해 보낸다. 서버가 까다로울 수 있어 맞춘다.
+        # The app escapes '/' in the topic as '\/'. The server may be fussy, so match it.
         raw = json.dumps(body_obj, ensure_ascii=False).replace(
             '"\\u0000TOPIC\\u0000"', json.dumps(topic).replace("/", "\\/")
         )
@@ -413,22 +503,22 @@ class NavienSmartApi:
     async def async_request_shadow(
         self, home_seq: int, device: dict[str, Any]
     ) -> None:
-        """섀도우에 **저장된 마지막 상태**를 달라고 한다.
+        """Ask the shadow for the **last state it has stored**.
 
-        AWS 섀도우는 기기가 마지막으로 보고한 문서를 서버에 들고 있다. 여기에
-        빈 본문을 보내면 그 문서를 `.../status/get/accepted` 로 돌려준다.
+        An AWS shadow holds the document the device last reported. Posting an empty body here
+        makes the server return that document on `.../status/get/accepted`.
 
-        **읽기다. 아무것도 바꾸지 않는다.** `desired` 를 쓰는 기존 초기 요청과
-        달리 섀도우에 흔적을 남기지 않는다.
+        **This is a read and changes nothing.** Unlike the older initial request, which used
+        `desired`, it leaves no trace in the shadow.
 
-        **꺼져 있는 기기도 답한다** — 기기가 아니라 서버가 답하기 때문이다.
-        그래서 매트를 붙인 직후, 기기가 아직 아무것도 안 보낸 상태에서도
-        설정값을 바로 얻는다. 그게 없으면 `climate` 가 온도를 실을 수 없어
-        「보낼 구역 값이 없습니다」로 막힌다.
+        **A powered-off device still answers**, because the server answers, not the device.
+        So the setpoints arrive immediately after a mat connects, even before the device has
+        sent anything. Without it `climate` has no temperature to send and is blocked with
+        "no zone value to send".
 
-        **앱은 이 토픽을 보내지 않는다.** 다만 `status/get/accepted` 를 처리하는
-        코드는 있고, 실기기 두 대(온라인·오프라인)로 서버가 받아주는 것을
-        확인했다 — `code=200` 과 함께 응답이 왔다.
+        **The app never publishes this topic.** It does carry code that handles
+        `status/get/accepted`, and two real devices (one online, one offline) confirmed the
+        server accepts it — the response came back with `code=200`.
         """
         session = self._require_session()
         device_seq = device["deviceSeq"]
@@ -437,7 +527,8 @@ class NavienSmartApi:
         body_obj = {
             "serviceCode": device["serviceCode"],
             "topic": "\x00TOPIC\x00",
-            # **빈 본문이 규격이다.** 값을 넣으면 조회가 아니게 된다.
+            # **An empty body is the contract.** Putting a value in makes it something other
+            # than a read.
             "payload": {},
         }
         raw = json.dumps(body_obj, ensure_ascii=False).replace(
@@ -452,7 +543,35 @@ class NavienSmartApi:
             raw_body=raw,
         )
 
-    # -- 에어원 ------------------------------------------------------------
+    # -- boiler ------------------------------------------------------------
+
+    async def async_boiler_request(
+        self,
+        home_seq: int,
+        device_seq: int,
+        service_code: int,
+        payload: dict[str, Any],
+    ) -> None:
+        """Relay the smarttok boiler envelope the app builds to the server."""
+        session = self._require_session()
+        body_obj = {"serviceCode": service_code, "payload": payload}
+        raw = json.dumps(body_obj, ensure_ascii=False)
+        # Match what the app sends, but keep identifying values out of the log.
+        for key in ("requestTopic", "responseTopic"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                quoted = json.dumps(value)
+                raw = raw.replace(quoted, quoted.replace("/", "\\/"))
+
+        _LOGGER.debug("보일러 요청 전송 deviceSeq=%s", device_seq)
+        await self._async_authed_request(
+            "POST",
+            f"/devices/{device_seq}/control",
+            params={"homeSeq": home_seq, "userSeq": session.user_seq},
+            raw_body=raw,
+        )
+
+    # -- Airone ------------------------------------------------------------
 
     async def async_airone_request(
         self,
@@ -466,13 +585,13 @@ class NavienSmartApi:
         desired: dict[str, Any] | None = None,
         legacy: bool = False,
     ) -> None:
-        """에어원 명령을 중계한다.
+        """Relay an Airone command.
 
-        매트와 **봉투가 다르다.** 매트는 최상위에 `topic` 하나를 두고
-        `payload.state.desired` 를 넣지만, 에어원은 요청·응답 토픽을 봉투 안에 넣고
-        `sessionId` 로 짝을 맞춘다 (`AironePubComm`).
+        **The envelope differs from a mat.** A mat puts a single `topic` at the top level and
+        `payload.state.desired` inside; Airone puts both the request and response topics in
+        the envelope and pairs them with a `sessionId` (`AironePubComm`).
 
-        `desired` 가 `None` 이면 상태 조회다 — `state` 를 아예 넣지 않는다.
+        A `desired` of `None` means a state query — `state` is then omitted entirely.
         """
         session = self._require_session()
         topic_fmt = AIRONE_LEGACY_TOPIC_FMT if legacy else AIRONE_TOPIC_FMT
@@ -481,7 +600,8 @@ class NavienSmartApi:
         )
         payload: dict[str, Any] = {
             "clientId": client_id,
-            # 앱은 밀리초 epoch 를 문자열로 넣는다. 서버가 응답을 짝지을 때 쓴다.
+            # The app puts the epoch in milliseconds here as a string. The server uses it to
+            # pair up the response.
             "sessionId": str(int(time.time() * 1000)),
             "requestTopic": topic,
             "responseTopic": f"{topic}/res",
@@ -493,9 +613,10 @@ class NavienSmartApi:
                 payload["state"] = {"desired": desired}
 
         body_obj = {"serviceCode": service_code, "payload": payload}
-        # 매트와 같은 이유로 토픽의 '/' 를 이스케이프한다.
-        # **본문 전체를 치환하지 않는다** — `desired` 는 호출자가 만든 값이라
-        # 나중에 '/' 가 들어오면 조용히 망가진다. 토픽 두 개만 정확히 바꾼다.
+        # Escape '/' in the topic for the same reason as a mat.
+        # **Do not run the substitution over the whole body**: `desired` is built by the
+        # caller, so a '/' appearing there later would be silently corrupted. Only the two
+        # topics are rewritten.
         raw = json.dumps(body_obj, ensure_ascii=False)
         for value in (payload["responseTopic"], topic):
             quoted = json.dumps(value)
@@ -514,9 +635,10 @@ class NavienSmartApi:
     async def async_get_air_sensor(
         self, home_seq: int, device_seq: int
     ) -> list[dict[str, Any]]:
-        """공기질 값을 읽는다.
+        """Read the air-quality values.
 
-        상태 메시지에는 센서 **종류**만 있고 값이 없다 — 값은 이 엔드포인트에만 있다.
+        A status message carries only the sensor **kinds**, not their values — the values
+        exist only on this endpoint.
         """
         session = self._require_session()
         payload = await self._async_authed_request(

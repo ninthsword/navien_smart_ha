@@ -1,0 +1,2 @@
+# The test plugin pins beta metadata; exercise the stable core explicitly.
+homeassistant==2026.10.0

@@ -1,4 +1,4 @@
-"""엔티티 공통 베이스."""
+"""Shared entity bases."""
 
 from __future__ import annotations
 
@@ -8,13 +8,14 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .airone import AironeDevice
+from .boiler import BoilerDevice
 from .const import DOMAIN, MODEL_TYPE_LABELS
 from .coordinator import NavienSmartCoordinator
 from .models import NavienDevice
 
 
 class NavienSmartEntity(CoordinatorEntity[NavienSmartCoordinator]):
-    """`deviceId` 로 기기를 붙잡는다. `deviceSeq` 는 재등록 시 바뀔 수 있다."""
+    """Hold the device by `deviceId`. `deviceSeq` can change when a device is re-registered."""
 
     _attr_has_entity_name = True
 
@@ -27,12 +28,12 @@ class NavienSmartEntity(CoordinatorEntity[NavienSmartCoordinator]):
         if label := MODEL_TYPE_LABELS.get(device.model_type or ""):
             model = f"{model} ({label})"
 
-        # 매트는 MCU 와 Wi-Fi 모듈이 각자 펌웨어를 가진다. HA 의 `DeviceInfo` 에는
-        # 펌웨어 칸이 하나뿐이라 둘을 한 줄로 합친다.
+        # A mat carries separate firmware for its MCU and its Wi-Fi module, but HA's
+        # `DeviceInfo` has only one firmware field, so the two are joined into one line.
         #
-        # Wi-Fi 펌웨어를 `hw_version` 에 넣지 않는다 — HA 가 그 칸을 「하드웨어」로
-        # 표시하므로 펌웨어를 넣으면 거짓 정보가 된다. 서버는 하드웨어 리비전을
-        # 알려주지 않는다.
+        # The Wi-Fi firmware does not go in `hw_version`: HA labels that field "hardware",
+        # so putting firmware there would state something false. The server never reports
+        # a hardware revision.
         firmware = device.mcu_version
         if firmware and device.wifi_version:
             firmware = f"{firmware} (Wi-Fi {device.wifi_version})"
@@ -59,11 +60,31 @@ class NavienSmartEntity(CoordinatorEntity[NavienSmartCoordinator]):
         return super().available and device is not None and device.available
 
 
-class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
-    """에어원 엔티티 베이스.
+def airone_device_info(device: AironeDevice) -> DeviceInfo:
+    """Share complete parent metadata between setup and platform entities."""
+    firmware = device.rc_version
+    if firmware and device.odu_version:
+        firmware = f"{firmware} (실외기 {device.odu_version})"
+    elif not firmware and device.odu_version:
+        firmware = f"실외기 {device.odu_version}"
 
-    매트와 기기 정보 구성이 다르다 — 실내기(방 컨트롤러)와 실외기가 각자 펌웨어를
-    가지므로 둘을 한 줄로 합친다. `modelType` 은 에어원에 없다.
+    return DeviceInfo(
+        identifiers={(DOMAIN, device.device_id)},
+        manufacturer="경동나비엔",
+        name=device.nickname,
+        model=device.model_name,
+        model_id=device.model_code or None,
+        serial_number=device.device_id,
+        sw_version=firmware,
+    )
+
+
+class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
+    """Base for Airone entities.
+
+    Device info is built differently from a mat: the indoor unit (room controller) and the
+    outdoor unit each carry firmware, so the two are joined into one line. Airone has no
+    `modelType`.
     """
 
     _attr_has_entity_name = True
@@ -73,21 +94,7 @@ class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
         self._device_id = device.device_id
         self._attr_unique_id = f"{device.device_id}"
 
-        firmware = device.rc_version
-        if firmware and device.odu_version:
-            firmware = f"{firmware} (실외기 {device.odu_version})"
-        elif not firmware and device.odu_version:
-            firmware = f"실외기 {device.odu_version}"
-
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            manufacturer="경동나비엔",
-            name=device.nickname,
-            model=device.model_name,
-            model_id=device.model_code or None,
-            serial_number=device.device_id,
-            sw_version=firmware,
-        )
+        self._attr_device_info = airone_device_info(device)
 
     @property
     def device(self) -> AironeDevice | None:
@@ -99,14 +106,43 @@ class AironeEntity(CoordinatorEntity[NavienSmartCoordinator]):
         return super().available and device is not None and device.available
 
 
+class BoilerEntity(CoordinatorEntity[NavienSmartCoordinator]):
+    """Base for boiler sensor and setpoint entities."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator)
+        self._device_id = device.device_id
+        self._attr_unique_id = device.device_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device.device_id)},
+            manufacturer="경동나비엔",
+            name=device.nickname,
+            model=device.model_name,
+            model_id=device.model_code or None,
+            serial_number=device.device_id,
+        )
+
+    @property
+    def device(self) -> BoilerDevice | None:
+        return self.coordinator.boilers.get(self._device_id)
+
+    @property
+    def available(self) -> bool:
+        device = self.device
+        return super().available and device is not None and device.available
+
+
 class AironeMonitorEntity(CoordinatorEntity[NavienSmartCoordinator]):
-    """에어모니터(공기질 센서 본체) 엔티티 베이스.
+    """Base for the air monitor (the air-quality sensor unit) entities.
 
-    본체와 **별도 기기**로 만든다. 앱에서도 따로 등록·연결하는 부속이고,
-    자체 모델명·펌웨어를 가진다. `via_device` 로 본체에 매달아 관계를 남긴다.
+    It is modelled as a **separate device** from the main unit: the app registers and pairs
+    it separately, and it carries its own model name and firmware. `via_device_id` records the
+    relationship to the main unit.
 
-    `modelCode` 가 1000 미만이지만(실측 NAA-21DM=35) **제어 대상이 아니라**
-    세대 판정과 무관하다.
+    Its `modelCode` is below 1000 (observed: NAA-21DM = 35), but it **takes no commands**,
+    so that number says nothing about the protocol generation.
     """
 
     _attr_has_entity_name = True
@@ -127,12 +163,12 @@ class AironeMonitorEntity(CoordinatorEntity[NavienSmartCoordinator]):
             identifiers={(DOMAIN, monitor_id)},
             manufacturer="경동나비엔",
             name=f"{device.nickname} 에어모니터",
-            # 모델명을 코드에 적지 않는다. 서버가 코드만 주면 코드를 보여준다.
+            # Do not hard-code a model name. When the server sends only a code, show the code.
             model="에어모니터",
             model_id=str(model_code) if model_code is not None else None,
             serial_number=monitor_id,
             sw_version=monitor.get("version") or None,
-            via_device=(DOMAIN, device.device_id),
+            via_device_id=coordinator.airone_device_registry_ids[device.device_id],
         )
 
     @property

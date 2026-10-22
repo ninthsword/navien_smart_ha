@@ -1,11 +1,11 @@
-"""Home Assistant 없이 통합 모듈을 실제로 import 하기 위한 최소 스텁.
+"""A minimal stub so the integration modules can actually be imported without Home Assistant.
 
-`py_compile` 은 문법만 본다. **클래스 본문의 이름 오류** — 지운 import 를 계속
-참조한다든지 — 는 실제로 import 해 봐야 나온다. 그래서 HA 를 설치하지 않고도
-전 모듈을 불러볼 수 있게 필요한 만큼만 흉내 낸다.
+`py_compile` checks syntax only. **A name error in a class body** — still referencing an
+import that was deleted, say — only surfaces on a real import. So just enough of HA is
+imitated for every module to be loaded without installing it.
 
-여기 있는 것은 **이름과 모양뿐**이다. HA 의 동작을 재현하지 않는다. HA 가 실제로
-어떻게 도는지 알아야 하는 시험은 HA 원본을 직접 받아 쓴다.
+What lives here is **names and shapes only**; none of HA's behaviour is reproduced. A test
+that needs to know how HA really behaves takes HA's own source instead.
 """
 
 import sys
@@ -23,7 +23,7 @@ def stub(name: str, pkg: bool = False, **attrs) -> types.ModuleType:
 
 
 class Base:
-    """무엇이든 받아주는 껍데기. 상속·제네릭 첨자 모두 통과시킨다."""
+    """A shell that accepts anything, allowing both subclassing and generic subscripting."""
 
     def __init__(self, *args, **kwargs) -> None:
         pass
@@ -43,6 +43,7 @@ stub("homeassistant", pkg=True)
 stub("homeassistant.helpers", pkg=True)
 stub("homeassistant.components", pkg=True)
 stub("homeassistant.util", pkg=True)
+stub("homeassistant.util.dt", now=lambda: None)
 stub("homeassistant.core", HomeAssistant=type("H", (), {}), callback=lambda f: f)
 stub("homeassistant.util.ssl", get_default_context=lambda: None)
 stub(
@@ -73,6 +74,7 @@ stub(
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER="µg/m³",
     UnitOfTemperature=enum(CELSIUS="°C", FAHRENHEIT="°F"),
     UnitOfTime=enum(MINUTES="min", SECONDS="s"),
+    UnitOfVolume=enum(CUBIC_METERS="m³"),
 )
 stub(
     "homeassistant.exceptions",
@@ -96,6 +98,7 @@ stub(
 )
 stub("homeassistant.helpers.device_registry", DeviceInfo=dict, format_mac=lambda x: x)
 stub("homeassistant.helpers.storage", Store=Base)
+stub("homeassistant.helpers.recorder", get_instance=lambda hass: None)
 stub("homeassistant.helpers.debounce", Debouncer=Base)
 stub(
     "homeassistant.helpers.aiohttp_client",
@@ -106,6 +109,7 @@ stub("homeassistant.helpers.typing", ConfigType=dict)
 stub(
     "homeassistant.helpers.event",
     async_track_time_interval=lambda *a, **k: (lambda: None),
+    async_track_time_change=lambda *a, **k: (lambda: None),
     async_call_later=lambda *a, **k: (lambda: None),
 )
 stub("homeassistant.loader", async_get_integration=lambda *a, **k: None)
@@ -126,7 +130,9 @@ stub(
     "homeassistant.components.binary_sensor",
     pkg=True,
     BinarySensorEntity=Base,
-    BinarySensorDeviceClass=enum(HEAT="heat", PROBLEM="problem", LOCK="lock"),
+    BinarySensorDeviceClass=enum(
+        HEAT="heat", PROBLEM="problem", LOCK="lock", RUNNING="running"
+    ),
 )
 stub("homeassistant.components.select", pkg=True, SelectEntity=Base)
 stub(
@@ -134,6 +140,8 @@ stub(
     pkg=True,
     SensorEntity=Base,
     SensorDeviceClass=enum(
+        ENUM="enum",
+        GAS="gas",
         TEMPERATURE="temperature",
         HUMIDITY="humidity",
         CO2="carbon_dioxide",
@@ -141,19 +149,33 @@ stub(
         PM10="pm10",
         PM1="pm1",
     ),
-    SensorStateClass=enum(MEASUREMENT="measurement"),
+    SensorStateClass=enum(MEASUREMENT="measurement", TOTAL="total"),
+)
+stub("homeassistant.components.recorder", pkg=True, get_instance=lambda hass: None)
+stub("homeassistant.components.recorder.models", pkg=True, StatisticData=dict, StatisticMetaData=dict)
+stub(
+    "homeassistant.components.recorder.models.statistics",
+    StatisticMeanType=enum(NONE=0, ARITHMETIC=1, CIRCULAR=2),
+)
+stub(
+    "homeassistant.components.recorder.statistics",
+    async_add_external_statistics=lambda *a, **kw: None,
+    statistics_during_period=lambda *a, **kw: {},
 )
 stub(
     "homeassistant.components.number",
     pkg=True,
     NumberEntity=Base,
     NumberMode=enum(BOX="box", SLIDER="slider", AUTO="auto"),
-    NumberDeviceClass=enum(HUMIDITY="humidity"),
+    NumberDeviceClass=enum(HUMIDITY="humidity", TEMPERATURE="temperature"),
 )
 stub(
     "homeassistant.components.climate",
     pkg=True,
     ClimateEntity=Base,
+)
+stub(
+    "homeassistant.components.climate.const",
     ClimateEntityFeature=enum(TARGET_TEMPERATURE=1, TURN_ON=2, TURN_OFF=4),
     HVACMode=enum(HEAT="heat", OFF="off", COOL="cool"),
     HVACAction=enum(HEATING="heating", IDLE="idle", OFF="off", COOLING="cooling"),

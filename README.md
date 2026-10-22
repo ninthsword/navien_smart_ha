@@ -13,17 +13,136 @@
 | 숙면매트 — 온도형 | **됩니다.** 실기기(EME-520/521) 검증 — 전원 · 온도 · 좌우 따로 끄기 |
 | 숙면매트 — 사계절 | 난방·냉방·**계절 전환** 됩니다. 실기기(EMF520) 확인 |
 | 환기청정 (에어원) | **됩니다.** 신형·구형 둘 다. **모델명으로는 못 가립니다** |
-| 보일러 | 안 됩니다. 제보는 받습니다 |
+| 보일러 | `NR-67D` 센서와 **전원·빠른온수·터보온수·설정온도 제어** |
 | 월패드 · 로비폰 · 상업용 | 범위가 아닙니다 |
 
-**확인한 것은 다섯 대입니다** — `EME-500`(단계형 싱글·더블) · `EMF520`(사계절·온도형) ·
+**매트에서 확인한 것은 다섯 대입니다** — `EME-500`(단계형 싱글·더블) · `EMF520`(사계절·온도형) ·
 `EME-520/521`(온도형 싱글·퀸).
 나머지 모델은 구조가 같아 될 것으로 봅니다. 안 되면
 [알려 주시면](#문제가-있거나-제보하실-때) 고칩니다.
 
-**모델별 표를 코드에 넣지 않았습니다.** 서버가 알려주는 제어 방식과 값 범위를 따르므로
-목록에 없는 모델도 동작할 가능성이 높습니다. 모르는 값이 오면 추측해 제어하지 않고
-건너뛰며 로그에 이유를 남깁니다.
+보일러는 `NR-67D`에서 MQTT 상태 구조와 온도 배율을 실측했습니다. 실내 온도,
+난방수 공급·환수 온도, 온수 온도, 온돌·온수 설정 온도, 실내 습도를 센서로 만듭니다.
+앱 코드·공식 설명서·실기기 온도 변화를 함께 확인해 **운전 상태** 센서에 `꺼짐`,
+`대기`, `연소`를 표시합니다. 선택된 모드는 별도 **운전 모드** 센서에 `외출`,
+`실내 난방`, `온돌 난방`, `반복 예약`, `24시간 예약`, `온수 전용`으로 표시하고,
+원시 `operationMode`와 `operationBusy` 값도 속성으로 남깁니다.
+보일러가 첫 상태 프레임을 보내기 전에는 센서가 `unavailable`일 수 있습니다.
+보일러가 상태를 스스로 올리는 동안에는 추가로 묻지 않으며, 마지막 송수신 뒤 5분간
+아무 통신이 없을 때만 상태를 한 번 요청합니다. 요청이 실패해도 5분 뒤 다시 시도합니다.
+
+`NR-67D`(`modelCode=20`)에는 **온수 설정 온도**와 **난방수 설정 온도** 숫자
+엔티티도 만듭니다. 앱 2.10.4의 명령·토픽·값 인코딩을 그대로 따르고, 서버가 알려준
+범위(이 기기에서는 온수 30~60℃, 난방수 30~65℃) 안에서 0.5℃ 단위로만 보냅니다.
+히팅 여부와 관계없이 설정 온도를 제어하며, 명령 뒤 실제 상태를 다시 요청합니다.
+앱과 기기 기능 정보에서 함께 확인된 경우 **전원**, **빠른온수**, **빠른온수
+스마트운전**, **터보온수** 스위치도 만듭니다. 명령 뒤에는 값을 미리 바꾸지 않고
+실제 상태를 다시 요청합니다. 가스 사용량 지원 기기에는 앱과 같은 조회로 **이번 달
+가스 사용량**과 **오늘 가스 사용량** 센서를 만들며, 난방·온수 사용량을 속성에
+표시합니다. 누적량은 원시값을 앱과 같이 10으로 나누어 m³로 표시하고 한 시간마다
+갱신합니다. 오늘 값은 Home Assistant 현지 날짜를 기준으로 고르고 자정에 날짜를
+바꿉니다.
+
+### 가스 사용량은 지난 기록까지 남습니다
+
+**앱의 가스 사용량 화면과 같은 자료를 그대로 가져옵니다.** 조회 한 번에 일별 두
+달치와 월별 두 해치가 함께 오기 때문입니다. 이것을 **전체 · 난방 · 온수** 세
+갈래의 장기 통계로 넣습니다.
+
+**엔티티 이력이 아니라 통계입니다.** 상태 이력은 `purge_keep_days` 가 지나면
+지워지지만 통계는 지워지지 않습니다.
+
+> **「이력」 화면에는 안 나옵니다.** 그 화면은 엔티티의 상태 기록만 그립니다.
+> 지난 기록은 엔티티가 아니라 **통계**로 들어가므로 보는 곳이 다릅니다.
+> 센서 두 개(`이번 달`·`오늘`)는 통합을 설치한 뒤부터만 쌓이지만, 아래 통계는
+> 설치 전 기록까지 들어 있습니다.
+
+찾는 곳은 세 군데입니다.
+
+| | |
+| --- | --- |
+| 개발자 도구 → **통계** | 값을 직접 확인·수정 |
+| **통계 그래프 카드** | 월별·일별 막대 (아래 예시) |
+| **에너지** 대시보드 | 가스 소비량으로 등록 |
+
+통계 이름은 이렇습니다 — `<기기ID>` 는 진단 파일이나 통계 목록에서 찾으실 수
+있습니다.
+
+```
+navien_smarthome:boiler_<기기ID>_gas_total       전체
+navien_smarthome:boiler_<기기ID>_gas_heating     난방
+navien_smarthome:boiler_<기기ID>_gas_hot_water   온수
+```
+
+월별 막대를 그리는 카드입니다.
+
+```yaml
+type: statistic-graph
+title: 가스 사용량
+period: month
+stat_types:
+  - change
+chart_type: bar
+entities:
+  - navien_smarthome:boiler_<기기ID>_gas_heating
+  - navien_smarthome:boiler_<기기ID>_gas_hot_water
+```
+
+`period: day` 로 바꾸면 앱의 `일별` 탭과 같은 그래프가 됩니다.
+
+> **에너지 대시보드에는 하나만 넣으세요.** 전체·난방·온수는 같은 가스를 나눠 본
+> 것이라 함께 넣으면 두 번 세어집니다.
+
+**HA 가 꺼져 있던 구간도 채워집니다.** 조회할 때마다 그 기간을 통째로 다시
+써넣으므로, 재시작이나 정전으로 빠진 날이 다음 조회 한 번에 메워집니다. 나비엔이
+값을 나중에 고쳐도 따라갑니다.
+
+### 그 밖에 만들어지는 보일러 센서
+
+| 엔티티 | |
+| --- | --- |
+| 외기 온도 | **지역 기상 관측값** — 집에서 잰 값이 아닙니다 (아래) |
+| 온수 사용 중 | 수도를 열면 켜집니다 — 샤워·설거지 감지 |
+| 온수 연속 사용 | 별도 읽기 전용 센서 — `DHWUseSustained` (1=꺼짐, 2=켜짐) |
+| 온수 유량 · 난방 유량 | 분당 리터 (진단) |
+| Wi-Fi 신호 | 룸콘 신호 세기 (진단) — **단위는 확인 못 했습니다** |
+| 고장 상태 | `faultStatus` 비트가 0 이 아닌지 (진단) |
+| 난방 강도 | **읽기 전용** — 단계 이름을 확인 못 해 숫자만 |
+| 예약 | **읽기 전용** — 주간·빠른온수 예약 on/off, 반복 주기 |
+
+`온수 사용 중` 센서의 기존 `연속 사용` 속성도 호환성을 위해 그대로 유지합니다.
+
+> **외기 온도는 보일러가 잰 값이 아닙니다.** 실측 대조에서 이 값이 27.0℃ 일 때
+> 같은 시각 기상청 서울 관측이 27.0℃ 로 정확히 같았고, 동네 추정치는 25.8℃ 로
+> 달랐습니다. 지금까지 본 값도 늘 정수 ℃ 입니다. **집 마당 기온으로 쓰지
+> 마세요** — 창문 열림 판단 같은 자동화에는 집에 둔 온도계가 맞습니다.
+
+**난방 강도와 예약은 바꿀 수 없습니다.** 공식 `NCB753` 설명서를 전수 확인했는데
+**「난방 강도」라는 설정 자체가 없습니다** — 단계로 조절하는 것은 화면 밝기와 근접
+센서(둘 다 OFF~5단계)뿐입니다. 서버가 준 범위도 `최소 3 · 최대 1` 로 뒤집혀 있어
+방향조차 알 수 없습니다. 설치자용 내부 값으로 보고 숫자만 남깁니다. 예약은 시간표
+전체를 한 번에 덮는 프로토콜이라 잘못 보내면 실제 예약이 지워집니다.
+
+> **설명서의 「가스비 절감」은 설정이 아니라 표시입니다.** 실내온도조절기 화면에
+> 아이콘으로 뜨는 것이고, 조절하는 항목이 아닙니다. 그 아이콘을 켜는 상태 값이
+> 무엇인지는 아직 못 찾았습니다.
+
+**오류 코드 센서에 설명서의 이름이 붙습니다.** `E001` 같은 표기와 「열교환기 과열」
+같은 이상 발생 내용을 속성으로 넣습니다. 설명서 표에 없는 번호는 이름을 비워 두고
+숫자만 보여줍니다.
+
+운전모드 변경과 주간예약·AI 예측표 편집은 아직 만들지 않았습니다. 스케줄 전체를
+한 번에 덮는 별도 프로토콜이라, 실제 예약을 손상하지 않는 검증이 더 필요합니다.
+
+> **`외출` 은 공식 앱에서도 룸콘 실물 버튼에서도 걸리지 않는 사례가 있습니다.**
+> 눌러도 운전모드가 바뀌지 않고, 앱은 설정됐다는 팝업만 띄웁니다. 룸콘과 보일러가
+> 접점 방식으로 연결된 설치라 그 배선으로는 모드가 전달되지 않는 것일 수도 있고
+> 기기 이상일 수도 있어, 지금 자료로는 가릴 수 없습니다 — 제조사 문의가 필요한
+> 사안입니다. 저희가 명령을 열지 않는 이유이기도 합니다.
+
+**숙면매트와 에어원은 모델별 표를 코드에 넣지 않았습니다.** 서버가 알려주는 제어
+방식과 값 범위를 따르므로 목록에 없는 모델도 동작할 가능성이 높습니다. 보일러 제어는
+반대로 프로토콜을 확인한 `modelCode=20`에만 만들며, 나머지는 추측하지 않습니다.
 
 ---
 
@@ -124,7 +243,7 @@
 
 ## 설치
 
-**Home Assistant 2025.2 이상이 필요합니다.**
+**Home Assistant 2026.8.0 이상이 필요합니다.**
 
 1. HACS → 사용자 지정 저장소에 이 저장소를 추가
 2. `Navien Smart` 설치 후 Home Assistant 재시작
@@ -183,6 +302,7 @@
 | 희망습도 (제습 · 기본풍량) | `number` |
 | 운전상태 · 오류 코드 · 필터 잔량 | `sensor` |
 | 오류 | `binary_sensor` |
+| 공기질 자료 끊김 | `binary_sensor` — 진단 (아래) |
 | 공기질 9종 | `sensor` — 에어모니터가 있으면 **별도 기기**에 |
 
 **올인원 룸콘은 에어모니터 없이도 공기질이 나옵니다.** 룸콘에 센서가 들어 있습니다.
@@ -198,6 +318,27 @@
 **휘발성유기화합물(TVOC)과 통합공기질은 단위 없이 숫자만 나옵니다.** 나비엔이
 단위를 쓰지 않아 확인할 수 없었습니다. 라돈은 `Bq/㎥` 입니다(국내 기준 148 Bq/㎥).
 등급(좋음/보통/나쁨)은 각 센서의 `grade` 속성에 있습니다.
+
+> **라돈이 늘 `0` 이면 그 기기에는 라돈 센서가 없는 것입니다.** 서버는 센서가
+> 없어도 `0` 을 보내 줄 뿐, 「없다」고 말해 주지 않습니다. 저희도 그 둘을 가릴
+> 수 없어 센서를 만들고, 값이 계속 0 이면 HA 에서 그 엔티티를 숨기시면 됩니다.
+> 실기기(`NRT-20D`)에서 확인된 사례입니다.
+
+#### 자료가 끊기면 알려 드립니다
+
+**에어모니터와 룸콘 사이 통신이 끊기면 서버가 온도·습도만 주기 시작합니다.**
+오류 코드도 안 오고 조회도 성공하므로 어디에도 티가 나지 않습니다 — 값이 며칠씩
+멈춰 있어도 화면만 봐서는 알 수 없습니다.
+
+**한 번이라도 값이 온 종류를 기억해 둡니다.** 그래서 재시작해도 엔티티가
+사라지지 않고, 값이 돌아오면 이력이 그대로 이어집니다. 값 자체는 되살리지
+않습니다 — 며칠 지난 수치를 현재값처럼 보여주는 것이 「알 수 없음」보다
+나쁩니다.
+
+전에 받던 항목이 안 오면 **`공기질 자료 끊김`** 이 켜지고, 무엇이 빠졌는지·
+마지막으로 값이 바뀐 지 얼마나 됐는지를 속성에 적습니다. 기기가 「센서가 없다」고
+말한 적은 없으므로 **고장이라고 하지 않습니다** — 전에 받아봤는데 지금은 안
+온다는 관찰만 알립니다.
 
 ---
 
@@ -282,12 +423,69 @@ HA 화면이 멈춰 보입니다.
 
 ## 시험
 
+빠른 회귀 시험은 외부 패키지 없이 Python 3.11 이상에서 실행됩니다.
+
 ```bash
 python3 tests/run.py
 ```
 
 **Home Assistant 를 설치하지 않아도 돌아갑니다.** 파이썬만 있으면 됩니다.
 자세한 것은 [`tests/README.md`](tests/README.md) 를 봐 주세요.
+
+실제 Home Assistant 2026.8 API 계약, 타입 검사, lint까지 확인하려면 Python 3.14와
+`uv`로 잠긴 개발 환경을 만듭니다.
+
+```bash
+uv venv --python 3.14
+uv pip sync --python .venv/bin/python --require-hashes requirements-dev.lock
+.venv/bin/pytest
+.venv/bin/mypy custom_components/navien_smarthome
+.venv/bin/ruff check custom_components tests tests_ha tools
+```
+
+`tests_ha/`는 Navien HTTP·MQTT 경계를 모두 mock한 채 실제 Home Assistant 코어와
+recorder를 사용합니다. 실제 계정이나 기기에 접속하지 않습니다.
+
+### 화면 검증
+
+실제 Home Assistant 2026.10 을 자체 화면 그대로 띄우고, 가짜 나비엔 기기(매트, 에어원,
+보일러 하나씩)를 붙여 사람처럼 조작합니다. 로그인한 뒤 통합 구성 요소 추가로 Navien Smart 를
+설정 흐름대로 등록하고, 한국어 문구와 기기 세 대가 화면에 보이는지 확인합니다. 기기 페이지는
+데스크톱 폭과 휴대폰 폭에서 각각 열어 보고, 화면마다 스크린샷을 남깁니다. 나비엔 서버,
+실제로 쓰는 Home Assistant, 기기에는 접속하지 않습니다. 네트워크가 없어도 되지만, 네트워크가
+있으면 새로 설치한 Home Assistant 와 마찬가지로 온보딩 과정에서 기본 통합 구성 요소인 met,
+radio_browser, google_translate 가 시작되고 브라우저가 Home Assistant 의 브랜드 이미지를
+불러오므로 인터넷에 접속할 수 있습니다.
+
+```bash
+uv venv --python 3.14.7 .venv-ui
+uv pip sync --python .venv-ui/bin/python --require-hashes requirements-ui.lock
+.venv-ui/bin/python -m playwright install chromium
+out=$(mktemp -d /tmp/navien-ui-check.XXXXXX)
+.venv-ui/bin/python -B devtools/ui_check/check.py --out "$out/shots"
+```
+
+`--out` 에는 없거나 비어 있는 디렉터리를 주세요. 이미 파일이 있는 디렉터리는 거부되므로 실행할
+때마다 `mktemp -d` 로 새 디렉터리를 만드세요. 스크린샷과 Home Assistant 로그가 그 안에
+남습니다. GitHub Actions 도 push 와 pull request 마다 이 검증을 돌리고, 스크린샷을 7일 동안
+보관합니다.
+
+### Pyright development check
+
+Pyright 1.1.413 checks all 37 maintained Python files, including the offline suite,
+real Home Assistant tests and CLI source. Use Node.js 24 and the existing hash-locked
+Python 3.14 development environment above, with uv 0.12.5:
+
+```sh
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv/bin/python --outputjson
+```
+
+The private npm package lives under `devtools/pyright`. Existing strict mypy, Ruff,
+Python 3.11/3.14 offline tests and real Home Assistant tests remain required. The
+`custom_components` search path mirrors the offline harness imports; only generated
+cache and environment directories are excluded. Type checking the CLI does not run
+it or connect to an account or device.
 
 ---
 
@@ -313,3 +511,71 @@ python3 tools/navien_cli.py airone-modes --device-seq N   # 환기청정 지원 
 MIT. 이 프로젝트는 경동나비엔과 무관하며 앱 동작을 분석해 만든 비공식 통합입니다.
 [kyle-seongwoo-jun/homebridge-navien-smart](https://github.com/kyle-seongwoo-jun/homebridge-navien-smart)
 의 인증 흐름 분석을 참고했습니다.
+
+
+## Home Assistant 2026.9 호환성 검증
+
+기존 2026.8 최소 버전 검증은 유지합니다. 2026.9.2 검증은 Python 3.14.7과
+별도 해시 잠금 파일을 사용하며, 실제 서비스나 장치에 연결하지 않습니다.
+`uv==0.12.5`, Node.js 24와 저장소의 잠긴 Pyright 의존성을 사용합니다.
+
+```sh
+uv venv --python 3.14.7 .venv-ha2026.9
+uv pip sync --python .venv-ha2026.9/bin/python --require-hashes requirements-ha2026.9.lock
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+.venv-ha2026.9/bin/python -B tests/run.py
+.venv-ha2026.9/bin/python -B -m pytest -p no:cacheprovider --log-disable=sqlalchemy.engine.Engine tests_ha
+```
+
+가벼운 기존 테스트와 실제 Home Assistant pytest 테스트는 별도 프로세스에서
+실행합니다. 새 pytest 파일은 2026.9 작업에서 명시적으로 타입 검사하며,
+기존 2026.8 환경에 pytest 플러그인을 추가하지 않습니다.
+
+## Home Assistant 2026.10 호환성 검증
+
+기존 검증 환경과 별도로 안정판 Home Assistant 2026.10.0, Python 3.14.7,
+`uv==0.12.5`, Node.js 24를 사용합니다. 새 의존성 입력과 해시 잠금 파일은
+`requirements-ha2026.10.in`, `requirements-ha2026.10.lock`입니다.
+
+테스트 플러그인 `pytest-homeassistant-custom-component==0.13.370`의 메타데이터는
+`homeassistant==2026.10.0b4`를 요구하므로, 단일 코어 버전만 지정한
+`requirements-ha2026.10-overrides.in`으로 안정판을 선택합니다. CI는 설치된
+Python·코어·플러그인 버전을 확인하고 전체 의존성 메타데이터를 검사합니다.
+플러그인의 이 베타 버전 요구와 설치된 안정판 사이의 불일치가 정확히 하나일
+때만 허용하며, 누락된 의존성이나 다른 버전 불일치는 실패로 처리합니다.
+
+의존성 입력을 변경할 때는 같은 도구와 재정의 파일로 잠금을 다시 생성하세요.
+
+```sh
+uv pip compile --python 3.14.7 --generate-hashes --override requirements-ha2026.10-overrides.in requirements-ha2026.10.in -o requirements-ha2026.10.lock
+```
+
+전용 환경에서 `devtools/ha2026_10_typing.py`를 먼저 실행하세요. HA의 런타임
+재노출과 Probatio 별칭을 타입 검사기가 인식하도록, 설치된 소스에서 `.pyi`
+파일 네 개를 생성합니다. 원본 런타임 `.py`와 배포 메타데이터는 해시로
+보호하며, 코어·플러그인·Probatio 버전과 실제 객체의 동일성도 확인합니다.
+다른 가상환경, 예상과 다른 import 구조나 기존 타입 파일은 실패로 처리합니다.
+동일한 생성 결과가 이미 있으면 다시 쓰지 않습니다. 이어지는 가드 테스트는
+임시 파일과 새 프로세스로 실패 조건을 검사합니다. 이 준비는 2026.10 환경에만
+적용되며, 기존 검증 환경과 통합구성요소의 런타임 import는 그대로 유지합니다.
+
+다음 명령은 외부 서비스나 장치에 연결하지 않고, 기존 오프라인 테스트와 실제
+Home Assistant 테스트를 별도 프로세스로 실행합니다. CI는 같은 검사에 위의
+버전 및 메타데이터 검사를 추가합니다.
+
+```sh
+python -m pip install uv==0.12.5
+uv venv --python 3.14.7 .venv-ha2026.10
+uv pip sync --python .venv-ha2026.10/bin/python --require-hashes requirements-ha2026.10.lock
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+.venv-ha2026.10/bin/python -B devtools/ha2026_10_typing.py
+.venv-ha2026.10/bin/python -B -m unittest discover -s devtools -p test_ha2026_10_typing.py -v
+.venv-ha2026.10/bin/python -B -m pytest --collect-only -p no:cacheprovider --disable-socket --allow-unix-socket --log-disable=sqlalchemy.engine.Engine tests_ha
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.10/bin/python
+.venv-ha2026.10/bin/python -B tests/run.py
+.venv-ha2026.10/bin/python -B -m pytest -p no:cacheprovider --disable-socket --allow-unix-socket --log-disable=sqlalchemy.engine.Engine tests_ha
+.venv-ha2026.10/bin/ruff check --no-cache custom_components tests tests_ha tools
+.venv-ha2026.10/bin/mypy --cache-dir=/dev/null custom_components
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.10/bin/python devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
+.venv-ha2026.10/bin/ruff check --no-cache devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
+```

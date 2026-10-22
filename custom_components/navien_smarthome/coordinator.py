@@ -1,38 +1,50 @@
-"""기기 목록(REST)과 실시간 상태(MQTT)를 합친다.
+"""Combine the device list (REST) with live state (MQTT).
 
-폴링 주기가 긴 이유는 게으름이 아니다 — 기기가 상태를 스스로 올리는 것을 실측으로
-확인했으므로, 폴링은 **재접속 후 초기 동기화와 기기 목록 변화 감지**만 담당한다.
+The long polling interval is not laziness: devices were confirmed on real hardware to push
+their own state, so polling only handles **the initial sync after a reconnect and noticing
+changes to the device list**.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .airone import AironeDevice
 from .api import (
     AwsCredentials,
     NavienSmartApi,
     NavienSmartAuthError,
     NavienSmartError,
 )
-from homeassistant.helpers.storage import Store
-
-from .airone import AironeDevice, _dig
+from .boiler import (
+    BOILER_GAS_METER_UPDATE,
+    BOILER_GAS_REFRESH_SECONDS,
+    BOILER_OBSERVATION_KEEP,
+    BOILER_READBACK_DELAY_SECONDS,
+    BOILER_SILENCE_REFRESH_SECONDS,
+    BoilerDevice,
+    safe_diagnostic_key,
+)
 from .const import (
     AIRONE_AIR_ERROR_LOG_EVERY,
     AIRONE_CMD_CHANGE_MODE,
     AIRONE_CMD_POWER,
     AIRONE_CMD_STATUS,
     AIRONE_READBACK_DELAY_SECONDS,
+    AIRONE_SENSOR_KINDS,
     AIRONE_SILENCE_CHECK_SECONDS,
     AIRONE_TOPIC_FMT,
     AIRONE_UPDATE_INTERVAL_SECONDS,
@@ -42,11 +54,13 @@ from .const import (
     REPORT_WANTED_NOTES,
     REPORT_WANTED_SERVICE_CODES,
     SERVICE_AIRONE,
+    SERVICE_BOILER,
     SERVICE_NAMES,
     SUPPORTED_SERVICE_CODES,
     TOPIC_PREFIX,
     UPDATE_INTERVAL_SECONDS,
 )
+from .gas_statistics import async_import_gas_statistics
 from .models import NavienDevice
 from .mqtt import NavienSmartMqtt
 
@@ -63,18 +77,21 @@ def _as_int(value: Any) -> int | None:
 
 
 def _key_map(raw: dict[str, Any], depth: int = 5) -> str:
-    """응답의 키 구조만 문자열로. **값은 담지 않는다** — 로그에 개인정보가 남는다."""
+    """Render only the key structure of a response. **No values** — those would leave personal data in the log."""
 
     def walk(value: Any, level: int) -> Any:
         if not isinstance(value, dict) or level <= 0:
             return "..." if isinstance(value, dict) else type(value).__name__
-        return {key: walk(inner, level - 1) for key, inner in value.items()}
+        return {
+            safe_diagnostic_key(key, index): walk(inner, level - 1)
+            for index, (key, inner) in enumerate(value.items())
+        }
 
     return str(walk(raw.get("Properties"), depth))
 
 
 class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
-    """`data` 는 `deviceId` → `NavienDevice` 다."""
+    """`data` maps `deviceId` to `NavienDevice`."""
 
     def __init__(
         self,
@@ -89,15 +106,15 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             name=DOMAIN,
             update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS),
             config_entry=entry,
-            # **밖에서 우리를 얼마나 자주 깨울 수 있는지의 하한.**
+            # **The floor on how often anything outside can wake us.**
             #
-            # HA 기본값은 10초다(`REQUEST_REFRESH_DEFAULT_COOLDOWN`). 그대로 두면
-            # `homeassistant.update_entity` 를 10초마다 부르는 자동화 하나가
-            # 계정 하나로 하루 8,640번 나비엔 서버를 두드린다. 비공식 클라이언트가
-            # 감당할 수도, 감당해서도 안 되는 양이다.
+            # HA defaults to 10 seconds (`REQUEST_REFRESH_DEFAULT_COOLDOWN`). Left there, a
+            # single automation calling `homeassistant.update_entity` every 10 seconds would
+            # hit Navien's servers 8,640 times a day from one account — more than an
+            # unofficial client can carry, or should.
             #
-            # `immediate=True` 는 기본값 그대로 둔다 — 첫 요청은 즉시 처리하고
-            # 뒤이어 몰려오는 것만 하나로 묶는다. 「지금 새로고침」은 계속 먹는다.
+            # `immediate=True` stays at its default: the first request is served at once and
+            # only the flood behind it is coalesced, so "refresh now" keeps working.
             request_refresh_debouncer=Debouncer(
                 hass,
                 _LOGGER,
@@ -107,53 +124,83 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         )
         self.api = api
         self.home_seq = home_seq
-        # 지원하지 않는 기기까지 원본을 들고 있는다. 진단 내보내기에 필요하다 —
-        # 환기청정·보일러 사용자가 제보할 때 이게 유일한 근거가 된다.
+        # The raw payload is kept even for unsupported devices, because the diagnostics export
+        # needs it — it is the only evidence an Airone or boiler owner can attach to a report.
         self.raw_devices: list[dict[str, Any]] = []
         self.unsupported: list[dict[str, Any]] = []
-        # 에어원은 매트와 상태 체계가 달라 같은 dict 에 섞지 않는다. 검증이 끝난
-        # 매트 경로를 건드리지 않는 것이 우선이다.
+        # Airone has a different state scheme from a mat and is never mixed into the same
+        # dict. Leaving the verified mat path undisturbed comes first.
         self.airone: dict[str, AironeDevice] = {}
-        # 구세대는 `remote/status` 요청에 답하지 않는다. 마지막으로 받은 상태를
-        # 남겨 두었다가 시작할 때 되살린다 — 그러지 않으면 첫 조작 전까지
-        # 전원·모드·풍량이 모두 비어 보인다.
-        self._store: Store = Store(hass, 1, f"{DOMAIN}.airone_state")
-        # 되살린 기기. 진단에서 「지금 값이 복원된 것인지」를 가릴 수 있어야 한다 —
-        # 전원이 「켜짐」으로 보이는데 실제로 꺼져 있을 수 있다.
+        self.airone_device_registry_ids: dict[str, str] = {}
+        # Boilers are controlled only through the confirmed modelCode=20 commands. Received
+        # MQTT structures are de-identified and kept briefly, and confirmed state also reaches
+        # the sensors.
+        self.boilers: dict[str, BoilerDevice] = {}
+        self.boiler_observations: list[dict[str, Any]] = []
+        self._boiler_silence_unsubs: dict[str, Callable[[], None]] = {}
+        self._boiler_gas_unsubs: dict[str, Callable[[], None]] = {}
+        # **Even one-shot timers are held.** Waking after an unload or reload would have an
+        # integration that no longer exists send a request to the server. The exception is
+        # caught, but a pointless request still reaches an unofficial server, and it is
+        # inconsistent with every other timer, which is managed.
+        self._oneshot_unsubs: set[Callable[[], None]] = set()
+        self.boiler_silence_requests = 0
+        self.boiler_silence_failures = 0
+        self.boiler_gas_requests = 0
+        self.boiler_gas_failures = 0
+        self.boiler_gas_statistics_failures = 0
+        # **Overlapping statistics writes for one device corrupt the running total.** The
+        # sequence is read the previous total, add, write; if the second read happens before
+        # the first write, both start from the same value and both write the wrong one. That
+        # can really happen when the initial request overlaps the hourly refresh, or when the
+        # server returns the same response twice.
+        self._gas_statistics_locks: dict[str, asyncio.Lock] = {}
+        # The older generation never answers a `remote/status` request. The last state
+        # received is stored and restored at startup — without it, power, mode and fan speed
+        # all read as empty until the first command.
+        self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.airone_state")
+        # Devices whose state was restored. Diagnostics has to be able to tell whether a value
+        # on screen came from a restore — power can read as on while the device is off.
         self.restored_devices: set[str] = set()
-        # 「상태가 안 온다」와 「와도 못 붙인다」를 진단만으로 가리기 위한 집계.
-        # 개인정보는 없다 — 개수와 키 이름뿐이다.
-        self.drop_counts: dict[str, int] = {"mate_no_device": 0, "airone_no_device": 0}
+        # Nothing is written before what was stored has been read (`_async_remember_state`).
+        self._state_restored = False
+        # Counters that let diagnostics alone tell "no state arrives" from "it arrives and
+        # cannot be attached". Nothing personal — counts and key names only.
+        self.drop_counts: dict[str, int] = {
+            "mate_no_device": 0,
+            "airone_no_device": 0,
+            "boiler_no_device": 0,
+        }
         self._mqtt: NavienSmartMqtt | None = None
         self._skipped_logged: set[str] = set()
-        # **폴링이 돌기는 하는지**를 남긴다.
+        # Records **whether polling is running at all.**
         #
-        # 이슈 #1 에서 공기질 값이 열 시간 동안 그대로였는데, 조회 실패도 빈 응답도
-        # 0 이었다. 「방이 조용했다」와 「우리가 아예 못 읽었다」가 같은 모양으로
-        # 보였다 — 폴링 쪽 시각이 없어서다.
+        # In issue #1 the air-quality values sat unchanged for ten hours while both the
+        # failure count and the empty-response count were 0. "The room was quiet" and "we never
+        # read it at all" looked identical, because nothing recorded the polling side.
         self.poll_stamp: float | None = None
         self.poll_failures = 0
-        # **`NavienSmartError` 만 세면 나머지가 통째로 안 보인다.** 이슈 #1 에서
-        # 폴링이 설치 직후 한 번만 돌고 멈췄는데 `poll_failures` 가 0 이었다.
-        # 우리 예외가 아닌 것(응답 모양이 달라 생긴 `TypeError` 같은)이 나면
-        # 카운터에도 진단에도 흔적이 없다. 종류를 가리지 않고 세고, 마지막
-        # 것을 남긴다 — **개인정보는 없다. 예외 이름과 메시지뿐이다.**
+        # **Counting only `NavienSmartError` hides everything else.** In issue #1 polling ran
+        # once after installation and stopped, with `poll_failures` at 0. Anything that is not
+        # one of our exceptions — a `TypeError` from an unexpected response shape, say — left
+        # no trace in the counter or in diagnostics. So every kind is counted and the last one
+        # is kept. **Nothing personal: the exception name and message only.**
         self.poll_last_error: str | None = None
-        # **「불렀는데 실패」와 「아예 안 부름」을 가른다.**
+        # **Separates "called and failed" from "never called".**
         #
-        # 이슈 #1 에서 폴링이 설치 직후 한 번만 돌고 멈췄다. 실패 횟수는 0 이고,
-        # 제보자가 로그를 `navien` 으로 검색해 전부 줬는데 HA 가 갱신 실패 때
-        # 반드시 찍는 `Error fetching ... data` 가 **없었다.**
+        # In issue #1 polling ran once after installation and stopped. The failure count was
+        # 0, and although the reporter grepped their whole log for `navien`, the
+        # `Error fetching ... data` line HA always emits on a failed refresh was **absent.**
         #
-        # 그러면 남는 것은 둘뿐이다 — 우리가 못 잡는 예외로 죽거나,
-        # **HA 가 다음 차례를 아예 안 잡거나.** 성공 시각만으로는 못 가린다.
-        # 시도 자체를 세면 한 줄로 갈린다.
+        # That leaves two possibilities: we died on an exception we do not catch, or **HA
+        # never scheduled the next run.** The last success time cannot separate them; counting
+        # the attempts themselves settles it in one line.
         #
-        #   시도가 늘어난다  → 부르고 있다. 우리가 실패하는 것이다
-        #   시도가 멈춰 있다 → HA 가 안 부른다. 예약 쪽 문제다
+        #   attempts rising  -> we are being called, and we are the ones failing
+        #   attempts frozen   -> HA is not calling us; the problem is in scheduling
         self.poll_attempts = 0
 
-    # -- 수집 --------------------------------------------------------------
+    # -- collection --------------------------------------------------------
 
     async def _async_update_data(self) -> dict[str, NavienDevice]:
         self.poll_attempts += 1
@@ -162,8 +209,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         except (NavienSmartAuthError, ConfigEntryAuthFailed, UpdateFailed):
             raise
         except Exception as err:
-            # **여기까지 오면 우리가 예상 못 한 것이다.** 그대로 올려보내면
-            # HA 는 다시 잡아주지만 우리 진단에는 아무것도 안 남는다.
+            # **Reaching here means something we did not anticipate.** Re-raising lets HA
+            # catch it again, but leaves nothing at all in our diagnostics.
             self.poll_failures += 1
             self.poll_last_error = f"{type(err).__name__}: {err}"
             _LOGGER.exception("갱신 중 예상 못 한 오류가 났습니다")
@@ -188,19 +235,50 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
         previous_airone = self.airone
         airone: dict[str, AironeDevice] = {}
+        previous_boilers = self.boilers
+        boilers: dict[str, BoilerDevice] = {}
 
         for raw in raw_devices:
-            # **항목이 dict 가 아닐 수 있다.** 그때 `.get` 을 부르면
-            # `AttributeError` 가 나고, 우리 예외가 아니라 갱신이 조용히 멈춘다.
+            # **An entry may not be a dict.** Calling `.get` on one then raises
+            # `AttributeError`, which is not our exception, and the refresh stops silently.
             if not isinstance(raw, dict):
                 _LOGGER.warning(
                     "기기 목록에 예상 못 한 항목이 있어 건너뜁니다 (%s)",
                     type(raw).__name__,
                 )
                 continue
-            # 매트는 정수로 오는 것을 확인했다. 에어원도 그럴 거라 단정하지 않는다 —
-            # 문자열로 오면 비교가 조용히 실패해 기기가 통째로 사라진다.
+            # Mats were confirmed to send an integer. Airone is not assumed to do the same: a
+            # string would make the comparison fail silently and the device vanish entirely.
             service_code = _as_int(raw.get("serviceCode"))
+
+            if service_code == SERVICE_BOILER:
+                boiler = BoilerDevice.parse(raw)
+                if boiler is None:
+                    self._log_skip(
+                        raw,
+                        "응답에 deviceId·deviceSeq 가 없어 보일러를 만들지 못했습니다",
+                    )
+                    self.unsupported.append(raw)
+                    continue
+                if (old := previous_boilers.get(boiler.device_id)) is not None:
+                    # REST may return a partial server cache. Before MQTT has spoken it is the
+                    # best available snapshot; afterwards it can only fill gaps in the live
+                    # state. A REST poll never refreshes the actual-MQTT timestamp.
+                    boiler.status = (
+                        {**old.status, **boiler.status}
+                        if old.status_received_at is None
+                        else {**boiler.status, **old.status}
+                    )
+                    if boiler.physical_device_id is None:
+                        boiler.physical_device_id = old.physical_device_id
+                    boiler.status_received_at = old.status_received_at
+                    boiler.last_communication_at = old.last_communication_at
+                    boiler.gas_meter = old.gas_meter
+                    boiler.gas_received_at = old.gas_received_at
+                    boiler.observed_commands = old.observed_commands
+                boilers[boiler.device_id] = boiler
+                continue
+
             if service_code not in SUPPORTED_SERVICE_CODES:
                 self.unsupported.append(raw)
                 self._log_unsupported(raw)
@@ -223,22 +301,22 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     raw, "functions.heatControl 이 없어 난방 제어를 만들지 않습니다"
                 )
             elif not control.is_known:
-                # 값 체계를 모르는 항목은 추측해서 명령을 보내지 않는다.
+                # No command is guessed for an item whose value scheme is unknown.
                 self._log_skip(
                     raw,
                     f"heatControl.unit '{control.unit}' 은 확인된 값이 아닙니다. "
                     "난방 제어 엔티티를 만들지 않고 건너뜁니다",
                 )
 
-            # 이미 받아둔 실시간 상태를 잃지 않는다.
+            # Do not lose live state already received.
             #
-            # **기록도 함께 이어받는다.** 기기 객체는 폴링마다 새로 만든다.
-            # 이어받을 것을 빠뜨리면 그 값이 조용히 0 으로 돌아간다 — 진단 기록이
-            # 그렇게 매번 지워지고 있었다(v0.9.5).
-            if (old := previous.get(device.device_id)) is not None:
-                device.reported = old.reported
-                device.command_log = old.command_log
-                device.state_log = old.state_log
+            # **The records carry over too.** Device objects are rebuilt on every poll, and
+            # anything left off the carry-over list silently resets to zero — which is exactly
+            # how the diagnostics records were being wiped every interval (v0.9.5).
+            if (old_device := previous.get(device.device_id)) is not None:
+                device.reported = old_device.reported
+                device.command_log = old_device.command_log
+                device.state_log = old_device.state_log
 
             if device.is_four_season:
                 self._log_four_season(device)
@@ -248,6 +326,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             devices[device.device_id] = device
 
         self.airone = airone
+        self.boilers = boilers
         self._tune_interval()
         await self._async_update_air_sensors()
         self.poll_stamp = time.monotonic()
@@ -256,10 +335,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         return devices
 
     def _tune_interval(self) -> None:
-        """에어원이 있으면 폴링을 짧게 한다.
+        """Shorten the polling interval when an Airone is present.
 
-        매트 상태는 MQTT 로 오지만 **공기질은 REST 로만 읽을 수 있다.** 매트 기준
-        주기(15분)로는 미세먼지 수치가 쓸모없어진다.
+        Mat state arrives over MQTT, but **air quality can only be read over REST.** At the
+        mat interval (15 minutes) the particulate readings are useless.
         """
         wanted = timedelta(
             seconds=(
@@ -271,15 +350,15 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         if self.update_interval != wanted:
             _LOGGER.debug("폴링 주기를 %s 로 바꿉니다", wanted)
             self.update_interval = wanted
-        # **하한도 같이 따라간다.** 밖에서 우리를 깨우는 속도가 우리 폴링 주기보다
-        # 빨라지면 하한이라 부를 수 없다. `Debouncer.cooldown` 은 다음 타이머를
-        # 잡을 때 읽으므로 여기서 바꿔도 안전하다.
+        # **The floor follows along.** If outside callers can wake us faster than our own
+        # polling interval, it is not a floor at all. `Debouncer.cooldown` is read when the
+        # next timer is scheduled, so changing it here is safe.
         self._debounced_refresh.cooldown = wanted.total_seconds()
 
     def _parse_airone(
         self, raw: dict[str, Any], previous: dict[str, AironeDevice]
     ) -> AironeDevice | None:
-        """에어원 하나를 해석한다. 만들 수 없으면 이유를 로그에 남긴다."""
+        """Parse one Airone unit, logging the reason when it cannot be built."""
         device = AironeDevice.parse(raw)
         if device is None:
             self._log_skip(
@@ -291,7 +370,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return None
 
         if _as_int(device.model_code) is None:
-            # 「구세대」로 뭉개면 안 된다. 값을 못 읽은 것과 구세대인 것은 다르다.
+            # Do not lump this in as "older generation". Failing to read the value and being
+            # an older device are different things.
             self._log_skip(
                 raw,
                 f"modelCode '{device.model_code}' 를 숫자로 읽지 못해 세대를 "
@@ -301,8 +381,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             return None
 
         if not device.modes:
-            # **기기는 만든다.** 전원·운전상태·오류는 상태 응답에서 오므로
-            # 메타데이터가 없어도 쓸 수 있다. 고르는 엔티티만 빠진다.
+            # **The device is still built.** Power, running state and errors come from the
+            # status response and work without metadata; only the selection entities are
+            # missing.
             self._log_skip(
                 raw,
                 "능력 메타데이터를 찾지 못해 운전 모드·풍량·목표 습도는 만들지 "
@@ -311,15 +392,22 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 "이 로그를 제보해 주시면 바로 넓힐 수 있습니다",
             )
 
-        # 이미 받아둔 실시간 상태와 공기질을 잃지 않는다.
+        # Do not lose live state or air-quality values already received.
         #
-        # **기록과 집계도 함께 이어받는다.** 이걸 빠뜨려서 v0.9.3 에 넣은 공기질
-        # 감지가 통째로 헛돌았다 — 폴링마다 새 객체가 되니 실패 횟수가 3에 닿을
-        # 수 없고, 15분 경고가 **한 번도 울릴 수 없었다.**
+        # **Records and counters carry over too.** Missing this made the air-quality detection
+        # added in v0.9.3 useless: a new object every poll meant the failure count could never
+        # reach 3, and the 15-minute warning **could never fire at all.**
         if (old := previous.get(device.device_id)) is not None:
             device.reported = old.reported
             device.air_sensors = old.air_sensors
             device.sensor_kinds = old.sensor_kinds
+            # **Restored kinds survive only through this line.** What is read from storage
+            # lands in the object that existed at that moment, while polling builds a new one
+            # every five minutes. Without this, the next poll narrows the kinds back down to
+            # whatever is arriving right now, and that narrowed set overwrites the stored copy
+            # so the sensors disappear again on restart — the restore would be pointless five
+            # minutes after it ran.
+            device.known_sensor_kinds = old.known_sensor_kinds
             device.last_humidity = old.last_humidity
             device.command_log = old.command_log
             device.humidity_log = old.humidity_log
@@ -332,44 +420,46 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         return device
 
     def _log_airone_found(self, device: AironeDevice) -> None:
-        """에어원을 찾았다는 것을 한 번만 알린다.
+        """Announce that an Airone was found, once.
 
-        **v0.9.3 에서 `WARNING` 을 내렸다.** 「실기기로 검증하지 않았습니다 —
-        동작하지 않거나 값이 이상할 수 있습니다」라고 찍고 있었다. 두 가지가 틀렸다.
+        **v0.9.3 emitted this as a `WARNING`**, saying it was unverified on real hardware and
+        might not work or might show odd values. Two things were wrong with that.
 
-        1. **사실이 아니다.** 상태·제어·목표 습도가 제보로 확인됐다
-        2. **`WARNING` 은 문제가 있을 때만 쓴다.** HA 로그 화면은 기본으로
-           경고 이상만 보여준다. 그래서 제보자가 이 줄을 오류로 알고 이슈에
-           붙였다 — 아무 문제가 없는데 걱정을 만들었다
+        1. **It was not true.** State, control and target humidity had been confirmed by
+           reports.
+        2. **`WARNING` is for problems.** The HA log screen shows warnings and above by
+           default, so a reporter took this line for an error and attached it to an issue — it
+           manufactured worry where nothing was wrong.
 
-        모델은 계속 늘어난다. 그래서 검증된 모델 목록을 코드에 적지 않는다.
-        무엇을 찾았는지만 남기고, 이상하면 알려 달라고 한다.
+        The list of models keeps growing, which is why no list of verified models goes in the
+        source. This records what was found and invites a report if anything looks wrong.
         """
         key = f"{device.device_seq}:airone_found"
         if key in self._skipped_logged:
             return
         self._skipped_logged.add(key)
         _LOGGER.info(
-            "환기청정을 찾았습니다 (%s, modelCode=%s). 운전 모드 %d가지를 서버 "
+            "환기청정을 찾았습니다 (modelCode=%s). 운전 모드 %d가지를 서버 "
             "정보에서 찾았습니다. 값이 앱과 다르거나 조작이 안 되면 이슈로 "
             "알려 주세요.",
-            device.nickname,
             device.model_code,
             len(device.selectable_modes),
         )
 
     async def _async_update_air_sensors(self) -> None:
-        """공기질 값을 읽는다.
+        """Read the air-quality values.
 
-        상태 메시지에는 센서 종류만 있고 값이 없다 — 값은 `/air-sensor` 에만 있다.
+        A status message carries only the sensor kinds, not their values — those exist only on
+        `/air-sensor`.
         """
         for device in self.airone.values():
             if not device.available:
                 continue
             if not device.wants_air_sensors:
-                # **센서가 없다고 기기가 밝힌 경우.** 물어봐야 빈 응답만 온다.
-                # 5분마다 헛도는 요청이 하나 줄고, 그만큼 폴링이 실패할 자리도
-                # 줄어든다. 나중에 에어모니터를 달면 기기목록에 잡혀서 다시 묻는다.
+                # **The device declared it has no sensors.** Asking returns nothing but empty
+                # responses. Skipping removes one pointless request every five minutes, and
+                # with it one place polling can fail. Fitting an air monitor later shows up in
+                # the device list and asking resumes.
                 self._log_no_air_sensors(device)
                 continue
             try:
@@ -378,9 +468,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 )
             except NavienSmartError as err:
                 device.air_sensor_errors += 1
-                # **조용히 넘기지 않는다.** 빈 응답으로 값을 지우지 않기로 한
-                # 뒤로는 조회가 계속 실패해도 화면에 옛 값이 그대로 남는다.
-                # 사용자는 「값이 앱과 다르다」로만 보게 되고 원인을 알 수 없다.
+                # **Never passed over silently.** Since an empty response stopped clearing
+                # values, a query that keeps failing leaves the old numbers on screen. All the
+                # user sees is that HA disagrees with the app, with no way to know why.
                 if device.air_sensor_errors % AIRONE_AIR_ERROR_LOG_EVERY == 0:
                     _LOGGER.warning(
                         "%s 공기질을 %d회 연속 못 읽었습니다. 화면에 남아 있는 값은 "
@@ -393,7 +483,23 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     _LOGGER.debug("%s 공기질 조회 실패: %s", device.nickname, err)
                 continue
             device.air_sensor_errors = 0
+            before = device.known_sensor_kinds
             unknown = device.set_air_sensors(airs)
+            # Persist immediately when the known kinds grow. Kinds are only updated by this
+            # query while saving only happened on an MQTT report, so a newly seen kind never
+            # reached disk. A restart then restored only the old kinds and the returned item
+            # stayed without an entity — which is what happened on a real device.
+            if device.known_sensor_kinds != before:
+                self._async_remember_state()
+            # Report an item that used to arrive and no longer does. No error code is sent and
+            # the query still succeeds, so without this line a disconnected air monitor is
+            # undetectable.
+            missing = [
+                kind for kind in device.known_sensor_kinds
+                if kind not in device.sensor_kinds
+            ]
+            if missing:
+                self._log_air_sensors_missing(device, missing)
             if unknown:
                 self._log_skip(
                     device.raw,
@@ -401,37 +507,63 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     + ", ".join(sorted(set(unknown))),
                 )
 
-    def _log_no_air_sensors(self, device: AironeDevice) -> None:
-        """공기질을 안 묻기로 한 것을 **한 번만** 알린다.
+    def _log_air_sensors_missing(
+        self, device: AironeDevice, missing: list[str]
+    ) -> None:
+        """Report missing air-quality items **once per distinct set of missing kinds.**
 
-        조용히 건너뛰면 「공기질 엔티티가 왜 없냐」는 물음에 답할 근거가 없다.
-        판단이 틀렸다면 이 줄이 제보로 돌아온다.
+        When the link between the air monitor and the room controller drops, the server sends
+        only temperature and humidity. There is no error code and the query succeeds, so
+        without a log line it cannot be noticed. A changed set is reported again, so further
+        losses and returns stay visible.
+        """
+        key = f"{device.device_id}:air-missing:{','.join(missing)}"
+        if key in self._skipped_logged:
+            return
+        self._skipped_logged.add(key)
+        _LOGGER.warning(
+            "환기청정 기기에서 전에 받던 공기질 항목이 오지 않습니다: %s. "
+            "에어모니터와 룸콘 사이 통신을 확인해 주세요 — 값이 돌아오면 "
+            "센서도 함께 돌아옵니다",
+            ", ".join(AIRONE_SENSOR_KINDS[k][0] for k in missing),
+        )
+
+    def _log_no_air_sensors(self, device: AironeDevice) -> None:
+        """Announce **once** that air quality will not be queried.
+
+        Skipping silently leaves nothing to answer "why are there no air-quality entities"
+        with. If the judgement was wrong, this line comes back in a report.
         """
         key = f"{device.device_id}:no-air-sensors"
         if key in self._skipped_logged:
             return
         self._skipped_logged.add(key)
         _LOGGER.info(
-            "%s 는 공기질 센서를 갖고 있지 않다고 알려왔습니다 "
+            "환기청정 기기가 공기질 센서를 갖고 있지 않다고 알려왔습니다 "
             "(룸콘 센서 목록 비어 있음, 에어모니터 없음). 공기질을 조회하지 "
             "않습니다. 앱에는 공기질이 보이는데 HA 에 없다면 제보해 주세요",
-            device.nickname,
         )
 
     def _log_unsupported(self, raw: dict[str, Any]) -> None:
-        """지원하지 않는 기기를 만나면 이유를 알린다.
+        """Explain why an unsupported device was skipped.
 
-        조용히 버리면 사용자는 통합이 고장난 줄 안다. 제보를 받을 대상에만
-        제보 경로를 안내하고, 범위 밖 기기에는 헛된 기대를 주지 않는다.
+        Dropping it silently makes the user think the integration is broken. The reporting
+        route is offered only for devices worth a report; out-of-scope devices are not given
+        false hope.
         """
-        service_code = raw.get("serviceCode")
+        raw_service_code = raw.get("serviceCode")
+        service_code = raw_service_code if isinstance(raw_service_code, int) else None
         key = f"{raw.get('deviceSeq')}:unsupported"
         if key in self._skipped_logged:
             return
         self._skipped_logged.add(key)
-        name = SERVICE_NAMES.get(service_code, f"serviceCode {service_code}")
+        name = (
+            SERVICE_NAMES.get(service_code, f"serviceCode {service_code}")
+            if service_code is not None
+            else f"serviceCode {raw_service_code}"
+        )
 
-        if service_code in REPORT_WANTED_SERVICE_CODES:
+        if service_code is not None and service_code in REPORT_WANTED_SERVICE_CODES:
             _LOGGER.warning(
                 "%s 를 찾았습니다 (modelName=%s). 아직 지원하지 않습니다 — %s. "
                 "지원을 원하시면 설정 → 기기 및 서비스 → 나비엔 스마트 → "
@@ -447,14 +579,18 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             "%s (modelName=%s) 는 건너뜁니다 — %s.",
             name,
             raw.get("modelName"),
-            OUT_OF_SCOPE_REASONS.get(service_code, "이 통합의 범위가 아닙니다"),
+            (
+                OUT_OF_SCOPE_REASONS.get(service_code, "이 통합의 범위가 아닙니다")
+                if service_code is not None
+                else "이 통합의 범위가 아닙니다"
+            ),
         )
 
     def _log_four_season(self, device: NavienDevice) -> None:
-        """사계절 기기를 만나면 한 번만 알린다.
+        """Announce a four-season device once.
 
-        난방은 그대로 쓸 수 있다. 냉방은 값 체계가 확인되지 않아 그 구간에서만
-        제어를 비활성으로 둔다. 아래 값이 제보로 오면 냉방을 열 수 있다.
+        Heating works as it is. The cooling value scheme is unconfirmed, so control is left
+        disabled in that band only. A report carrying the values below is what opens cooling.
         """
         key = f"{device.device_seq}:four_season"
         if key in self._skipped_logged:
@@ -462,37 +598,35 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self._skipped_logged.add(key)
         cool = device.cool_control
         _LOGGER.info(
-            "사계절 모델을 찾았습니다 (%s, modelCode=%s). 냉방(COOL) 범위는 "
+            "사계절 모델을 찾았습니다 (modelCode=%s). 냉방(COOL) 범위는 "
             "%s~%s 입니다. 앱에서 COOL 로 바꾸시면 HA 도 그 범위로 따라갑니다 — "
             "**냉방에서는 좌우가 같은 온도로 동작하므로** 어느 쪽을 조작해도 "
             "양쪽에 같은 값이 갑니다.",
-            device.nickname,
             device.model_code,
             cool.range_min if cool else "?",
             cool.range_max if cool else "?",
         )
 
     def _log_unknown_season(self, device: NavienDevice) -> None:
-        """`season` 이 우리가 아는 값이 아닐 때 한 번만 알린다.
+        """Announce once when `season` holds a value we do not recognise.
 
-        앱 상수는 WARM(0) / COOL(2) 둘뿐인데 규격표에는 `Cool+` 라는 이름도 있다.
-        **다른 값이 오면 난방으로 두고 알린다** — 냉방 범위를 잘못 적용하는 것보다
-        안전하다.
+        The app constants are only WARM (0) and COOL (2), while the spec sheet also names a
+        `Cool+`. **An unrecognised value falls back to heating and is reported** — safer than
+        applying the cooling range by mistake.
         """
         key = f"{device.device_seq}:season:{device.season}"
         if key in self._skipped_logged:
             return
         self._skipped_logged.add(key)
         _LOGGER.warning(
-            "%s 의 season 값 %s 를 해석하지 못해 난방으로 다룹니다 "
+            "기기의 season 값 %s 를 해석하지 못해 난방으로 다룹니다 "
             "(아는 값: 0 난방 / 2 냉방). 냉방 중이신데 이 로그가 보이면 "
             "이 줄과 통계정보를 이슈에 붙여 주세요 — 바로 넓힐 수 있습니다.",
-            device.nickname,
             device.season,
         )
 
     def _log_skip(self, raw: dict[str, Any], reason: str) -> None:
-        """건너뛴 내용을 설치 로그에 남긴다. 조용히 버리지 않는다."""
+        """Record what was skipped in the installation log. Nothing is dropped silently."""
         key = f"{raw.get('deviceSeq')}:{reason}"
         if key in self._skipped_logged:
             return
@@ -504,7 +638,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             reason,
         )
 
-    # -- 실시간 ------------------------------------------------------------
+    # -- live state --------------------------------------------------------
 
     async def async_start_mqtt(self) -> None:
         prefixes = {
@@ -513,6 +647,14 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             if (prefix := TOPIC_PREFIX.get(device.service_code))
         }
         if self.airone and (prefix := TOPIC_PREFIX.get(SERVICE_AIRONE)):
+            prefixes.add(prefix)
+        # Boilers live in their own dict rather than the mat `data`, so the subscription is
+        # driven from the raw list. Read-only; no command is sent.
+        if any(
+            _as_int(raw.get("serviceCode")) == SERVICE_BOILER
+            for raw in self.raw_devices
+            if isinstance(raw, dict)
+        ) and (prefix := TOPIC_PREFIX.get(SERVICE_BOILER)):
             prefixes.add(prefix)
         if not prefixes:
             _LOGGER.debug("구독할 기기가 없어 MQTT 를 시작하지 않습니다")
@@ -528,33 +670,36 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             on_reported=self._handle_reported,
             on_subscribed=self._async_request_initial_state,
             on_airone_reported=self._handle_airone_reported,
+            on_boiler_reported=self._handle_boiler_reported,
+            on_boiler_observation=self._handle_boiler_observation,
         )
         await self._mqtt.async_start()
 
     async def _async_request_initial_state(self) -> None:
-        """켜져 있는 기기에 상태를 올려달라고 한다.
+        """Ask powered-on devices to push their state.
 
-        shadow 이벤트는 **변화가 있을 때만** 온다. 그래서 구독만 해두면 아무 조작이
-        없는 동안 상태가 비어 있다 — 엔티티가 계속 `unknown` 으로 남는다.
+        Shadow events only arrive **when something changes**, so a bare subscription leaves
+        the state empty for as long as nobody touches the device — the entities stay `unknown`.
 
-        제어 필드 없이 `event.modelCode` 만 담아 보내면 기기가 현재 상태를
-        `reported` 로 올린다. 앱도 같은 방식을 쓴다.
-        **설정을 바꾸지 않는다** — 보낼 값이 없기 때문이다.
+        Sending `event.modelCode` alone, with no control fields, makes the device push its
+        current state as `reported`. The app does the same.
+        **Nothing is changed** — there is no value to change.
 
-        꺼져 있는 기기에는 보내지 않는다. 응답하지 않고 shadow 에만 쌓인다.
+        A powered-off device is not asked: it never answers and the request just piles up in
+        the shadow.
 
-        **그래서 섀도우 조회를 먼저 한다.** 서버에 저장된 마지막 문서를 달라는
-        읽기라 **꺼져 있는 기기도 답한다.** 붙인 직후 설정값이 바로 생기고,
-        `climate` 가 「보낼 구역 값이 없습니다」로 막히는 일이 없어진다.
+        **That is why the shadow is read first.** It asks for the last document stored on the
+        server, so **even a powered-off device answers.** The setpoints appear immediately
+        after connecting, and `climate` no longer gets blocked with "no zone value to send".
         """
         for device in (self.data or {}).values():
-            # **먼저 저장된 것을 읽는다.** 온·오프라인을 가리지 않는다 —
-            # 기기가 아니라 서버가 답하기 때문이다. 실기기 두 대로 확인했다.
+            # **Read what is stored first.** Online or offline makes no difference, because
+            # the server answers rather than the device. Confirmed on two real devices.
             try:
                 await self.api.async_request_shadow(self.home_seq, device.raw)
                 _LOGGER.debug("%s 섀도우를 조회했습니다", device.nickname)
             except NavienSmartError as err:
-                # 실패해도 아래 요청이 남아 있다. v0.13.x 와 같은 상태가 될 뿐이다.
+                # A failure still leaves the request below; it simply behaves as v0.13.x did.
                 _LOGGER.debug("%s 섀도우 조회 실패: %s", device.nickname, err)
 
             if not device.available:
@@ -578,7 +723,45 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 continue
             self._schedule_airone_silence_check(airone)
 
+        # A boiler also gets the same read request as the app's getDeviceStatus once subscribed.
+        # Without it the setpoint numbers stay unavailable and the running-state sensor has no
+        # value until the first spontaneous report after a restart. Some connections do not
+        # answer status/start alone, so a plain status request follows it once.
+        for boiler in self.boilers.values():
+            if not boiler.connected:
+                _LOGGER.debug("%s 는 오프라인이라 상태를 요청하지 않습니다", boiler.nickname)
+                continue
+            try:
+                payload = boiler.build_start_payload(self._boiler_client_id())
+                await self._async_send_boiler_payload(boiler, payload)
+                self._schedule_boiler_readback(boiler)
+                _LOGGER.debug("%s 에 초기 상태를 요청했습니다", boiler.nickname)
+            except (HomeAssistantError, NavienSmartError) as err:
+                _LOGGER.warning("%s 초기 상태 요청 실패: %s", boiler.nickname, err)
+            if boiler.supports_feature("gasUsageUse"):
+                try:
+                    await self._async_request_boiler_gas(boiler)
+                except (HomeAssistantError, NavienSmartError) as err:
+                    self.boiler_gas_failures += 1
+                    _LOGGER.debug("%s 초기 가스 사용량 조회 실패: %s", boiler.nickname, err)
+                self._schedule_boiler_gas_refresh(boiler)
+
+    @callback
+    def _track_oneshot(self, unsub: Callable[[], None]) -> Callable[[], None]:
+        """Hold a one-shot timer, and let it release itself once it fires."""
+        self._oneshot_unsubs.add(unsub)
+        return unsub
+
     async def async_stop_mqtt(self) -> None:
+        for unsub in self._boiler_silence_unsubs.values():
+            unsub()
+        self._boiler_silence_unsubs.clear()
+        for unsub in self._boiler_gas_unsubs.values():
+            unsub()
+        self._boiler_gas_unsubs.clear()
+        for unsub in tuple(self._oneshot_unsubs):
+            unsub()
+        self._oneshot_unsubs.clear()
         if self._mqtt is not None:
             await self._mqtt.async_stop()
             self._mqtt = None
@@ -589,23 +772,23 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
     @property
     def poll_age(self) -> float | None:
-        """마지막으로 **끝까지 성공한** 폴링 뒤 흐른 초."""
+        """Seconds since the last poll that **ran through to success**."""
         if self.poll_stamp is None:
             return None
         return round(time.monotonic() - self.poll_stamp, 1)
 
     @property
     def mqtt_stats(self) -> dict[str, Any]:
-        """받은 개수·버린 개수. 진단에 담아 로그 없이도 가릴 수 있게 한다."""
+        """Received and discarded counts, so diagnostics can settle it without any logging."""
         stats: dict[str, Any] = dict(self._mqtt.stats) if self._mqtt else {}
         stats.update(self.drop_counts)
         return stats
 
     async def _async_aws_credentials(self) -> AwsCredentials | None:
-        """접속·재접속 시마다 새 자격증명을 받는다.
+        """Fetch fresh credentials on every connect and reconnect.
 
-        `/auth/token/refresh` 는 AWS 자격증명을 주지 않으므로 `secured-sign-in` 을
-        다시 부르는 것이 유일한 경로다.
+        `/auth/token/refresh` returns no AWS credentials, so calling `secured-sign-in` again
+        is the only path.
         """
         try:
             return await self.api.async_refresh_aws_credentials()
@@ -615,24 +798,24 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
     @callback
     def _handle_reported(self, device_id: str, reported: dict[str, Any]) -> None:
-        """MQTT 로 들어온 `reported` 를 반영한다. HA 이벤트 루프에서 불린다."""
+        """Apply a `reported` that arrived over MQTT. Called on the HA event loop."""
         devices = self.data or {}
         device = devices.get(device_id)
         if device is None:
-            # 새로 등록된 기기일 수 있다. 다음 폴링에서 잡힌다.
+            # This may be a newly registered device; the next poll picks it up.
             self.drop_counts["mate_no_device"] += 1
             _LOGGER.debug("모르는 기기의 보고 무시: %s", device_id)
             return
-        # **덮어쓰지 않는다.** 사계절 모델이 부분 응답을 보낸다 (`apply_reported`).
+        # **Never overwritten.** Four-season models send partial responses (`apply_reported`).
         device.apply_reported(reported)
         self._async_push_update(devices)
 
     @callback
     def _handle_airone_reported(self, device_id: str, reported: dict[str, Any]) -> None:
-        """에어원 상태를 반영한다. HA 이벤트 루프에서 불린다.
+        """Apply Airone state. Called on the HA event loop.
 
-        기기목록의 `deviceId` 와 `did.roomController.deviceId` 가 다를 수 있어
-        양쪽으로 찾는다.
+        The `deviceId` in the device list can differ from `did.roomController.deviceId`, so
+        both are searched.
         """
         device = self.airone.get(device_id)
         if device is None:
@@ -644,66 +827,139 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             self.drop_counts["airone_no_device"] += 1
             _LOGGER.debug("모르는 에어원의 보고 무시: %s", device_id)
             return
-        # **덮어쓰지 않는다.** 명령 응답은 부분 페이로드로 온다 (`apply_reported` 주석).
+        # **Never overwritten.** Command responses arrive as partial payloads (see the
+        # comment on `apply_reported`).
         device.apply_reported(reported)
-        # 기기가 실제로 올린 값이 왔으니 더 이상 복원값이 아니다.
+        # A value the device actually pushed has arrived, so this is no longer a restore.
         self.restored_devices.discard(device.device_id)
         self._async_remember_state()
         self._async_push_update(self.data or {})
 
     @callback
-    def _async_push_update(self, data: dict[str, NavienDevice]) -> None:
-        """MQTT 로 받은 상태를 엔티티에 알린다. **폴링 예약은 건드리지 않는다.**
+    def _handle_boiler_observation(self, observation: dict[str, Any]) -> None:
+        """Keep at most eight de-identified observation records."""
+        self.boiler_observations.append(observation)
+        del self.boiler_observations[:-BOILER_OBSERVATION_KEEP]
 
-        전에는 `async_set_updated_data()` 를 썼는데 그게 폴링을 굶겼다.
-        HA 원본을 보면 그 함수가 이렇게 한다.
+    @callback
+    def _handle_boiler_reported(
+        self, physical_id: str, status: dict[str, Any]
+    ) -> None:
+        """Attach MQTT boiler state to the matching REST device."""
+        device = next(
+            (
+                boiler
+                for boiler in self.boilers.values()
+                if boiler.physical_device_id == physical_id
+            ),
+            None,
+        )
+        # With exactly one boiler, and a model whose REST response omits macAddress, the match
+        # can be made safely.
+        if device is None and len(self.boilers) == 1:
+            device = next(iter(self.boilers.values()))
+            device.physical_device_id = physical_id
+        if device is None:
+            self.drop_counts["boiler_no_device"] += 1
+            return
+        is_gas_update = BOILER_GAS_METER_UPDATE in status
+        device.apply_status(status)
+        self._schedule_boiler_silence_check(device)
+        if is_gas_update:
+            self._schedule_boiler_gas_refresh(device)
+            config_entry = self.config_entry
+            assert config_entry is not None
+            config_entry.async_create_background_task(
+                self.hass,
+                self._async_import_gas_statistics(device),
+                f"navien gas statistics {device.device_seq}",
+            )
+        self.last_update_success = True
+        self.async_update_listeners()
+
+    @callback
+    def _async_push_update(self, data: dict[str, NavienDevice]) -> None:
+        """Notify entities of state received over MQTT. **The polling schedule is left alone.**
+
+        This used to call `async_set_updated_data()`, which starved polling. In HA's own
+        source that function does this:
 
             def async_set_updated_data(self, data):
-                self._async_unsub_refresh()        # 예약된 다음 폴링을 취소
+                self._async_unsub_refresh()        # cancels the scheduled next poll
                 self._debounced_refresh.async_cancel()
                 ...
                 if self._listeners:
-                    self._schedule_refresh()       # 지금부터 다시 세는 것
+                    self._schedule_refresh()       # and starts counting again from now
 
-        **메시지가 올 때마다 다음 폴링이 5분 뒤로 밀린다.** 에어원은 46초에
-        한 번꼴로 올라오므로 300초 타이머가 영영 안 터진다. 매트는 19시간에
-        여섯 번이라 멀쩡했다 — 에어원 사용자만 공기질이 멈춘 이유다 (#1 · #12 · #13).
+        **Every message pushes the next poll five minutes out.** An Airone reports roughly
+        every 46 seconds, so the 300-second timer never fires. A mat reports six times in 19
+        hours and was unaffected — which is why air quality froze only for Airone owners
+        (#1, #12, #13).
 
-        `async_update_listeners()` 는 엔티티에 알리기만 하고 예약을 안 건드린다.
-        그것만 쓴다.
+        `async_update_listeners()` only notifies the entities and never touches the schedule,
+        so that is all this uses.
         """
         self.data = data
-        # MQTT 로 신선한 값이 왔으니 엔티티를 살려둔다. 예약만 안 건드릴 뿐
-        # 나머지는 `async_set_updated_data` 와 같게 한다.
+        # Fresh values arrived over MQTT, so the entities stay alive. Everything matches
+        # `async_set_updated_data` except that the schedule is not touched.
         self.last_update_success = True
         self.async_update_listeners()
 
     def _async_remember_state(self) -> None:
-        """마지막 상태를 남긴다. 실패해도 동작을 막지 않는다."""
-        snapshot = {
-            device_id: device.reported
-            for device_id, device in self.airone.items()
-            if device.reported
-        }
+        """Persist the last state. A failure here never blocks anything.
+
+        There are two stored shapes. It began as `{device: reported}` and now writes
+        `{device: {"reported": ..., "air_kinds": [...]}}` so the air-quality kinds are kept
+        alongside. **Both are accepted when reading** — telling them apart by shape is easier
+        to undo than bumping a storage version and adding a migration.
+        """
+        if not self._state_restored:
+            # **Nothing is written before the restore runs.** A snapshot holds only what is in
+            # memory, and the first poll runs before the restore. Writing then destroys the
+            # `reported` that has not been read yet, and the restore that follows reads back
+            # what we just erased — on a real device that turned 17 room-controller values into
+            # unknown.
+            return
+        snapshot: dict[str, Any] = {}
+        for device_id, device in self.airone.items():
+            entry: dict[str, Any] = {}
+            if device.reported:
+                entry["reported"] = device.reported
+            if device.known_sensor_kinds:
+                entry["air_kinds"] = list(device.known_sensor_kinds)
+            if entry:
+                snapshot[device_id] = entry
         if snapshot:
             self._store.async_delay_save(lambda: snapshot, 5)
 
     async def async_restore_state(self) -> None:
-        """저장해 둔 마지막 상태를 되살린다.
+        """Restore the last stored state.
 
-        **되살린 값은 잠정이다.** 기기가 스스로 올리거나 조작을 하면 바로
-        덮인다. 아무것도 안 보이는 것보다는 마지막으로 알던 값이 낫다.
+        **A restored value is provisional.** It is overwritten as soon as the device pushes
+        something or the user acts. Still, the last known value beats showing nothing at all.
         """
         try:
             stored = await self._store.async_load()
-        except Exception as err:  # noqa: BLE001 - 저장소 문제로 통합을 막지 않는다
+        except Exception as err:  # noqa: BLE001 - a storage problem must not block the integration
             _LOGGER.debug("에어원 상태 복원 실패: %s", err)
+            self._state_restored = True
             return
         if not isinstance(stored, dict):
+            self._state_restored = True
             return
-        for device_id, reported in stored.items():
+        for device_id, entry in stored.items():
             device = self.airone.get(device_id)
-            if device is not None and isinstance(reported, dict) and not device.reported:
+            if device is None or not isinstance(entry, dict):
+                continue
+            # The old shape held `reported` directly; the new one nests it one level deeper.
+            if "reported" in entry or "air_kinds" in entry:
+                reported = entry.get("reported")
+                kinds = entry.get("air_kinds")
+            else:
+                reported, kinds = entry, None
+            if isinstance(kinds, list):
+                device.remember_sensor_kinds(kinds)
+            if isinstance(reported, dict) and reported and not device.reported:
                 device.apply_reported(reported)
                 self.restored_devices.add(device_id)
         if self.restored_devices:
@@ -711,8 +967,194 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 "에어원 %s대의 마지막 상태를 되살렸습니다. 기기가 새로 올리기 전까지는 "
                 "잠정값입니다", len(self.restored_devices)
             )
+        self._state_restored = True
+        # Air-quality kinds learned during the first poll have not been persisted yet, because
+        # of the rule above. Writing once here is what carries them across a restart.
+        self._async_remember_state()
 
-    # -- 제어 --------------------------------------------------------------
+    # -- control -----------------------------------------------------------
+
+    def _boiler_client_id(self) -> str:
+        client_id = self._mqtt.client_id if self._mqtt is not None else ""
+        if not client_id:
+            raise HomeAssistantError(
+                "보일러 MQTT 연결이 준비되지 않아 명령을 보낼 수 없습니다."
+            )
+        return client_id
+
+    async def _async_send_boiler_payload(
+        self, device: BoilerDevice, payload: dict[str, Any]
+    ) -> None:
+        try:
+            await self.api.async_boiler_request(
+                self.home_seq,
+                device_seq=device.device_seq,
+                service_code=SERVICE_BOILER,
+                payload=payload,
+            )
+            device.note_communication()
+            self._schedule_boiler_silence_check(device)
+        except NavienSmartAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+
+    async def async_boiler_temperature(
+        self, device: BoilerDevice, kind: str, target: float
+    ) -> None:
+        """Change one setpoint, regardless of whether the boiler is currently heating."""
+        current = self.boilers.get(device.device_id) or device
+        try:
+            payload = current.build_temperature_payload(
+                kind, target, self._boiler_client_id()
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(current, payload)
+        self._schedule_boiler_readback(current)
+
+    async def async_boiler_power(
+        self, device: BoilerDevice, turn_on: bool
+    ) -> None:
+        """Switch NR-67D power with the same command as the app, then verify the real state."""
+        current = self.boilers.get(device.device_id) or device
+        try:
+            payload = current.build_power_payload(turn_on, self._boiler_client_id())
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(current, payload)
+        self._schedule_boiler_readback(current)
+
+    async def async_boiler_switch(
+        self, device: BoilerDevice, kind: str, turn_on: bool
+    ) -> None:
+        """Set fast hot water, smart operation or turbo hot water, then verify the real state."""
+        current = self.boilers.get(device.device_id) or device
+        try:
+            payload = current.build_switch_payload(
+                kind, turn_on, self._boiler_client_id()
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(current, payload)
+        self._schedule_boiler_readback(current)
+
+    async def _async_request_boiler_gas(self, device: BoilerDevice) -> None:
+        """The monthly total moves slowly, so the app's request is sent only once an hour."""
+        try:
+            payload = device.build_gas_payload(self._boiler_client_id())
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self._async_send_boiler_payload(device, payload)
+        self.boiler_gas_requests += 1
+
+    async def _async_import_gas_statistics(self, device: BoilerDevice) -> None:
+        """Write gas history into long-term statistics. A failure never blocks a state update.
+
+        **One run at a time per device**, because overlapping runs corrupt the running total
+        (see the comment on `_gas_statistics_locks`). Waiting is preferred over dropping: a
+        dropped run could leave the last response unapplied, and since the work rewrites the
+        same data, running once more is cheap.
+        """
+        lock = self._gas_statistics_locks.setdefault(device.device_id, asyncio.Lock())
+        async with lock:
+            try:
+                await async_import_gas_statistics(self.hass, device)
+            except Exception:
+                self.boiler_gas_statistics_failures += 1
+                _LOGGER.exception("가스 장기 통계를 반영하지 못했습니다")
+
+    @callback
+    def _schedule_boiler_gas_refresh(self, device: BoilerDevice) -> None:
+        """Refresh the gas totals hourly — more conservative than the app's own screen."""
+        device_id = device.device_id
+        if old := self._boiler_gas_unsubs.pop(device_id, None):
+            old()
+
+        async def _refresh(_now: Any) -> None:
+            self._boiler_gas_unsubs.pop(device_id, None)
+            target = self.boilers.get(device_id)
+            if target is None or not target.supports_feature("gasUsageUse"):
+                return
+            if target.connected and self.mqtt_connected:
+                try:
+                    await self._async_request_boiler_gas(target)
+                except (HomeAssistantError, NavienSmartError) as err:
+                    self.boiler_gas_failures += 1
+                    _LOGGER.debug("%s 가스 사용량 조회 실패: %s", target.nickname, err)
+            self._schedule_boiler_gas_refresh(target)
+
+        self._boiler_gas_unsubs[device_id] = async_call_later(
+            self.hass, BOILER_GAS_REFRESH_SECONDS, _refresh
+        )
+
+    @callback
+    def _schedule_boiler_readback(self, device: BoilerDevice) -> None:
+        """Re-read the device state after a command. Nothing is changed optimistically."""
+        device_id = device.device_id
+
+        holder: list[Callable[[], None]] = []
+
+        async def _readback(_now: Any) -> None:
+            if holder:
+                self._oneshot_unsubs.discard(holder[0])
+            target = self.boilers.get(device_id)
+            if target is None:
+                return
+            try:
+                payload = target.build_status_payload(self._boiler_client_id())
+                await self._async_send_boiler_payload(target, payload)
+            except (HomeAssistantError, NavienSmartError) as err:
+                _LOGGER.debug("%s 보일러 상태 재확인 실패: %s", target.nickname, err)
+
+        holder.append(
+            self._track_oneshot(
+                async_call_later(self.hass, BOILER_READBACK_DELAY_SECONDS, _readback)
+            )
+        )
+
+    @callback
+    def _schedule_boiler_silence_check(
+        self, device: BoilerDevice, *, delay: float | None = None
+    ) -> None:
+        """Request status once when five minutes pass with no traffic either way.
+
+        A state change arriving over MQTT pushes this timer five minutes out again, so nothing
+        is polled while the boiler is reporting actively. Even with no request or response, a
+        failure is not retried immediately but waits another five minutes, so an unofficial
+        server is never pressed.
+        """
+        device_id = device.device_id
+        if old := self._boiler_silence_unsubs.pop(device_id, None):
+            old()
+        wait = device.silence_refresh_delay() if delay is None else max(1.0, delay)
+
+        async def _check(_now: Any) -> None:
+            self._boiler_silence_unsubs.pop(device_id, None)
+            target = self.boilers.get(device_id)
+            if target is None:
+                return
+            age = target.communication_age()
+            if age is not None and age < BOILER_SILENCE_REFRESH_SECONDS:
+                self._schedule_boiler_silence_check(target)
+                return
+            if not target.connected or not self.mqtt_connected:
+                self._schedule_boiler_silence_check(
+                    target, delay=BOILER_SILENCE_REFRESH_SECONDS
+                )
+                return
+            try:
+                payload = target.build_status_payload(self._boiler_client_id())
+                await self._async_send_boiler_payload(target, payload)
+                self.boiler_silence_requests += 1
+            except (HomeAssistantError, NavienSmartError) as err:
+                self.boiler_silence_failures += 1
+                _LOGGER.debug("%s 보일러 5분 무통신 상태 요청 실패: %s", target.nickname, err)
+                self._schedule_boiler_silence_check(
+                    target, delay=BOILER_SILENCE_REFRESH_SECONDS
+                )
+
+        self._boiler_silence_unsubs[device_id] = async_call_later(
+            self.hass, wait, _check
+        )
 
     async def _async_airone_request(
         self,
@@ -721,7 +1163,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         desired: dict[str, Any] | None,
     ) -> None:
         client_id = self._mqtt.client_id if self._mqtt is not None else ""
-        # 무엇을 보냈는지 남긴다. 진단에서 순서를 봐야 가릴 수 있는 문제가 있다.
+        # Record what was sent. Some problems can only be settled by seeing the order in
+        # diagnostics.
         device.note_command(command, desired)
         await self.api.async_airone_request(
             self.home_seq,
@@ -732,7 +1175,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             command=command,
             client_id=client_id,
             desired=desired,
-            # 세대 차이는 전송 계층에서만 흡수한다. 위쪽은 세대를 모른다.
+            # Generation differences are absorbed in the transport layer alone; nothing above
+            # it knows about generations.
             legacy=not device.is_v2_generation,
         )
 
@@ -753,21 +1197,22 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         air_volume: int | None = None,
         humidity: int | None = None,
     ) -> None:
-        # **목표 습도를 나중에 한 번 더 보내는 장치를 v0.9.1 에서 걷어냈다.**
+        # **The mechanism that re-sent the target humidity later was removed in v0.9.1.**
         #
-        # v0.9.0 에서 「모드에 들어간 뒤에 다시 보내면 되지 않을까」로 넣었다.
-        # 실기기 제보로 두 가지가 드러났다.
+        # v0.9.0 added it on the theory that re-sending after entering the mode might work.
+        # A real-device report exposed two things.
         #
-        # 1. **기기가 목표 습도를 상태로 돌려주지 않는다.** 관측 여덟 건이 모두
-        #    비어 있었다. 그래서 「되돌려졌는지」를 판정할 수가 없고, 재전송은
-        #    영원히 성공하지 못한 것으로 취급되어 모드를 바꿀 때마다 한 번 더
-        #    나갔다
-        # 2. **사용자 조작을 덮었다.** 판정에서 `mode` 만 비교하고 `option` 을
-        #    빼먹어, 같은 제습 안에서 풍량만 바꾸면 8초 뒤에 되돌려 놓았다.
-        #    제보 기록에 터보 → 기본풍량으로 끌려간 순간이 그대로 남았다
+        # 1. **The device never echoes the target humidity back as state.** All eight
+        #    observations were empty, so whether it had been reverted could not be judged, the
+        #    re-send was forever treated as unsuccessful, and one more went out on every mode
+        #    change.
+        # 2. **It overwrote the user.** The test compared `mode` and forgot `option`, so
+        #    changing only the fan speed within dehumidify was undone eight seconds later. The
+        #    report records the exact moment turbo was dragged back to the base speed.
         #
-        # 근거 없이 계속 쏘지 않는다. 습도는 모드 변경에 실어 한 번만 보내고,
-        # 기기가 그것을 받는지 여부는 진단 기록으로 판단한다.
+        # Nothing is fired repeatedly without evidence. The humidity rides along with the mode
+        # change exactly once, and whether the device accepts it is judged from the diagnostics
+        # records.
         desired = device.build_mode_desired(mode, option, air_volume, humidity)
         try:
             await self._async_airone_request(device, AIRONE_CMD_CHANGE_MODE, desired)
@@ -777,15 +1222,19 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
     @callback
     def _schedule_airone_silence_check(self, device: AironeDevice) -> None:
-        """상태를 요청했는데 끝내 안 오면 알린다.
+        """Report a status request that was never answered.
 
-        **조용한 실패가 가장 잡기 어렵다.** 요청은 성공(HTTP 200)했는데 응답이
-        오지 않으면 엔티티가 영구히 「알 수 없음」으로 남고, 사용자는 통합이
-        고장난 줄 안다. 어디까지 갔는지 로그에 남겨야 제보로 가릴 수 있다.
+        **A silent failure is the hardest kind to catch.** When the request succeeds (HTTP
+        200) and no response arrives, the entities stay unknown forever and the user thinks
+        the integration is broken. Only a log line saying how far it got makes a report
+        conclusive.
         """
         device_id = device.device_id
+        holder: list[Callable[[], None]] = []
 
         async def _check(_now: Any) -> None:
+            if holder:
+                self._oneshot_unsubs.discard(holder[0])
             target = self.airone.get(device_id)
             if target is None or target.reported:
                 return
@@ -794,38 +1243,47 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 return
             self._skipped_logged.add(key)
             prefix = TOPIC_PREFIX.get(SERVICE_AIRONE)
+            # **Logged without identifiers.** This warning asks the user to attach it to an
+            # issue, and the topic carried the device's physical id (derived from its MAC) and
+            # the homeSeq. The diagnostics export redacts those very values, so the two
+            # disagreed. The **shape** of the topic is enough to narrow down the cause.
             _LOGGER.warning(
-                "%s 에 상태를 요청했지만 %d초 안에 응답이 오지 않았습니다. "
-                "요청은 정상 전송됐습니다 — 보낸 곳: %s, 듣는 곳: %s/%s/#. "
+                "환기청정 기기에 상태를 요청했지만 %d초 안에 응답이 오지 않았습니다. "
+                "요청은 정상 전송됐습니다 — 보낸 곳: %s, 듣는 곳: **REDACTED**/%s/#. "
                 "엔티티가 「알 수 없음」으로 남습니다. 이 로그와 통계정보를 "
                 "이슈에 붙여 주시면 원인을 좁힐 수 있습니다.",
-                target.nickname,
                 AIRONE_SILENCE_CHECK_SECONDS,
                 AIRONE_TOPIC_FMT.format(
                     model_code=target.model_code,
-                    device_id=target.physical_device_id,
+                    device_id="**REDACTED**",
                     command=AIRONE_CMD_STATUS,
                 ),
-                self.home_seq,
                 prefix,
             )
 
-        async_call_later(self.hass, AIRONE_SILENCE_CHECK_SECONDS, _check)
+        holder.append(
+            self._track_oneshot(
+                async_call_later(self.hass, AIRONE_SILENCE_CHECK_SECONDS, _check)
+            )
+        )
 
     @callback
     def _schedule_airone_readback(self, device: AironeDevice) -> None:
-        """명령을 보낸 뒤 상태를 한 번 다시 물어본다.
+        """Ask for the state once more after sending a command.
 
-        **낙관적 갱신을 하지 않는다.** 명령이 접수됐다고 UI 를 먼저 바꿔놓으면,
-        기기가 거부했을 때 사용자는 "됐다가 되돌아간다" 를 겪는다 — 실패를
-        성공처럼 보이게 하는 셈이다. 매트에서 같은 이유로 안 했다.
+        **Nothing is updated optimistically.** Changing the UI as soon as a command is
+        accepted means the user watches it "work and then revert" whenever the device refuses
+        — dressing a failure up as a success. Mats avoid it for the same reason.
 
-        대신 실제 상태를 다시 읽는다. 기기가 스스로 올려주는 것이 정상이지만,
-        안 올려도 이 한 번으로 따라잡는다.
+        Instead the real state is re-read. The device normally pushes it by itself, and this
+        single request catches up when it does not.
         """
         device_id = device.device_id
+        holder: list[Callable[[], None]] = []
 
         async def _readback(_now: Any) -> None:
+            if holder:
+                self._oneshot_unsubs.discard(holder[0])
             target = self.airone.get(device_id)
             if target is None or not target.available:
                 return
@@ -834,16 +1292,21 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             except NavienSmartError as err:
                 _LOGGER.debug("%s 상태 재확인 실패: %s", target.nickname, err)
 
-        async_call_later(self.hass, AIRONE_READBACK_DELAY_SECONDS, _readback)
+        holder.append(
+            self._track_oneshot(
+                async_call_later(self.hass, AIRONE_READBACK_DELAY_SECONDS, _readback)
+            )
+        )
 
     async def async_send(self, device: NavienDevice, desired: dict[str, Any]) -> None:
-        """명령을 보낸 뒤 낙관적 갱신은 하지 않는다.
+        """No optimistic update after sending a command.
 
-        기기가 `reported` 를 올려줄 때까지 기다린다. 명령이 shadow 에 들어간 시점의
-        이벤트(`reported` 없는 `/accepted`)를 상태로 쓰면 HA 가 기기보다 앞서 나간다.
+        It waits for the device to push a `reported`. Using the event fired when the command
+        lands in the shadow (an `/accepted` without `reported`) as state would put HA ahead of
+        the device.
         """
-        # 무엇을 보냈는지 남긴다. 냉방은 「보낸 값이 그대로 돌아오는가」를 봐야
-        # 닫히는 구간이라 이 기록이 근거가 된다.
+        # Record what was sent. Cooling can only be settled by seeing whether a sent value
+        # returns unchanged, and this record is that evidence.
         device.note_command(desired)
         try:
             await self.api.async_control(self.home_seq, device.raw, desired)

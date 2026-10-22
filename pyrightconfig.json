@@ -1,0 +1,22 @@
+{
+  "include": [
+    "custom_components/navien_smarthome",
+    "tests",
+    "tests_ha",
+    "tools",
+    ".github/security/owner-policy-guard.py",
+    "tests_security"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.venv",
+    "**/.venv-ha2026.9"
+  ],
+  "pythonVersion": "3.14",
+  "typeCheckingMode": "standard",
+  "reportUnnecessaryTypeIgnoreComment": "error",
+  "extraPaths": [
+    "custom_components"
+  ]
+}
