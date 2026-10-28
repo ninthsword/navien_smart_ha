@@ -31,6 +31,7 @@ BOILER_READBACK_DELAY_SECONDS = 3
 BOILER_SILENCE_REFRESH_SECONDS = 300
 BOILER_GAS_REFRESH_SECONDS = 3600
 BOILER_GAS_METER_UPDATE = "__gas_meter__"
+BOILER_FEATURE_UPDATE = "__feature__"
 
 BOILER_STATE_OFF = "꺼짐"
 BOILER_STATE_IDLE = "대기"
@@ -301,7 +302,7 @@ class BoilerDevice:
 
         response = _dig(raw, "Properties", "did", "response")
         response = response if isinstance(response, dict) else {}
-        feature = response.get("feature")
+        feature = declared_feature(response)
         status = response.get("status")
         model_name = str(raw.get("modelName") or "보일러")
         # The app response is usually ``{"mainItem": "보일러"}``, but depending on the account
@@ -322,14 +323,26 @@ class BoilerDevice:
             nickname=nickname,
             connected=bool(_integer(raw.get("connected"))),
             physical_device_id=(str(physical_id) if physical_id else None),
-            feature=feature if isinstance(feature, dict) else {},
+            feature=feature or {},
             status=status if isinstance(status, dict) else {},
         )
 
-    def apply_status(self, status: dict[str, Any], *, now: float | None = None) -> None:
-        """A partial response must not cost us fields that were already known."""
+    def apply_status(self, status: dict[str, Any], *, now: float | None = None) -> bool:
+        """A partial response must not cost us fields that were already known.
+
+        Returns whether a feature declaration was taken. Some connections answer status/start
+        with the feature alone; that only declares capabilities, so it leaves status, gas data
+        and every timestamp untouched.
+        """
         update = dict(status)
+        feature = update.pop(BOILER_FEATURE_UPDATE, None)
         gas_meter = update.pop(BOILER_GAS_METER_UPDATE, None)
+        feature_taken = False
+        if isinstance(feature, dict) and feature:
+            self.feature = dict(feature)
+            feature_taken = True
+            if not update and gas_meter is None:
+                return True
         stamp = time.monotonic() if now is None else now
         if isinstance(gas_meter, dict):
             self.gas_meter = gas_meter
@@ -341,6 +354,7 @@ class BoilerDevice:
                 seen = self.observed_commands
                 seen[command] = seen.get(command, 0) + 1
         self.last_communication_at = stamp
+        return feature_taken
 
     def note_communication(self, *, now: float | None = None) -> None:
         """A boiler request successfully sent to the server also counts as communication."""
@@ -863,6 +877,12 @@ class BoilerDevice:
         return _integer(self.status.get("subErrorCode"))
 
 
+def declared_feature(response: Any) -> dict[str, Any] | None:
+    """The feature declaration in a REST or MQTT response, only as a non-empty object."""
+    feature = response.get("feature") if isinstance(response, dict) else None
+    return feature if isinstance(feature, dict) and feature else None
+
+
 def extract_boiler_status(
     payload: bytes, stats: dict[str, Any] | None = None
 ) -> tuple[str, dict[str, Any]] | None:
@@ -871,6 +891,10 @@ def extract_boiler_status(
     The observed envelope is ``payload.response.status``, and the device is found by matching
     ``Properties.did.response.macAddress`` from the device list. Command responses and
     DID/firmware responses carry no ``status`` and are never used as state.
+
+    A non-empty ``feature`` object rides along under ``BOILER_FEATURE_UPDATE``. An NR-67D
+    whose REST entry lost ``Properties.did`` answers status/start with the feature alone, and
+    that answer is the only place its capabilities still arrive.
     """
     try:
         event = json.loads(payload)
@@ -883,18 +907,26 @@ def extract_boiler_status(
     response = _dig(event, "payload", "response")
     status = response.get("status") if isinstance(response, dict) else None
     gas_meter = response.get("gasMeter") if isinstance(response, dict) else None
+    feature = declared_feature(response)
+    feature_only = False
     if isinstance(status, dict):
         update = status
     elif isinstance(gas_meter, dict):
         update = {BOILER_GAS_METER_UPDATE: gas_meter}
+    elif feature is not None:
+        update = {}
+        feature_only = True
     else:
         _bump(stats, "dropped_no_status")
         return None
+    assert isinstance(response, dict)
     physical_id = response.get("macAddress")
     if not physical_id:
         _bump(stats, "dropped_no_device_id")
         return None
-    _bump(stats, "accepted")
+    _bump(stats, "feature_accepted" if feature_only else "accepted")
+    if feature is not None:
+        update = {**update, BOILER_FEATURE_UPDATE: feature}
     return str(physical_id), update
 
 

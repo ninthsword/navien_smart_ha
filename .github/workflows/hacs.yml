@@ -1,0 +1,21 @@
+name: hacs
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      # hacs/action main of 2026-06-08. It is newer than the action's last tag 22.5.0, so an
+      # update to that tag would be a downgrade.
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main of 2026-06-08
+        with:
+          category: integration
+          # The component ships its own brand/ images instead of a home-assistant/brands entry.
+          ignore: brands

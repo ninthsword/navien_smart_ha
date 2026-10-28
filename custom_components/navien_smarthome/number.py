@@ -22,7 +22,7 @@ from .airone import AironeDevice
 from .boiler import BoilerDevice
 from .const import AIRONE_HUMIDITY_STEP, AIRONE_OPTION_NONE
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, BoilerEntity
+from .entity import AironeEntity, BoilerEntity, boiler_entities_as_declared
 
 
 async def async_setup_entry(
@@ -37,13 +37,21 @@ async def async_setup_entry(
         # Created only when the server reports a humidity range for some combination.
         if any(mode.wants_humidity for mode in device.modes)
     ]
-    for device in coordinator.boilers.values():
+
+    def boiler_numbers(device: BoilerDevice) -> list[NumberEntity]:
         if device.model_code != "20":
-            continue
-        if device.temperature_bounds("hot_water") is not None:
-            entities.append(BoilerTemperatureNumber(coordinator, device, "hot_water"))
-        if device.temperature_bounds("ondol") is not None:
-            entities.append(BoilerTemperatureNumber(coordinator, device, "ondol"))
+            return []
+        return [
+            BoilerTemperatureNumber(coordinator, device, kind)
+            for kind in ("hot_water", "ondol")
+            if device.temperature_bounds(kind) is not None
+        ]
+
+    entities.extend(
+        boiler_entities_as_declared(
+            entry, coordinator, async_add_entities, boiler_numbers
+        )
+    )
     async_add_entities(entities)
 
 

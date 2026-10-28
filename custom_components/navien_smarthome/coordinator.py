@@ -30,6 +30,7 @@ from .api import (
     NavienSmartError,
 )
 from .boiler import (
+    BOILER_FEATURE_UPDATE,
     BOILER_GAS_METER_UPDATE,
     BOILER_GAS_REFRESH_SECONDS,
     BOILER_OBSERVATION_KEEP,
@@ -139,6 +140,16 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self.boiler_observations: list[dict[str, Any]] = []
         self._boiler_silence_unsubs: dict[str, Callable[[], None]] = {}
         self._boiler_gas_unsubs: dict[str, Callable[[], None]] = {}
+        # Per run of the MQTT start sequence, keyed by device_id because a poll rebuilds the
+        # device objects: which boilers reached their gas step, and which got their one gas
+        # start. A feature that arrives only after the step (the status/start answer of a
+        # boiler whose REST entry lost `Properties.did`) still starts gas once, never twice.
+        self._boiler_gas_step_reached: set[str] = set()
+        self._boiler_gas_started: set[str] = set()
+        self._boiler_gas_run = 0
+        # Late gas starts run as background tasks outside the MQTT client's own task, so stop
+        # cancels them itself: one finishing its request after stop would re-create timers.
+        self._boiler_gas_tasks: set[asyncio.Task[None]] = set()
         # **Even one-shot timers are held.** Waking after an unload or reload would have an
         # integration that no longer exists send a request to the server. The exception is
         # caught, but a pointless request still reaches an unofficial server, and it is
@@ -276,6 +287,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                     boiler.gas_meter = old.gas_meter
                     boiler.gas_received_at = old.gas_received_at
                     boiler.observed_commands = old.observed_commands
+                    # The REST entry can lose `Properties.did` while MQTT still declares the
+                    # feature; an entry without one never erases what was already known.
+                    if not boiler.feature:
+                        boiler.feature = old.feature
                 boilers[boiler.device_id] = boiler
                 continue
 
@@ -327,6 +342,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
 
         self.airone = airone
         self.boilers = boilers
+        for boiler in boilers.values():
+            self._async_start_late_boiler_gas(boiler)
         self._tune_interval()
         await self._async_update_air_sensors()
         self.poll_stamp = time.monotonic()
@@ -692,6 +709,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         server, so **even a powered-off device answers.** The setpoints appear immediately
         after connecting, and `climate` no longer gets blocked with "no zone value to send".
         """
+        self._boiler_gas_step_reached.clear()
+        self._boiler_gas_started.clear()
+        self._boiler_gas_run += 1
         for device in (self.data or {}).values():
             # **Read what is stored first.** Online or offline makes no difference, because
             # the server answers rather than the device. Confirmed on two real devices.
@@ -727,7 +747,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # Without it the setpoint numbers stay unavailable and the running-state sensor has no
         # value until the first spontaneous report after a restart. Some connections do not
         # answer status/start alone, so a plain status request follows it once.
-        for boiler in self.boilers.values():
+        for device_id in list(self.boilers):
+            boiler = self.boilers.get(device_id)
+            if boiler is None:
+                continue
             if not boiler.connected:
                 _LOGGER.debug("%s 는 오프라인이라 상태를 요청하지 않습니다", boiler.nickname)
                 continue
@@ -738,13 +761,59 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 _LOGGER.debug("%s 에 초기 상태를 요청했습니다", boiler.nickname)
             except (HomeAssistantError, NavienSmartError) as err:
                 _LOGGER.warning("%s 초기 상태 요청 실패: %s", boiler.nickname, err)
-            if boiler.supports_feature("gasUsageUse"):
-                try:
-                    await self._async_request_boiler_gas(boiler)
-                except (HomeAssistantError, NavienSmartError) as err:
-                    self.boiler_gas_failures += 1
-                    _LOGGER.debug("%s 초기 가스 사용량 조회 실패: %s", boiler.nickname, err)
-                self._schedule_boiler_gas_refresh(boiler)
+            # A poll may have rebuilt the device while the send was awaited, and the feature
+            # answer may have reached only the new object, so the step reads the current one.
+            current = self.boilers.get(device_id)
+            if current is None:
+                continue
+            self._boiler_gas_step_reached.add(device_id)
+            if current.supports_feature("gasUsageUse"):
+                self._boiler_gas_started.add(device_id)
+                await self._async_start_boiler_gas(current)
+
+    async def _async_start_boiler_gas(self, boiler: BoilerDevice) -> None:
+        """One gas request, then the hourly refresh, whether or not the request succeeded."""
+        try:
+            await self._async_request_boiler_gas(boiler)
+        except (HomeAssistantError, NavienSmartError) as err:
+            self.boiler_gas_failures += 1
+            _LOGGER.debug("%s 초기 가스 사용량 조회 실패: %s", boiler.nickname, err)
+        self._schedule_boiler_gas_refresh(boiler)
+
+    @callback
+    def _async_start_late_boiler_gas(self, boiler: BoilerDevice) -> None:
+        """Start gas for a boiler whose gasUsageUse arrived after its start-sequence step.
+
+        The check and the mark happen on the loop with no await between them, so the start
+        sequence and this path never both send. Before the step is reached nothing happens
+        here: the step itself then sees the feature and sends the only request.
+        """
+        device_id = boiler.device_id
+        if (
+            device_id not in self._boiler_gas_step_reached
+            or device_id in self._boiler_gas_started
+            or not boiler.supports_feature("gasUsageUse")
+            or not boiler.connected
+            or not self.mqtt_connected
+        ):
+            return
+        self._boiler_gas_started.add(device_id)
+        config_entry = self.config_entry
+        assert config_entry is not None
+        task = config_entry.async_create_background_task(
+            self.hass,
+            self._async_start_late_boiler_gas_task(device_id, self._boiler_gas_run),
+            f"navien gas start {boiler.device_seq}",
+        )
+        self._boiler_gas_tasks.add(task)
+        task.add_done_callback(self._boiler_gas_tasks.discard)
+
+    async def _async_start_late_boiler_gas_task(self, device_id: str, run: int) -> None:
+        boiler = self.boilers.get(device_id)
+        # Stopped or restarted before the task ran: that run's gas start is no longer ours.
+        if boiler is None or run != self._boiler_gas_run:
+            return
+        await self._async_start_boiler_gas(boiler)
 
     @callback
     def _track_oneshot(self, unsub: Callable[[], None]) -> Callable[[], None]:
@@ -753,6 +822,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         return unsub
 
     async def async_stop_mqtt(self) -> None:
+        for task in tuple(self._boiler_gas_tasks):
+            task.cancel()
+        self._boiler_gas_tasks.clear()
+        self._boiler_gas_step_reached.clear()
+        self._boiler_gas_started.clear()
+        self._boiler_gas_run += 1
         for unsub in self._boiler_silence_unsubs.values():
             unsub()
         self._boiler_silence_unsubs.clear()
@@ -863,8 +938,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             self.drop_counts["boiler_no_device"] += 1
             return
         is_gas_update = BOILER_GAS_METER_UPDATE in status
-        device.apply_status(status)
-        self._schedule_boiler_silence_check(device)
+        feature_only = set(status) == {BOILER_FEATURE_UPDATE}
+        feature_taken = device.apply_status(status)
+        if feature_taken:
+            self._async_start_late_boiler_gas(device)
+        if not feature_only:
+            self._schedule_boiler_silence_check(device)
         if is_gas_update:
             self._schedule_boiler_gas_refresh(device)
             config_entry = self.config_entry

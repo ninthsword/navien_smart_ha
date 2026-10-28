@@ -246,11 +246,19 @@ entities:
 **Home Assistant 2026.8.0 이상이 필요합니다.**
 
 1. HACS → 사용자 지정 저장소에 이 저장소를 추가
+   — 주소 `https://github.com/ninthsword/navien_smart_ha`, 유형 `Integration`
 2. `Navien Smart` 설치 후 Home Assistant 재시작
 3. 설정 → 기기 및 서비스 → 통합 추가 → `Navien Smart`
 4. 나비엔 스마트 앱 아이디와 비밀번호 입력
 
 공간(home)이 여러 개면 고르는 화면이 나옵니다.
+
+**업데이트** — 새 릴리스가 나오면 HACS 에 새 버전이 표시됩니다. 업데이트한 뒤
+Home Assistant 를 재시작하면 적용됩니다.
+
+**HACS 없이 직접 설치** — 이 저장소의 `custom_components/navien_smarthome` 폴더를
+Home Assistant 설정 폴더의 `custom_components` 안에 복사하고 Home Assistant 를
+재시작합니다. 그다음은 위 3번부터 같습니다.
 
 ---
 
@@ -410,7 +418,7 @@ HA 화면이 멈춰 보입니다.
 기기ID · IP · MAC · SSID · 아이디 · **별칭**이 자동으로 가려집니다. 통신 주소처럼
 **값 안에 식별자가 섞여 있는 항목도** 함께 가려집니다.
 
-[이슈 남기기](https://github.com/ripe-avocado/navien_smart_ha/issues/new/choose)
+[이슈 남기기](https://github.com/ninthsword/navien_smart_ha/issues/new/choose)
 
 | 양식 | 언제 |
 | --- | --- |
@@ -506,9 +514,28 @@ python3 tools/navien_cli.py airone-modes --device-seq N   # 환기청정 지원 
 
 ---
 
+## 릴리스
+
+관리자용입니다. 릴리스는 버전 태그를 올리면 만들어집니다.
+
+1. `custom_components/navien_smarthome/manifest.json` 의 `version` 을 `X.Y.Z` 로 바꿉니다.
+   `X.Y.Z` 는 원본 저장소에서 이어받은 `v0.18.0` 보다 새 버전이어야 합니다.
+2. `CHANGELOG.md` 의 기존 `## Unreleased — ...` 제목을 `## vX.Y.Z — YYYY-MM-DD` 로
+   바꿉니다. **새 절을 따로 만들지 않고 그 아래 내용을 모두 그대로 둡니다.**
+3. 커밋하고 태그 `vX.Y.Z` 를 올립니다.
+
+릴리스 워크플로가 태그와 `version` 이 같은지, 그 버전의 CHANGELOG 절이 있고 비어
+있지 않은지 확인한 뒤 그 절을 릴리스 노트로 GitHub 릴리스를 만듭니다. HACS 는 이
+릴리스를 읽어 새 버전을 보여 줍니다. 확인에 실패하면 릴리스는 만들어지지 않습니다 —
+태그를 지우고 고친 뒤 다시 올리면 됩니다.
+
+---
+
 ## 라이선스
 
 MIT. 이 프로젝트는 경동나비엔과 무관하며 앱 동작을 분석해 만든 비공식 통합입니다.
+이 저장소는 [ripe-avocado/navien_smart_ha](https://github.com/ripe-avocado/navien_smart_ha)
+의 포크입니다.
 [kyle-seongwoo-jun/homebridge-navien-smart](https://github.com/kyle-seongwoo-jun/homebridge-navien-smart)
 의 인증 흐름 분석을 참고했습니다.
 

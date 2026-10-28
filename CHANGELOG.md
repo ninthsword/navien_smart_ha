@@ -2,6 +2,12 @@
 
 ## Unreleased — NR-67D boiler support
 
+- **Takes the boiler's feature declaration from its MQTT answer to status/start** and keeps
+  it across REST polls that lack it. Since the device list started returning
+  `Properties.did: null`, that answer (feature and `macAddress`, no `status`) was dropped, so
+  the power, hot-water and turbo switches, both setpoint numbers and both gas sensors went
+  stale and the gas query stopped. Those entities and the gas query now appear as soon as the
+  feature arrives, without a reload, under their existing unique IDs.
 - Raises the minimum supported Home Assistant version to 2026.8.0 and adds locked
   development dependencies, strict mypy, Ruff, hassfest, and real-HA contract tests to CI.
 - Reads the `smarttok` MQTT status confirmed on an `NR-67D` and surfaces it as temperature

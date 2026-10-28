@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import Any, TypeVar
 
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .airone import AironeDevice
@@ -12,6 +17,43 @@ from .boiler import BoilerDevice
 from .const import DOMAIN, MODEL_TYPE_LABELS
 from .coordinator import NavienSmartCoordinator
 from .models import NavienDevice
+
+_EntityT = TypeVar("_EntityT", bound=Entity)
+
+
+def boiler_entities_as_declared(
+    entry: ConfigEntry,
+    coordinator: NavienSmartCoordinator,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    build: Callable[[BoilerDevice], Iterable[_EntityT]],
+) -> list[_EntityT]:
+    """Return the feature-gated boiler entities whose condition holds now, and add the rest
+    as soon as their condition holds.
+
+    The feature can arrive after setup: an NR-67D whose REST entry lost `Properties.did`
+    declares it only in its MQTT answer to status/start. Each unique_id is added once and
+    never removed here, so a later change in the declaration neither duplicates nor drops an
+    entity. The listener belongs to the config entry and goes with it on unload.
+    """
+    added: set[str] = set()
+
+    def _fresh() -> list[_EntityT]:
+        fresh: list[_EntityT] = []
+        for boiler in coordinator.boilers.values():
+            for entity in build(boiler):
+                unique_id = entity.unique_id
+                if unique_id is not None and unique_id not in added:
+                    added.add(unique_id)
+                    fresh.append(entity)
+        return fresh
+
+    @callback
+    def _add_late() -> None:
+        if fresh := _fresh():
+            async_add_entities(fresh)
+
+    entry.async_on_unload(coordinator.async_add_listener(_add_late))
+    return _fresh()
 
 
 class NavienSmartEntity(CoordinatorEntity[NavienSmartCoordinator]):
