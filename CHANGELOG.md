@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased — NR-67D boiler support
+## v0.19.0 — 2026-10-28
 
+NR-67D boiler support, and the first release published from this fork.
+
+- **Installs and updates through HACS from this fork.** The manifest's documentation,
+  issue tracker and code owner point at `ninthsword/navien_smart_ha`; a HACS validation
+  workflow runs on every push and pull request; pushing a `vX.Y.Z` tag creates the GitHub
+  release HACS reads, with this file's section as its notes, and is refused when the tag
+  does not match the manifest version or the section is missing.
 - **Changes nothing after MQTT stops.** A message already queued when the integration
   unloads, or a timer callback that reschedules, no longer updates device state, notifies
   entities, imports gas statistics or starts a new timer or task; starting MQTT again
