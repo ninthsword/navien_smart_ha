@@ -34,12 +34,21 @@ def boiler_entities_as_declared(
     declares it only in its MQTT answer to status/start. Each unique_id is added once and
     never removed here, so a later change in the declaration neither duplicates nor drops an
     entity. The listener belongs to the config entry and goes with it on unload.
+
+    Every MQTT message notifies the listener, so `build` runs for a boiler only when it is new
+    here or its feature declaration differs from the one last examined. `model_code` is not
+    compared: one deviceId keeps its model.
     """
     added: set[str] = set()
+    examined: dict[str, dict[str, Any]] = {}
 
     def _fresh() -> list[_EntityT]:
         fresh: list[_EntityT] = []
         for boiler in coordinator.boilers.values():
+            device_id = boiler.device_id
+            if device_id in examined and examined[device_id] == boiler.feature:
+                continue
+            examined[device_id] = dict(boiler.feature)
             for entity in build(boiler):
                 unique_id = entity.unique_id
                 if unique_id is not None and unique_id not in added:

@@ -32,6 +32,8 @@ A test that needs to know how HA really behaves takes HA's own source instead.
 | `test_gas_statistics.py` | writing gas history into long-term statistics, and handling overlapping months |
 | `test_airone_air_kinds.py` | entities survive a shrinking set of air-quality kinds, and the save ordering |
 | `test_review_fixes.py` | the fixes from the full review cannot regress |
+| `test_boiler_feature.py` | the boiler takes its feature declaration from the MQTT start answer and keeps it across polls |
+| `test_release_notes.py` | the release notes come from the tag's CHANGELOG section, and a mismatched tag is refused |
 
 ## Writing a new one
 
