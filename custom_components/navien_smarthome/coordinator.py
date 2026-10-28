@@ -147,6 +147,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self._boiler_gas_step_reached: set[str] = set()
         self._boiler_gas_started: set[str] = set()
         self._boiler_gas_run = 0
+        # Late gas starts run as background tasks outside the MQTT client's own task, so stop
+        # cancels them itself: one finishing its request after stop would re-create timers.
+        self._boiler_gas_tasks: set[asyncio.Task[None]] = set()
         # **Even one-shot timers are held.** Waking after an unload or reload would have an
         # integration that no longer exists send a request to the server. The exception is
         # caught, but a pointless request still reaches an unofficial server, and it is
@@ -797,11 +800,13 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self._boiler_gas_started.add(device_id)
         config_entry = self.config_entry
         assert config_entry is not None
-        config_entry.async_create_background_task(
+        task = config_entry.async_create_background_task(
             self.hass,
             self._async_start_late_boiler_gas_task(device_id, self._boiler_gas_run),
             f"navien gas start {boiler.device_seq}",
         )
+        self._boiler_gas_tasks.add(task)
+        task.add_done_callback(self._boiler_gas_tasks.discard)
 
     async def _async_start_late_boiler_gas_task(self, device_id: str, run: int) -> None:
         boiler = self.boilers.get(device_id)
@@ -817,6 +822,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         return unsub
 
     async def async_stop_mqtt(self) -> None:
+        for task in tuple(self._boiler_gas_tasks):
+            task.cancel()
+        self._boiler_gas_tasks.clear()
         self._boiler_gas_step_reached.clear()
         self._boiler_gas_started.clear()
         self._boiler_gas_run += 1

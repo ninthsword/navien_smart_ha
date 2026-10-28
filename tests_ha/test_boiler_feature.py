@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -206,5 +207,37 @@ async def test_poll_rebuild_during_start_send_then_feature(
         await hass.async_block_till_done(wait_background_tasks=True)
         assert coordinator.boilers[DEVICE_ID] is not original
         assert coordinator.boiler_gas_requests == 1
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+async def test_stop_during_late_gas_request_leaves_no_timer(
+    hass: HomeAssistant, loaded_entry
+) -> None:
+    """A late gas request still in flight when MQTT stops schedules nothing afterwards."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    try:
+        await coordinator._async_request_initial_state()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert coordinator.boiler_gas_requests == 0
+
+        sent = asyncio.Event()
+        release = asyncio.Event()
+
+        async def held(*_args: Any, **_kwargs: Any) -> None:
+            sent.set()
+            await release.wait()
+
+        coordinator.api.async_boiler_request = AsyncMock(side_effect=held)
+        deliver(coordinator, {"macAddress": PHYSICAL_ID, "feature": FEATURE})
+        await asyncio.wait_for(sent.wait(), 5)
+
+        await REAL_STOP_MQTT(coordinator)
+        release.set()
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert coordinator._boiler_gas_unsubs == {}
+        assert coordinator._boiler_silence_unsubs == {}
+        assert coordinator._boiler_gas_tasks == set()
     finally:
         await REAL_STOP_MQTT(coordinator)
