@@ -2,16 +2,16 @@
   "domain": "navien_smarthome",
   "name": "Navien Smart",
   "codeowners": [
-    "@ripe-avocado"
+    "@ninthsword"
   ],
   "config_flow": true,
   "dependencies": [
     "recorder"
   ],
-  "documentation": "https://github.com/ripe-avocado/navien_smart_ha",
+  "documentation": "https://github.com/ninthsword/navien_smart_ha",
   "integration_type": "hub",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/ripe-avocado/navien_smart_ha/issues",
+  "issue_tracker": "https://github.com/ninthsword/navien_smart_ha/issues",
   "requirements": [
     "paho-mqtt>=2.1.0"
   ],
