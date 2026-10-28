@@ -155,6 +155,10 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # caught, but a pointless request still reaches an unofficial server, and it is
         # inconsistent with every other timer, which is managed.
         self._oneshot_unsubs: set[Callable[[], None]] = set()
+        # Set from the start of async_stop_mqtt until async_start_mqtt runs again. A message
+        # paho already queued on the loop can still arrive after stop; while this is set it,
+        # and every scheduler, does nothing, so no timer, task or state change outlives stop.
+        self._mqtt_stopped = False
         self.boiler_silence_requests = 0
         self.boiler_silence_failures = 0
         self.boiler_gas_requests = 0
@@ -658,6 +662,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     # -- live state --------------------------------------------------------
 
     async def async_start_mqtt(self) -> None:
+        self._mqtt_stopped = False
         prefixes = {
             prefix
             for device in (self.data or {}).values()
@@ -822,6 +827,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         return unsub
 
     async def async_stop_mqtt(self) -> None:
+        self._mqtt_stopped = True
         for task in tuple(self._boiler_gas_tasks):
             task.cancel()
         self._boiler_gas_tasks.clear()
@@ -874,6 +880,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     @callback
     def _handle_reported(self, device_id: str, reported: dict[str, Any]) -> None:
         """Apply a `reported` that arrived over MQTT. Called on the HA event loop."""
+        if self._mqtt_stopped:
+            return
         devices = self.data or {}
         device = devices.get(device_id)
         if device is None:
@@ -892,6 +900,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         The `deviceId` in the device list can differ from `did.roomController.deviceId`, so
         both are searched.
         """
+        if self._mqtt_stopped:
+            return
         device = self.airone.get(device_id)
         if device is None:
             device = next(
@@ -913,6 +923,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     @callback
     def _handle_boiler_observation(self, observation: dict[str, Any]) -> None:
         """Keep at most eight de-identified observation records."""
+        if self._mqtt_stopped:
+            return
         self.boiler_observations.append(observation)
         del self.boiler_observations[:-BOILER_OBSERVATION_KEEP]
 
@@ -921,6 +933,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         self, physical_id: str, status: dict[str, Any]
     ) -> None:
         """Attach MQTT boiler state to the matching REST device."""
+        if self._mqtt_stopped:
+            return
         device = next(
             (
                 boiler
@@ -1144,6 +1158,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     @callback
     def _schedule_boiler_gas_refresh(self, device: BoilerDevice) -> None:
         """Refresh the gas totals hourly — more conservative than the app's own screen."""
+        if self._mqtt_stopped:
+            return
         device_id = device.device_id
         if old := self._boiler_gas_unsubs.pop(device_id, None):
             old()
@@ -1168,6 +1184,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     @callback
     def _schedule_boiler_readback(self, device: BoilerDevice) -> None:
         """Re-read the device state after a command. Nothing is changed optimistically."""
+        if self._mqtt_stopped:
+            return
         device_id = device.device_id
 
         holder: list[Callable[[], None]] = []
@@ -1201,6 +1219,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         failure is not retried immediately but waits another five minutes, so an unofficial
         server is never pressed.
         """
+        if self._mqtt_stopped:
+            return
         device_id = device.device_id
         if old := self._boiler_silence_unsubs.pop(device_id, None):
             old()
@@ -1308,6 +1328,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         the integration is broken. Only a log line saying how far it got makes a report
         conclusive.
         """
+        if self._mqtt_stopped:
+            return
         device_id = device.device_id
         holder: list[Callable[[], None]] = []
 
@@ -1357,6 +1379,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         Instead the real state is re-read. The device normally pushes it by itself, and this
         single request catches up when it does not.
         """
+        if self._mqtt_stopped:
+            return
         device_id = device.device_id
         holder: list[Callable[[], None]] = []
 

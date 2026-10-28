@@ -905,8 +905,11 @@ def extract_boiler_status(
         _bump(stats, "dropped_not_object")
         return None
     response = _dig(event, "payload", "response")
-    status = response.get("status") if isinstance(response, dict) else None
-    gas_meter = response.get("gasMeter") if isinstance(response, dict) else None
+    if not isinstance(response, dict):
+        _bump(stats, "dropped_no_status")
+        return None
+    status = response.get("status")
+    gas_meter = response.get("gasMeter")
     feature = declared_feature(response)
     feature_only = False
     if isinstance(status, dict):
@@ -919,7 +922,6 @@ def extract_boiler_status(
     else:
         _bump(stats, "dropped_no_status")
         return None
-    assert isinstance(response, dict)
     physical_id = response.get("macAddress")
     if not physical_id:
         _bump(stats, "dropped_no_device_id")

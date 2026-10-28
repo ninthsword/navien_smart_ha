@@ -2,6 +2,10 @@
 
 ## Unreleased — NR-67D boiler support
 
+- **Changes nothing after MQTT stops.** A message already queued when the integration
+  unloads, or a timer callback that reschedules, no longer updates device state, notifies
+  entities, imports gas statistics or starts a new timer or task; starting MQTT again
+  resumes normal handling.
 - **Takes the boiler's feature declaration from its MQTT answer to status/start** and keeps
   it across REST polls that lack it. Since the device list started returning
   `Properties.did: null`, that answer (feature and `macAddress`, no `status`) was dropped, so
