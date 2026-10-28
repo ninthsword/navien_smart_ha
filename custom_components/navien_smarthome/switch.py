@@ -26,7 +26,12 @@ from .airone import AironeDevice
 from .boiler import BoilerDevice
 from .const import MODE_HEAT, MODE_POWER_OFF
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, BoilerEntity, NavienSmartEntity
+from .entity import (
+    AironeEntity,
+    BoilerEntity,
+    NavienSmartEntity,
+    boiler_entities_as_declared,
+)
 from .models import NavienDevice
 
 
@@ -53,9 +58,11 @@ async def async_setup_entry(
     entities.extend(
         AironePowerSwitch(coordinator, device) for device in coordinator.airone.values()
     )
-    for boiler in coordinator.boilers.values():
+
+    def boiler_switches(boiler: BoilerDevice) -> list[SwitchEntity]:
+        switches: list[SwitchEntity] = []
         if boiler.supports_feature("powerUse"):
-            entities.append(BoilerPowerSwitch(coordinator, boiler))
+            switches.append(BoilerPowerSwitch(coordinator, boiler))
         for kind, feature_key, label, icon in (
             ("fast_dhw", "fastDHWUse", "빠른온수", "mdi:water-boiler"),
             (
@@ -67,9 +74,16 @@ async def async_setup_entry(
             ("dhw_boost", "DHWBoostUse", "터보온수", "mdi:fire"),
         ):
             if boiler.supports_feature(feature_key):
-                entities.append(
+                switches.append(
                     BoilerFeatureSwitch(coordinator, boiler, kind, label, icon)
                 )
+        return switches
+
+    entities.extend(
+        boiler_entities_as_declared(
+            entry, coordinator, async_add_entities, boiler_switches
+        )
+    )
     async_add_entities(entities)
 
 

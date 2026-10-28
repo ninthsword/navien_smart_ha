@@ -37,7 +37,13 @@ from .const import (
     LEGACY_VALUE_TABLES,
 )
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, AironeMonitorEntity, BoilerEntity, NavienSmartEntity
+from .entity import (
+    AironeEntity,
+    AironeMonitorEntity,
+    BoilerEntity,
+    NavienSmartEntity,
+    boiler_entities_as_declared,
+)
 from .models import NavienDevice
 
 
@@ -108,10 +114,20 @@ async def async_setup_entry(
         entities.append(BoilerHumiditySensor(coordinator, boiler))
         entities.append(BoilerModeSensor(coordinator, boiler))
         entities.append(BoilerErrorSensor(coordinator, boiler))
-        if boiler.supports_feature("gasUsageUse"):
-            entities.append(BoilerMonthlyGasSensor(coordinator, boiler))
-            entities.append(BoilerDailyGasSensor(coordinator, boiler))
 
+    def boiler_gas_sensors(boiler: BoilerDevice) -> list[SensorEntity]:
+        if not boiler.supports_feature("gasUsageUse"):
+            return []
+        return [
+            BoilerMonthlyGasSensor(coordinator, boiler),
+            BoilerDailyGasSensor(coordinator, boiler),
+        ]
+
+    entities.extend(
+        boiler_entities_as_declared(
+            entry, coordinator, async_add_entities, boiler_gas_sensors
+        )
+    )
     async_add_entities(entities)
 
 
