@@ -17,6 +17,7 @@ from typing import Any
 
 from .const import (
     CAPACITY_DOUBLE,
+    CELSIUS_UNITS,
     MAT_ERROR_NAMES,
     MAT_VOLUME_NAMES,
     MODE_HEAT,
@@ -96,7 +97,7 @@ class HeatControl:
 
     @property
     def is_celsius(self) -> bool:
-        return self.unit == UNIT_CELSIUS
+        return self.unit in CELSIUS_UNITS
 
     @property
     def is_known(self) -> bool:
@@ -105,7 +106,7 @@ class HeatControl:
     @property
     def step(self) -> float:
         """The leading number of the `<step><axis>` encoding."""
-        if self.is_celsius:
+        if self.unit == UNIT_CELSIUS:
             return 0.5
         return 1.0
 

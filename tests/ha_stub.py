@@ -81,6 +81,7 @@ stub(
     ConfigEntryAuthFailed=type("A", (Exception,), {}),
     HomeAssistantError=type("B", (Exception,), {}),
     ConfigEntryNotReady=type("C", (Exception,), {}),
+    ServiceValidationError=type("S", (Exception,), {}),
 )
 stub(
     "homeassistant.helpers.update_coordinator",
@@ -176,6 +177,7 @@ stub(
 )
 stub(
     "homeassistant.components.climate.const",
+    ATTR_HVAC_MODE="hvac_mode",
     ClimateEntityFeature=enum(TARGET_TEMPERATURE=1, TURN_ON=2, TURN_OFF=4),
     HVACMode=enum(HEAT="heat", OFF="off", COOL="cool"),
     HVACAction=enum(HEATING="heating", IDLE="idle", OFF="off", COOLING="cooling"),

@@ -13,7 +13,7 @@ wrong:
 This is the same reasoning that kept steps out of `climate` ("a step is not a temperature").
 A step is not a continuous quantity either.
 
-Temperature mats (`0.5C`) are genuinely continuous, so they use `climate`.
+Temperature mats (`0.5C`, `1.0C`) are genuinely continuous, so they use `climate`.
 """
 
 from __future__ import annotations
@@ -137,9 +137,10 @@ class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):  # pyright: igno
     The steps match the app's volume screen: `MateDeviceSettingSoundVolumeFragment` puts the
     `selectedIndex` it picked (0-3) straight into `Desired.volume`.
 
-    **Not a switch, because this is a level rather than an on/off.** A separate `control-beep`
-    silences the button sound entirely, but it uses a different value scheme and the app only
-    attaches it to models from 2024 onwards — leave it alone.
+    **Not a switch, because this is a level rather than an on/off.** The control beep is a
+    separate `beep: true` the app attaches to every command for models from 2024 onwards; the
+    coordinator adds it the same way (`BEEP_MODEL_CODES`). Whether this volume affects that
+    beep is not confirmed.
     """
 
     _attr_icon = "mdi:volume-high"

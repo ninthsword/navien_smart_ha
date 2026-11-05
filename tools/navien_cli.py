@@ -414,6 +414,7 @@ def _print_device(dev: dict[str, Any], redact: bool) -> None:
         axes: dict[str | None, str] = {
             "1.0L": "단계 (level, 정수, 1 간격)",
             "0.5C": "온도 (temperature, 실수, 0.5°C 간격)",
+            "1.0C": "온도 (temperature, 실수, 1°C 간격)",
         }
         axis = axes.get(unit)
         print(f"     {label}:")

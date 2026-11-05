@@ -1,4 +1,4 @@
-"""Thermostats for temperature mats (`heatControl.unit == "0.5C"`).
+"""Thermostats for temperature mats (`heatControl.unit` `"0.5C"` or `"1.0C"`).
 
 A temperature mat also reports `temperature.current`, so `climate` is the right fit — the
 current-temperature field of the thermostat card gets filled in.
@@ -19,12 +19,14 @@ from typing import Any
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
+    ATTR_HVAC_MODE,
     ClimateEntityFeature,
     HVACAction,
     HVACMode,
 )
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
@@ -217,16 +219,43 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         return (self._zone,)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Store the value, and power on only when the device is on, unknown or asked to.
+
+        The app sends the temperature **without `operationMode`** to a powered-off mat, and
+        the device keeps the value and starts at it when powered on (upstream v0.21.0). So a
+        mat known to be off only stores the value. An unknown state powers on as before.
+
+        A call carrying `hvac_mode` applies that mode, as Home Assistant's service defines:
+        `off` sends the value and then runs the existing off path, a mode this entity offers
+        powers on, and any other mode is refused before anything is sent. Home Assistant
+        passes `hvac_mode` through without checking it against `hvac_modes`.
+        """
         temperature = kwargs.get("temperature")
         device = self.device
         if device is None or temperature is None:
             return
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE)
+        if hvac_mode is not None and hvac_mode not in self.hvac_modes:
+            raise ServiceValidationError(
+                f"이 매트는 지금 '{hvac_mode}' 모드를 지원하지 않습니다"
+            )
         value = float(temperature)
         zones = self._target_zones
         heater = device.build_heater_desired(
             changes={zone: value for zone in zones},
             enables={zone: True for zone in zones},
         )
+        if hvac_mode == HVACMode.OFF:
+            await self.coordinator.async_send(device, {"heater": heater})
+            await self.async_set_hvac_mode(HVACMode.OFF)
+            return
+        if (
+            hvac_mode is None
+            and device.operation_mode is not None
+            and not device.is_on
+        ):
+            await self.coordinator.async_send(device, {"heater": heater})
+            return
         await self.coordinator.async_send(
             device, {"operationMode": MODE_HEAT, "heater": heater}
         )

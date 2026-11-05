@@ -49,6 +49,7 @@ from .const import (
     AIRONE_SILENCE_CHECK_SECONDS,
     AIRONE_TOPIC_FMT,
     AIRONE_UPDATE_INTERVAL_SECONDS,
+    BEEP_MODEL_CODES,
     DOMAIN,
     MIN_REFRESH_COOLDOWN_SECONDS,
     OUT_OF_SCOPE_REASONS,
@@ -1421,6 +1422,11 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # Record what was sent. Cooling can only be settled by seeing whether a sent value
         # returns unchanged, and this record is that evidence.
         device.note_command(desired)
+        # The app beeps on its 2024-or-later models for every user command; the empty state
+        # request at startup calls `api.async_control` directly and stays silent.
+        model_code = device.model_code
+        if model_code.isdecimal() and int(model_code) in BEEP_MODEL_CODES:
+            desired = {**desired, "beep": True}
         try:
             await self.api.async_control(self.home_seq, device.raw, desired)
         except NavienSmartAuthError as err:

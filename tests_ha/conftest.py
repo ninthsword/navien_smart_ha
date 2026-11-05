@@ -219,9 +219,12 @@ def config_entry(hass: HomeAssistant) -> MockConfigEntry:
 async def loaded_entry(
     hass: HomeAssistant,
     config_entry: MockConfigEntry,
-    devices: tuple[NavienDevice, AironeDevice, BoilerDevice],
+    devices: tuple[NavienDevice, AironeDevice | None, BoilerDevice | None],
 ) -> AsyncIterator[MockConfigEntry]:
-    """Load all platforms while replacing every Navien network boundary."""
+    """Load all platforms while replacing every Navien network boundary.
+
+    A `devices` override may hold no Airone or no boiler (`None`).
+    """
     mat, airone, boiler = devices
     session = NavienSmartSession(
         access_token="test-token",
@@ -236,9 +239,11 @@ async def loaded_entry(
     async def fake_update(
         coordinator: NavienSmartCoordinator,
     ) -> dict[str, NavienDevice]:
-        coordinator.raw_devices = [mat.raw, airone.raw, boiler.raw]
-        coordinator.airone = {airone.device_id: airone}
-        coordinator.boilers = {boiler.device_id: boiler}
+        coordinator.raw_devices = [
+            device.raw for device in (mat, airone, boiler) if device is not None
+        ]
+        coordinator.airone = {} if airone is None else {airone.device_id: airone}
+        coordinator.boilers = {} if boiler is None else {boiler.device_id: boiler}
         return {mat.device_id: mat}
 
     with (

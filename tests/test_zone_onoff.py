@@ -64,11 +64,22 @@ r.ok(temp.heat_control.off_value == 27.5, f"temperature mat 28 - 0.5 = {temp.hea
 level = make_mat(**LEVEL, capacity=2, zones={"left": 3, "right": 2})
 r.ok(level.heat_control.off_value == 0, f"stepped mat 1 - 1 = {level.heat_control.off_value}")
 
-# With an unknown axis, no value is invented.
+# 1.0C is a temperature axis in 1-degree steps (upstream issue #25, EQM-580).
 water = make_mat(unit="1.0C", range_min=28, range_max=45, capacity=2,
                  zones={"left": 33.0, "right": 31.0})
-r.ok(not water.heat_control.is_known, "1.0C is an axis that has not been confirmed")
-r.ok(water.heat_control.off_value is None, "an unknown axis produces no off value")
+r.ok(water.heat_control.is_known, "1.0C is a known axis")
+r.ok(water.heat_control.is_celsius, "1.0C is a temperature axis")
+r.ok(not water.heat_control.is_level, "1.0C is not a stepped axis")
+r.ok(water.heat_control.step == 1.0, f"1.0C moves in 1-degree steps: {water.heat_control.step}")
+r.ok(water.heat_control.off_value == 27.0, f"1.0C mat 28 - 1.0 = {water.heat_control.off_value}")
+r.ok(temp.heat_control.step == 0.5, "0.5C keeps its 0.5 step")
+r.ok(level.heat_control.step == 1.0 and level.heat_control.is_level, "1.0L stays the stepped axis")
+
+# With an unknown axis, no value is invented.
+odd = make_mat(unit="2.0X", range_min=28, range_max=45, capacity=2,
+               zones={"left": 33.0, "right": 31.0})
+r.ok(not odd.heat_control.is_known, "2.0X is an axis that has not been confirmed")
+r.ok(odd.heat_control.off_value is None, "an unknown axis produces no off value")
 
 
 r.section("turning one side off sends a lowered value")
@@ -246,9 +257,9 @@ r.ok(off_result(single_blank, ["single"]) == POWER_OFF, "a single mat with no st
 single_off = make_mat(**TEMP, capacity=1, zones={"single": 27.5})
 r.ok(off_result(single_off, ["single"]) == POWER_OFF, "a single mat already off powers off again")
 
-single_water = make_mat(unit="1.0C", range_min=28, range_max=45, capacity=1,
-                        zones={"single": 33.0})
-r.ok("제어 축" in (refuse(single_water, ["single"]) or ""), "a single mat's unknown axis still raises")
+single_odd = make_mat(unit="2.0X", range_min=28, range_max=45, capacity=1,
+                      zones={"single": 33.0})
+r.ok("제어 축" in (refuse(single_odd, ["single"]) or ""), "a single mat's unknown axis still raises")
 
 # An unknown state does not block: send it and let the device decide.
 unknown = make_mat(**TEMP, capacity=2, zones={"right": 30.0})

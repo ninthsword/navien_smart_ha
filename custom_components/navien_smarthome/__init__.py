@@ -23,7 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
-    # Temperature mats (`0.5C`) become climate, stepped mats (`1.0L`) become select.
+    # Temperature mats (`0.5C`, `1.0C`) become climate, stepped mats (`1.0L`) become select.
     # Both platforms are registered and each picks up only the devices on its own axis.
     Platform.CLIMATE,
     # Only the Airone target humidity uses this. Mat steps are `select` — a step is not
