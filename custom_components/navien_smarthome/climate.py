@@ -246,6 +246,6 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
             await self.coordinator.async_send(device, device.build_zone_on(zones))
             return
         # **`enable: false` alone does not turn it off** (issue #16). The device only accepts
-        # it once the value is lowered to `off_value`. With no zone left on, this falls back
-        # to powering the device off — that decision lives inside `build_zone_off`.
+        # it once the value is lowered to `off_value`. With no zone left on, a single-zone mat
+        # powers off and a double mat is refused — that decision lives inside `build_zone_off`.
         await self.coordinator.async_send(device, device.build_zone_off(zones))

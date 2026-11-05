@@ -10,6 +10,11 @@
 - A boiler without a `macAddress` in its REST entry takes the first 12 characters of its
   `deviceId` as its physical id unless an id is already known, and replies match it regardless
   of letter case, so a second boiler in the account no longer drops its replies.
+- A single-zone mat turned off from its thermostat, by voice or by an automation now powers off
+  with the command its power switch sends, instead of raising an error, and a single-zone
+  stepped mat's level list no longer offers 운전 대기. Automations selecting 운전 대기 on a
+  single stepped mat must use the power switch. Double mats are unchanged. The upstream project
+  recorded the off behaviour on an EQM-580; this fork has not confirmed it on a device.
 
 ## v0.19.0 — 2026-10-28
 
