@@ -390,6 +390,23 @@ r.ok("roomcon-secret" not in text, "the topic string does not survive")
 r.ok("우리집" not in text, "even an ordinary string leaves no original text")
 r.ok("ABCDEF1234567890" not in text, "a dict key shaped like an identifier is redacted too")
 
+identity_shape = observe_boiler_message(
+    json.dumps(
+        {
+            "payload": {
+                "deviceSeq": 987654,
+                "roomContorllerSeq": 123456,
+                "additionalValue": "7391",
+                "mode": 2,
+            }
+        }
+    ).encode(),
+    "12345/smarttok/DEVICE-SECRET-1234/status",
+)["shape"]["payload"]
+for key in ("deviceSeq", "roomContorllerSeq", "additionalValue"):
+    r.ok(identity_shape[key] == {"kind": "redacted"}, f"the observation redacts {key}")
+r.ok(identity_shape["mode"] == 2, "the keys beside them stay as they were")
+
 
 r.section("binary payloads and the size limit")
 

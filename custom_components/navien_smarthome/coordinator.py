@@ -284,7 +284,12 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                         if old.status_received_at is None
                         else {**boiler.status, **old.status}
                     )
-                    if boiler.physical_device_id is None:
+                    # Precedence: the REST macAddress, then an id already known, and the
+                    # id derived at parse only when nothing is known.
+                    if (
+                        not boiler.physical_id_declared
+                        and old.physical_device_id is not None
+                    ):
                         boiler.physical_device_id = old.physical_device_id
                     boiler.status_received_at = old.status_received_at
                     boiler.last_communication_at = old.last_communication_at
@@ -764,7 +769,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 await self._async_send_boiler_payload(boiler, payload)
                 self._schedule_boiler_readback(boiler)
                 _LOGGER.debug("%s 에 초기 상태를 요청했습니다", boiler.nickname)
-            except (HomeAssistantError, NavienSmartError) as err:
+            except (HomeAssistantError, NavienSmartError, ValueError) as err:
+                # ValueError: this boiler's request cannot be built (unsupported model or
+                # missing identity parts); the other devices and the connection carry on.
                 _LOGGER.warning("%s 초기 상태 요청 실패: %s", boiler.nickname, err)
             # A poll may have rebuilt the device while the send was awaited, and the feature
             # answer may have reached only the new object, so the step reads the current one.
@@ -935,11 +942,14 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         """Attach MQTT boiler state to the matching REST device."""
         if self._mqtt_stopped:
             return
+        # The derived id and the reply can differ in letter case on the same unit.
+        wanted = physical_id.lower()
         device = next(
             (
                 boiler
                 for boiler in self.boilers.values()
-                if boiler.physical_device_id == physical_id
+                if boiler.physical_device_id is not None
+                and boiler.physical_device_id.lower() == wanted
             ),
             None,
         )
@@ -1199,7 +1209,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
             try:
                 payload = target.build_status_payload(self._boiler_client_id())
                 await self._async_send_boiler_payload(target, payload)
-            except (HomeAssistantError, NavienSmartError) as err:
+            except (HomeAssistantError, NavienSmartError, ValueError) as err:
                 _LOGGER.debug("%s 보일러 상태 재확인 실패: %s", target.nickname, err)
 
         holder.append(
@@ -1244,7 +1254,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
                 payload = target.build_status_payload(self._boiler_client_id())
                 await self._async_send_boiler_payload(target, payload)
                 self.boiler_silence_requests += 1
-            except (HomeAssistantError, NavienSmartError) as err:
+            except (HomeAssistantError, NavienSmartError, ValueError) as err:
                 self.boiler_silence_failures += 1
                 _LOGGER.debug("%s 보일러 5분 무통신 상태 요청 실패: %s", target.nickname, err)
                 self._schedule_boiler_silence_check(

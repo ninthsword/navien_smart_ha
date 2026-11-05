@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — boiler and diagnostics fixes
+
+- A boiler whose requests cannot be built (a modelCode other than 20, or missing identity
+  parts) no longer breaks the MQTT start sequence or its readback and silence timers. It gets
+  no request, and the other devices of the account keep theirs.
+- Diagnostics redact `deviceSeq`, `roomContorllerSeq` and `additionalValue` in raw device
+  entries and in boiler observations.
+- A boiler without a `macAddress` in its REST entry takes the first 12 characters of its
+  `deviceId` as its physical id unless an id is already known, and replies match it regardless
+  of letter case, so a second boiler in the account no longer drops its replies.
+
 ## v0.19.0 — 2026-10-28
 
 NR-67D boiler support, and the first release published from this fork.

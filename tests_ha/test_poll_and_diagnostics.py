@@ -101,3 +101,33 @@ async def test_diagnostics_redacts_keys_and_embedded_identifiers(
     assert "홍길동의 침실" not in rendered
     assert "**REDACTED**" in rendered
     assert result["out_of_scope_devices"][-1]["serviceCode"] == "future-900"
+
+
+async def test_diagnostics_redacts_boiler_sequence_fields(
+    hass: HomeAssistant, loaded_entry
+) -> None:
+    """The three identity fields go; the fields that make a report usable stay."""
+    coordinator = loaded_entry.runtime_data
+    raw = next(item for item in coordinator.raw_devices if item["serviceCode"] == 100)
+    raw["deviceSeq"] = 987654
+    raw["roomContorllerSeq"] = "SYNTHETIC-ROOM-SEQ"
+    raw["additionalValue"] = "7B3F"
+    nested = raw["Properties"]["did"]["response"]
+    nested["additionalValue"] = "7B3F"
+
+    result = await async_get_config_entry_diagnostics(hass, loaded_entry)
+    entry = next(
+        item for item in result["supported_devices"] if item["serviceCode"] == 100
+    )
+
+    assert entry["deviceSeq"] == "**REDACTED**"
+    assert entry["roomContorllerSeq"] == "**REDACTED**"
+    assert entry["additionalValue"] == "**REDACTED**"
+    nested_entry = entry["Properties"]["did"]["response"]
+    assert nested_entry["additionalValue"] == "**REDACTED**"
+    assert entry["serviceCode"] == 100
+    assert entry["modelCode"] == "20"
+    assert nested_entry["feature"]["powerUse"] == 2
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert "SYNTHETIC-ROOM-SEQ" not in rendered
+    assert "7B3F" not in rendered
