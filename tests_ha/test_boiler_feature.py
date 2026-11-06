@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from copy import deepcopy
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.navien_smarthome.airone import AironeDevice
 from custom_components.navien_smarthome.boiler import (
+    BOILER_READBACK_DELAY_SECONDS,
+    BOILER_SILENCE_REFRESH_SECONDS,
     BoilerDevice,
     extract_boiler_status,
 )
@@ -239,5 +246,201 @@ async def test_stop_during_late_gas_request_leaves_no_timer(
         assert coordinator._boiler_gas_unsubs == {}
         assert coordinator._boiler_silence_unsubs == {}
         assert coordinator._boiler_gas_tasks == set()
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+# Synthetic ids. The first 12 characters of the supported id hold letters, so a reply that
+# differs in letter case only is a different string until the comparison normalises it.
+UNSUPPORTED_ID = "0F1E2D3C4B5A9999"
+SUPPORTED_ID = "A1B2C3D4E5F66272"
+SUPPORTED_SEQ = 5
+LEARNED_ID = "C0C1C2C3C4C5"
+LOGGER_NAME = "custom_components.navien_smarthome"
+
+
+def mixed_rest_entries() -> list[dict[str, Any]]:
+    """Two did-null boilers, the one whose requests cannot be built listed first."""
+    return [
+        {
+            **did_null_raw(),
+            "deviceId": UNSUPPORTED_ID,
+            "deviceSeq": 4,
+            "modelCode": "002",
+            "modelName": "synthetic-unsupported",
+        },
+        {**did_null_raw(), "deviceId": SUPPORTED_ID, "deviceSeq": SUPPORTED_SEQ},
+    ]
+
+
+async def collect_with_boilers(
+    coordinator: NavienSmartCoordinator, boilers: list[dict[str, Any]]
+) -> None:
+    """Run the real poll with the fixture mat and Airone beside the given boiler entries."""
+    others = [
+        raw for raw in coordinator.raw_devices if raw.get("serviceCode") != 100
+    ]
+    coordinator.api.async_get_devices = AsyncMock(return_value=[*others, *boilers])
+    coordinator._async_update_air_sensors = AsyncMock()
+    await coordinator._async_collect()
+
+
+def error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+async def test_unsupported_boiler_leaves_the_start_sequence_running(
+    hass: HomeAssistant, loaded_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only the model-20 boiler gets a request; the mat and the Airone keep theirs."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    api: Any = coordinator.api
+    await collect_with_boilers(coordinator, mixed_rest_entries())
+    assert list(coordinator.boilers) == [UNSUPPORTED_ID, SUPPORTED_ID]
+    try:
+        await coordinator._async_request_initial_state()
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        calls = api.async_boiler_request.await_args_list
+        assert calls
+        assert {call.kwargs["device_seq"] for call in calls} == {SUPPORTED_SEQ}
+        api.async_control.assert_awaited()
+        api.async_airone_request.assert_awaited()
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "초기 상태 요청 실패" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "002" in warnings[0]
+        assert error_records(caplog) == []
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+async def test_unsupported_boiler_silence_check_counts_a_failure(
+    hass: HomeAssistant, loaded_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The timer sends nothing, logs no error, and comes back five minutes later."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    api: Any = coordinator.api
+    await collect_with_boilers(coordinator, mixed_rest_entries())
+    unsupported = coordinator.boilers[UNSUPPORTED_ID]
+    assert unsupported.last_communication_at is None
+    before = coordinator.boiler_silence_failures
+    try:
+        coordinator._schedule_boiler_silence_check(unsupported)
+        async_fire_time_changed(
+            hass,
+            dt_util.utcnow() + timedelta(seconds=BOILER_SILENCE_REFRESH_SECONDS + 1),
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        api.async_boiler_request.assert_not_awaited()
+        assert coordinator.boiler_silence_failures == before + 1
+        assert UNSUPPORTED_ID in coordinator._boiler_silence_unsubs
+        assert error_records(caplog) == []
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+async def test_unsupported_boiler_readback_sends_nothing(
+    hass: HomeAssistant, loaded_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The readback takes the existing debug path of a failed send and logs no error."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    api: Any = coordinator.api
+    await collect_with_boilers(coordinator, mixed_rest_entries())
+    try:
+        with caplog.at_level(logging.DEBUG, logger=LOGGER_NAME):
+            coordinator._schedule_boiler_readback(coordinator.boilers[UNSUPPORTED_ID])
+            async_fire_time_changed(
+                hass,
+                dt_util.utcnow() + timedelta(seconds=BOILER_READBACK_DELAY_SECONDS + 1),
+            )
+            await hass.async_block_till_done(wait_background_tasks=True)
+
+        api.async_boiler_request.assert_not_awaited()
+        assert any(
+            record.levelno == logging.DEBUG and "보일러 상태 재확인 실패" in record.getMessage()
+            for record in caplog.records
+        )
+        assert error_records(caplog) == []
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+async def test_reply_in_other_letter_case_attaches_to_its_boiler(
+    hass: HomeAssistant, loaded_entry
+) -> None:
+    """Two did-null boilers: the derived id finds the right one despite the letter case."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    await collect_with_boilers(coordinator, mixed_rest_entries())
+    reply_id = SUPPORTED_ID[:12].swapcase()
+    assert reply_id != SUPPORTED_ID[:12]
+    try:
+        deliver(coordinator, {"macAddress": reply_id, "feature": FEATURE})
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert coordinator.boilers[SUPPORTED_ID].feature == FEATURE
+        assert coordinator.boilers[UNSUPPORTED_ID].feature == {}
+        assert coordinator.drop_counts["boiler_no_device"] == 0
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+async def test_short_device_id_keeps_its_learned_id_across_a_poll(
+    hass: HomeAssistant, loaded_entry
+) -> None:
+    """A deviceId too short to derive from keeps the id a reply taught it."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    short_id = "A1B2C3D4E5F6"
+    entry = {**did_null_raw(), "deviceId": short_id}
+    await collect_with_boilers(coordinator, [entry])
+    assert coordinator.boilers[short_id].physical_device_id is None
+    try:
+        deliver(coordinator, {"macAddress": LEARNED_ID, "feature": FEATURE})
+        learned = coordinator.boilers[short_id]
+        assert learned.physical_device_id == LEARNED_ID
+
+        await collect_with_boilers(coordinator, [deepcopy(entry)])
+
+        assert coordinator.boilers[short_id] is not learned
+        assert coordinator.boilers[short_id].physical_device_id == LEARNED_ID
+    finally:
+        await REAL_STOP_MQTT(coordinator)
+
+
+async def test_known_id_outranks_the_derived_one_in_a_two_boiler_account(
+    hass: HomeAssistant, loaded_entry
+) -> None:
+    """A poll without macAddress keeps the known id, and the next reply still attaches."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    wire_transports(coordinator)
+    declared = mixed_rest_entries()
+    declared[1]["Properties"] = {
+        "nickName": "계약 테스트 보일러",
+        "did": {"response": {"macAddress": LEARNED_ID}},
+    }
+    await collect_with_boilers(coordinator, declared)
+    known = coordinator.boilers[SUPPORTED_ID]
+    assert known.physical_device_id == LEARNED_ID
+    try:
+        await collect_with_boilers(coordinator, mixed_rest_entries())
+
+        rebuilt = coordinator.boilers[SUPPORTED_ID]
+        assert rebuilt is not known
+        assert rebuilt.physical_device_id == LEARNED_ID
+
+        deliver(coordinator, {"macAddress": LEARNED_ID, "feature": FEATURE})
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert rebuilt.feature == FEATURE
+        assert coordinator.boilers[UNSUPPORTED_ID].feature == {}
+        assert coordinator.drop_counts["boiler_no_device"] == 0
     finally:
         await REAL_STOP_MQTT(coordinator)

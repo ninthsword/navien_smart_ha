@@ -1,7 +1,8 @@
 """Heating step selection (`heatControl.unit == "1.0L"`).
 
-A step is not a continuous quantity. There are nine discrete states, and `0` among them is
-not a number but the state the app calls 운전 대기 (standby). A slider gets three things
+A step is not a continuous quantity. A double mat has nine discrete states, and `0` among them
+is not a number but the state the app calls 운전 대기 (standby). A single-zone mat lists only
+its range steps, because it turns off through its power switch. A slider gets three things
 wrong:
 
 - it has to be aimed — in a narrow card row, overshooting by one means a real temperature
@@ -12,7 +13,7 @@ wrong:
 This is the same reasoning that kept steps out of `climate` ("a step is not a temperature").
 A step is not a continuous quantity either.
 
-Temperature mats (`0.5C`) are genuinely continuous, so they use `climate`.
+Temperature mats (`0.5C`, `1.0C`) are genuinely continuous, so they use `climate`.
 """
 
 from __future__ import annotations
@@ -136,9 +137,10 @@ class NavienSmartVolumeSelect(NavienSmartEntity, SelectEntity):  # pyright: igno
     The steps match the app's volume screen: `MateDeviceSettingSoundVolumeFragment` puts the
     `selectedIndex` it picked (0-3) straight into `Desired.volume`.
 
-    **Not a switch, because this is a level rather than an on/off.** A separate `control-beep`
-    silences the button sound entirely, but it uses a different value scheme and the app only
-    attaches it to models from 2024 onwards — leave it alone.
+    **Not a switch, because this is a level rather than an on/off.** The control beep is a
+    separate `beep: true` the app attaches to every command for models from 2024 onwards; the
+    coordinator adds it the same way (`BEEP_MODEL_CODES`). Whether this volume affects that
+    beep is not confirmed.
     """
 
     _attr_icon = "mdi:volume-high"
@@ -203,8 +205,14 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
         high = int(control.range_max if control.range_max is not None else 8)
 
         # The server reports `rangeMin` as 1, but the device accepts 0 (standby) — confirmed
-        # on a real device. So 0 is prepended. This does not apply to temperature mats.
-        self._levels = [LEVEL_STANDBY, *range(low, high + 1)]
+        # on a real device. So a double mat gets 0 prepended. This does not apply to temperature
+        # mats.
+        #
+        # A single-zone mat does not list it: the device reports its last level even when
+        # powered off, so standby is no state it would show, and its off is the power switch.
+        self._levels = [*range(low, high + 1)]
+        if len(device.zones) > 1:
+            self._levels.insert(0, LEVEL_STANDBY)
         self._attr_options = [level_label(value) for value in self._levels]
 
     @property
@@ -270,9 +278,10 @@ class NavienSmartLevelSelect(NavienSmartEntity, SelectEntity):
             # temperature mat, so it shares the same path (issue #16).
             #
             # **Dropping one side to standby behaves exactly as before** — `build_zone_off`
-            # produces the same `heater`. Only dropping **the last remaining zone** differs,
-            # and the device refuses that anyway, so the reason is surfaced.
+            # produces the same `heater`. Only dropping **a double mat's last remaining zone**
+            # differs, and the device refuses that anyway, so the reason is surfaced.
             # (Observed: with the left side at 0, setting the right to 0 leaves `0, 1`.)
+            # A single-zone mat does not list standby, so it does not come here.
             await self.coordinator.async_send(
                 device, device.build_zone_off([self._zone])
             )

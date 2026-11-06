@@ -16,9 +16,12 @@ The app sends the temperature and `enable` **together** (`enable = value >= rang
 uses `enable` while the device is powered on. When the whole device is off, the device reports
 `enable: false` for every zone, so the remembered setpoint decides whether a zone is off.
 
-**Both sides cannot be turned off at once** — the device refuses (confirmed on real
-hardware). The app does not power the device down on the user's behalf either; it just
+**Both sides of a double mat cannot be turned off at once** — the device refuses (confirmed on
+real hardware). The app does not power the device down on the user's behalf either; it just
 explains. What the user asked for was one zone off, not the device off.
+
+**A single-zone mat has one zone, so its zone off is the power command**, the same value its
+power switch sends.
 """
 
 from __future__ import annotations
@@ -61,11 +64,22 @@ r.ok(temp.heat_control.off_value == 27.5, f"temperature mat 28 - 0.5 = {temp.hea
 level = make_mat(**LEVEL, capacity=2, zones={"left": 3, "right": 2})
 r.ok(level.heat_control.off_value == 0, f"stepped mat 1 - 1 = {level.heat_control.off_value}")
 
-# With an unknown axis, no value is invented.
+# 1.0C is a temperature axis in 1-degree steps (upstream issue #25, EQM-580).
 water = make_mat(unit="1.0C", range_min=28, range_max=45, capacity=2,
                  zones={"left": 33.0, "right": 31.0})
-r.ok(not water.heat_control.is_known, "1.0C is an axis that has not been confirmed")
-r.ok(water.heat_control.off_value is None, "an unknown axis produces no off value")
+r.ok(water.heat_control.is_known, "1.0C is a known axis")
+r.ok(water.heat_control.is_celsius, "1.0C is a temperature axis")
+r.ok(not water.heat_control.is_level, "1.0C is not a stepped axis")
+r.ok(water.heat_control.step == 1.0, f"1.0C moves in 1-degree steps: {water.heat_control.step}")
+r.ok(water.heat_control.off_value == 27.0, f"1.0C mat 28 - 1.0 = {water.heat_control.off_value}")
+r.ok(temp.heat_control.step == 0.5, "0.5C keeps its 0.5 step")
+r.ok(level.heat_control.step == 1.0 and level.heat_control.is_level, "1.0L stays the stepped axis")
+
+# With an unknown axis, no value is invented.
+odd = make_mat(unit="2.0X", range_min=28, range_max=45, capacity=2,
+               zones={"left": 33.0, "right": 31.0})
+r.ok(not odd.heat_control.is_known, "2.0X is an axis that has not been confirmed")
+r.ok(odd.heat_control.off_value is None, "an unknown axis produces no off value")
 
 
 r.section("turning one side off sends a lowered value")
@@ -214,7 +228,7 @@ r.ok("전원" in guide and "스위치" in guide, "with no state, the message poi
 r.ok("heater" in blank.build_zone_off(["left"]), "turning off can be sent without any state")
 
 
-r.section("the last remaining zone cannot be turned off; it refuses and explains")
+r.section("a double mat's last remaining zone refuses and explains; a single mat powers off")
 
 half = make_mat(**TEMP, capacity=2, zones={"left": 27.5, "right": 30.0})
 r.ok(half.zone_is_off("left") is True, "the left side is already off")
@@ -223,17 +237,47 @@ r.ok(msg is not None, "the last remaining zone is refused")
 r.ok("매트 전원을 종료해" in (msg or ""), f"it says what to do instead: {msg}")
 r.ok(refuse(half, ["left", "right"]) is not None, "turning both off at once is refused as well")
 
-single = make_mat(**TEMP, capacity=1, zones={"single": 30.0})
-r.ok(refuse(single, ["single"]) is not None, "the same holds for a single-zone mat")
+POWER_OFF = {"operationMode": 0}
 
-# **Power is never switched off on the user's behalf.** The app does not do it either.
-build_zone_off = MODELS.split("def build_zone_off")[1].split("\n    def ")[0]
-r.ok("operationMode" not in build_zone_off, "turning off never produces a power command")
+
+def off_result(device, zones):
+    """The zone-off result, or the refusal's message, so a refusal fails its own assertion."""
+    return refuse(device, zones) or device.build_zone_off(zones)
+
+
+single = make_mat(**TEMP, capacity=1, zones={"single": 30.0})
+r.ok(off_result(single, ["single"]) == POWER_OFF, "a single temperature mat powers off")
+
+single_level = make_mat(**LEVEL, capacity=1, zones={"single": 3})
+r.ok(off_result(single_level, ["single"]) == POWER_OFF, "a single stepped mat powers off")
+
+# The only zone is in the target, so its state is never consulted.
+single_blank = make_mat(**TEMP, capacity=1, zones={})
+r.ok(off_result(single_blank, ["single"]) == POWER_OFF, "a single mat with no state powers off")
+single_off = make_mat(**TEMP, capacity=1, zones={"single": 27.5})
+r.ok(off_result(single_off, ["single"]) == POWER_OFF, "a single mat already off powers off again")
+
+single_odd = make_mat(unit="2.0X", range_min=28, range_max=45, capacity=1,
+                      zones={"single": 33.0})
+r.ok("제어 축" in (refuse(single_odd, ["single"]) or ""), "a single mat's unknown axis still raises")
 
 # An unknown state does not block: send it and let the device decide.
 unknown = make_mat(**TEMP, capacity=2, zones={"right": 30.0})
 r.ok(unknown.zone_is_off("left") is None, "the left state is unknown")
 r.ok(refuse(unknown, ["right"]) is None, "an unknown state does not block")
+
+# **A double mat's power is never switched off on the user's behalf.** The app does not do it
+# either.
+for name, result in (
+    ("temperature", normal.build_zone_off(["right"])),
+    ("stepped", level.build_zone_off(["right"])),
+    ("no state", blank.build_zone_off(["left"])),
+    ("unknown state", unknown.build_zone_off(["right"])),
+):
+    r.ok(
+        "operationMode" not in result and "heater" in result,
+        f"a double mat's result holds no power command: {name}",
+    )
 
 
 r.section("on a stepped mat both readings give the same answer")

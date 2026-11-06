@@ -574,10 +574,20 @@ def airone_mode_label(mode: int, option: int) -> str:
 
 # --- control axis (heatControl.unit) --------------------------------------
 
-# An exhaustive dex search finds only these two values, in `<step><axis>` form.
+# Values in `<step><axis>` form. The dex search found the first two; the server also reports
+# `1.0C` (upstream issue #25, EQM-580), a temperature axis in 1-degree steps.
 UNIT_LEVEL: Final = "1.0L"  # heater.*.level.set — integer steps
 UNIT_CELSIUS: Final = "0.5C"  # heater.*.temperature.set — 0.5-degree steps
-KNOWN_UNITS: Final = (UNIT_LEVEL, UNIT_CELSIUS)
+UNIT_CELSIUS_1: Final = "1.0C"  # heater.*.temperature.set — 1-degree steps
+CELSIUS_UNITS: Final = (UNIT_CELSIUS, UNIT_CELSIUS_1)
+KNOWN_UNITS: Final = (UNIT_LEVEL, UNIT_CELSIUS, UNIT_CELSIUS_1)
+
+# --- beep -----------------------------------------------------------------
+
+# The mats the app treats as 2024-or-later models (`MateInfoData.setModelCodeAndFunction`,
+# upstream issue #23). The app adds `beep: true` to every control command it sends them, and
+# the device sounds only then. This is the one per-model table in mat code.
+BEEP_MODEL_CODES: Final = frozenset({10, 17, 18, 259, 260, 261, 262, 514, 530})
 
 # --- operationMode (the KDMode.WIFI map) ----------------------------------
 
@@ -611,7 +621,7 @@ MODE_NAMES: Final = {
 
 # Mat error-code names, **transcribed from the device manual by a reporter** (2026-07-31).
 #
-# **Applied only to temperature mats (`0.5C`).** Its mentions of water tanks, circulation
+# **Applied only to temperature mats (`0.5C`, `1.0C`).** Its mentions of water tanks, circulation
 # pumps, UV lamps, cooling units and leaks mark it as a hot-water or four-season manual. There
 # is no evidence the same numbers mean the same things on a carbon (stepped) mat, so stepped
 # mats show only the number.

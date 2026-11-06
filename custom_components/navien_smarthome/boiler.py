@@ -154,10 +154,12 @@ _MIXED_IDENTIFIER_KEY = re.compile(
 # away so a new variant falls under the same rule.
 _SENSITIVE_KEYS = {
     "accesstoken",
+    "additionalvalue",
     "authorization",
     "boilercontrollerserialnumber",
     "clientid",
     "deviceid",
+    "deviceseq",
     "mac",
     "macaddress",
     "mqtttopickey",
@@ -165,6 +167,7 @@ _SENSITIVE_KEYS = {
     "refreshtoken",
     "requesttopic",
     "responsetopic",
+    "roomcontorllerseq",
     "sessionid",
     "ssid",
     "token",
@@ -276,6 +279,9 @@ class BoilerDevice:
     nickname: str
     connected: bool
     physical_device_id: str | None = None
+    # True when physical_device_id came from this REST entry's macAddress, so a poll rebuild
+    # can tell it from the value derived from deviceId, which an already known id outranks.
+    physical_id_declared: bool = False
     feature: dict[str, Any] = field(default_factory=dict)
     status: dict[str, Any] = field(default_factory=dict)
     gas_meter: dict[str, Any] = field(default_factory=dict)
@@ -314,6 +320,8 @@ class BoilerDevice:
         nick_text = raw_nick.strip() if isinstance(raw_nick, str) else ""
         nickname = str(nick.get("mainItem") or nick_text or model_name)
         physical_id = response.get("macAddress")
+        # Without a macAddress the id is the same deviceId prefix _identity_parts sends.
+        derived_id = device_id[:12] if len(device_id) >= 16 else None
         return cls(
             raw=raw,
             device_id=device_id,
@@ -322,7 +330,8 @@ class BoilerDevice:
             model_name=model_name,
             nickname=nickname,
             connected=bool(_integer(raw.get("connected"))),
-            physical_device_id=(str(physical_id) if physical_id else None),
+            physical_device_id=(str(physical_id) if physical_id else derived_id),
+            physical_id_declared=bool(physical_id),
             feature=feature or {},
             status=status if isinstance(status, dict) else {},
         )

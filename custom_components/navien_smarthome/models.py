@@ -17,10 +17,12 @@ from typing import Any
 
 from .const import (
     CAPACITY_DOUBLE,
+    CELSIUS_UNITS,
     MAT_ERROR_NAMES,
     MAT_VOLUME_NAMES,
     MODE_HEAT,
     MODE_NAMES,
+    MODE_POWER_OFF,
     MODES_ON,
     SEASON_NAMES,
     SEASON_SUMMER,
@@ -95,7 +97,7 @@ class HeatControl:
 
     @property
     def is_celsius(self) -> bool:
-        return self.unit == UNIT_CELSIUS
+        return self.unit in CELSIUS_UNITS
 
     @property
     def is_known(self) -> bool:
@@ -104,7 +106,7 @@ class HeatControl:
     @property
     def step(self) -> float:
         """The leading number of the `<step><axis>` encoding."""
-        if self.is_celsius:
+        if self.unit == UNIT_CELSIUS:
             return 0.5
         return 1.0
 
@@ -610,20 +612,26 @@ class NavienDevice:
         on an EME-520, ignored three times). The value has to drop to `off_value` for the
         zone to actually turn off.
 
-        **The last remaining zone cannot be turned off** — the device refuses. Confirmed on a
-        real stepped mat: with the left side at 0, setting the right to 0 does not take, and
-        it stays at `0, 1`.
+        **On a double mat the last remaining zone cannot be turned off** — the device refuses.
+        Confirmed on a real stepped mat: with the left side at 0, setting the right to 0 does
+        not take, and it stays at `0, 1`.
 
-        **Power is never switched off on the user's behalf.** The app does not do that
-        either; it refuses and explains.
+        **A double mat's power is never switched off on the user's behalf.** The app does not
+        do that either; it refuses and explains.
 
             if (heatType != 2 && heatType != 1) return true;   // proceed
             CustomToast.show(mate_dual_temp_batch_control_one_side_off);
             return false;                                       // refuse
 
         The user asked to turn one zone off; powering the device down is **something they did
-        not ask for**. Instead they are told to use the power switch, as the app advises. With
-        the `powerCtrl` gate removed, every mat now has that switch.
+        not ask for**, and powering on again turns both sides on, so a one-side setup would be
+        lost. Instead they are told to use the power switch, as the app advises. With the
+        `powerCtrl` gate removed, every mat now has that switch.
+
+        **A single-zone mat gets the power command instead**, the value its power switch sends.
+        It has one zone, so turning that zone off is turning the mat off and nothing can be
+        lost. The app refuses here too, but it has a power button on the same screen; the Home
+        Assistant card does not. The upstream project recorded this off behaviour on an EQM-580.
         """
         control = self.active_control
         if control is None or not control.is_known:
@@ -644,12 +652,12 @@ class NavienDevice:
             if zone not in target
         )
         if not stays_on:
+            if len(self.zones) == 1:
+                return {"operationMode": MODE_POWER_OFF}
             # The app's exact wording (`strings.xml`).
             raise ValueError(
                 "이미 다른 편측이 운전대기 상태입니다. "
                 "난방을 끄시려면 매트 전원을 종료해 주세요."
-                if len(self.zones) > 1
-                else "난방을 끄시려면 매트 전원을 종료해 주세요."
             )
 
         heater = self.build_heater_desired(

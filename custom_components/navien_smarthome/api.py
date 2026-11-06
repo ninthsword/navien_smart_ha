@@ -467,9 +467,10 @@ class NavienSmartApi:
     ) -> None:
         """Relay a `desired` to the shadow.
 
-        `event.modelCode` goes on every command. `beep` does not: the app attaches it only to
-        models from 2024 onwards, and commands were confirmed to work without it on a real
-        device.
+        `event.modelCode` goes on every command. `beep` is not added here: the app attaches
+        it only to models from 2024 onwards, so `NavienSmartCoordinator.async_send` decides it
+        from `BEEP_MODEL_CODES` and passes it inside `desired`. The empty state request at
+        startup carries none.
         """
         session = self._require_session()
         device_seq = device["deviceSeq"]

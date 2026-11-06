@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.20.0 — 2026-11-06
+
+Boiler and diagnostics fixes, and the mat changes ported from the upstream project.
+
+- A boiler whose requests cannot be built (a modelCode other than 20, or missing identity
+  parts) no longer breaks the MQTT start sequence or its readback and silence timers. It gets
+  no request, and the other devices of the account keep theirs.
+- Diagnostics redact `deviceSeq`, `roomContorllerSeq` and `additionalValue` in raw device
+  entries and in boiler observations.
+- A boiler without a `macAddress` in its REST entry takes the first 12 characters of its
+  `deviceId` as its physical id unless an id is already known, and replies match it regardless
+  of letter case, so a second boiler in the account no longer drops its replies.
+- A single-zone mat turned off from its thermostat, by voice or by an automation now powers off
+  with the command its power switch sends, instead of raising an error, and a single-zone
+  stepped mat's level list no longer offers 운전 대기. Automations selecting 운전 대기 on a
+  single stepped mat must use the power switch. Double mats are unchanged. The upstream project
+  recorded the off behaviour on an EQM-580; this fork has not confirmed it on a device.
+- Mats whose `heatControl.unit` is `1.0C` (upstream issue #25, EQM-580) get a thermostat per
+  zone moving in 1-degree steps, with `rangeMin - 1` as the zone off value. Diagnostics list
+  `1.0C` among the known control units. This fork has not confirmed it on a device.
+- `climate.set_temperature` on a mat reported powered off now only stores the value, as the app
+  does, instead of powering the mat on. A powered-on mat or one whose state is unknown still
+  powers on. A call carrying `hvac_mode` applies it: `heat` (or `cool` in the cooling season)
+  powers on, `off` sends the value and then turns the zone or single mat off, and a mode the
+  entity does not offer is refused before anything is sent. **Automations that use
+  `set_temperature` to turn a mat on must add `hvac_mode: heat`** or use the power switch.
+- Control commands to the mats the app treats as 2024-or-later models (modelCode 10, 17, 18,
+  259, 260, 261, 262, 514, 530; upstream issue #23) carry `beep: true`, as the app sends them.
+  The empty state request at startup carries none.
+
 ## v0.19.0 — 2026-10-28
 
 NR-67D boiler support, and the first release published from this fork.

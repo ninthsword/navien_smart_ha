@@ -59,8 +59,11 @@ def envelope(response: dict[str, Any]) -> bytes:
     ).encode()
 
 
-def parse_did_null() -> BoilerDevice:
-    device = BoilerDevice.parse(copy.deepcopy(RAW_DID_NULL))
+def parse_did_null(device_id: str | None = None) -> BoilerDevice:
+    raw = copy.deepcopy(RAW_DID_NULL)
+    if device_id is not None:
+        raw["deviceId"] = device_id
+    device = BoilerDevice.parse(raw)
     assert device is not None
     return device
 
@@ -226,9 +229,8 @@ r.ok(
     "a feature without macAddress is dropped_no_device_id",
 )
 
-two_a = parse_did_null()
-two_b = parse_did_null()
-two_b.device_id = "0011223344559999"
+two_a = parse_did_null("0A0B0C0D0E0F6272")
+two_b = parse_did_null("1A1B1C1D1E1F9999")
 pair = make_coordinator(two_a, two_b)
 pair_client = mqtt_for(pair)
 receive(pair_client, {"macAddress": PHYSICAL_ID, "feature": FEATURE})
@@ -257,6 +259,35 @@ replaced = parse_did_null()
 replaced.feature = {"powerUse": 2, "gasUsageUse": 2}
 replaced.apply_status({BOILER_FEATURE_UPDATE: {"powerUse": 1}})
 r.ok(replaced.feature == {"powerUse": 1}, "a new declaration replaces the previous one")
+
+
+r.section("the physical id of a boiler without a macAddress in its REST entry")
+
+derived = parse_did_null("0A0B0C0D0E0F6272")
+r.ok(
+    derived.physical_device_id == "0A0B0C0D0E0F",
+    "a deviceId of 16 characters derives its first 12",
+)
+short = parse_did_null("0A0B0C0D0E0F627")
+r.ok(short.physical_device_id is None, "a deviceId under 16 characters derives nothing")
+declared_raw = copy.deepcopy(RAW_DID_NULL)
+declared_raw["Properties"]["did"] = {"response": {"macAddress": "F1F2F3F4F5F6"}}
+declared = BoilerDevice.parse(declared_raw)
+assert declared is not None
+r.ok(
+    declared.physical_device_id == "F1F2F3F4F5F6",
+    "a macAddress in the REST entry wins over the deviceId prefix",
+)
+
+other_unit = parse_did_null()
+other_coordinator = make_coordinator(other_unit)
+receive(mqtt_for(other_coordinator), {"macAddress": "F1F2F3F4F5F6", "feature": FEATURE})
+r.ok(
+    other_unit.feature == FEATURE
+    and other_unit.physical_device_id == "F1F2F3F4F5F6"
+    and other_coordinator.drop_counts["boiler_no_device"] == 0,
+    "a single boiler takes a macAddress that differs from its deviceId prefix",
+)
 
 
 sys.exit(r.finish())
