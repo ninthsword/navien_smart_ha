@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — boiler and diagnostics fixes
+## v0.20.0 — 2026-11-06
+
+Boiler and diagnostics fixes, and the mat changes ported from the upstream project.
 
 - A boiler whose requests cannot be built (a modelCode other than 20, or missing identity
   parts) no longer breaks the MQTT start sequence or its readback and silence timers. It gets
