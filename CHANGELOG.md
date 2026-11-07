@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — boiler wording and readings checked against the manual
+## v0.20.1 — 2026-11-07
+
+Boiler wording and readings checked against the NCB753 manual.
 
 - The boiler error names follow the NCB753 manual's tables (2026-09-01 edition): `E109` is
   「FAN 이상」 and `E441` is 「온수 출구 온도 센서2 이상」, so it is no longer named the same as
