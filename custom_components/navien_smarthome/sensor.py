@@ -341,8 +341,8 @@ class BoilerReservationSensor(BoilerEntity, SensorEntity):  # pyright: ignore[re
         if device is None:
             return None
         attrs: dict[str, Any] = {}
-        if (interval := device.repeat_reservation_interval) is not None:
-            attrs["반복 주기"] = f"{interval[0]}시간 {interval[1]}분"
+        if (schedule := device.repeat_reservation_label) is not None:
+            attrs["반복 주기"] = schedule
         if (table := device.day_cycle_reservation) is not None:
             # What each position means is unknown, so the raw table is kept uninterpreted.
             attrs["24시간 예약 원문"] = table

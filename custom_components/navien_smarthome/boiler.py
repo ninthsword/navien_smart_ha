@@ -74,13 +74,22 @@ BOILER_OPERATION_MODE_NAMES: dict[int, str] = {
 # value only makes sense read as support for the **hot-water-only operating mode**, not for
 # the hot-water function itself.
 #
-# **The cause is still unknown.** Neither the app nor the room controller switches it to
-# away. In this installation the room controller and the boiler are wired through a
-# volt-free contact, so the away mode may simply not be conveyable over that wiring — or the
-# device may be faulty. The evidence at hand cannot separate the two; that needs a question
-# to the manufacturer. Either way the conclusion, **do not open the command**, is unchanged.
-# Transcribed verbatim from the "12. 자가 진단 조치 방법" table of the official `NCB753`
-# manual (2025-01-08 edition). Nothing was added or guessed.
+# **The device itself declares away unsupported.** Neither the app nor the room controller
+# switches it to away. In this installation another maker's room-by-room valve controller
+# asks for heat through a contact wired into the room controller, which talks to the boiler
+# over its usual power and communication line. The feature declaration carries
+# ``extHeatDemandUse`` 2 (external heat demand) and ``gooutUse``, ``hotWaterUse`` and
+# ``insideUse`` 1. Whether the contact setup is why those read 1 cannot be told from one
+# device. Navien's own valve controllers use RS-485 or a dedicated line; another maker's
+# can share the system with the Navien room controller only through a contact (wiring it to
+# the boiler over a bus instead leaves no room controller, and so no app), so wallpad
+# installations may report the same. Either way the conclusion, **do not open the
+# command**, is unchanged.
+#
+# Names from the error tables of the official `NCB753` manual ("12. 자가 진단 조치 방법" and
+# "22. 보일러 이상 발생 표시"; 2025-01-08 edition, checked again against the 2026-09-01 edition).
+# A sensor's Open and Short rows share one code and are named "이상" here. Nothing was added
+# or guessed.
 #
 # **How the numbers were matched, stated openly.** The manual writes them as `E001` while
 # the server sends integers, and this table reads those integers as the manual's three-digit
@@ -99,7 +108,7 @@ BOILER_ERROR_NAMES: dict[int, str] = {
     46: "열교환기 과열 감지기 이상",
     47: "배기가스 온도 센서 이상",
     60: "듀얼벤추리 이상",
-    109: "송풍기 회전 수 감지 이상",
+    109: "FAN 이상",
     110: "배기폐쇄",
     205: "난방 공급 온도 센서 이상",
     218: "난방 환수 온도 센서 이상",
@@ -112,7 +121,7 @@ BOILER_ERROR_NAMES: dict[int, str] = {
     351: "물 보충 이상",
     407: "온수 출구 온도 센서 이상",
     421: "직수 온도 센서 이상",
-    441: "온수 출구 온도 센서 이상",
+    441: "온수 출구 온도 센서2 이상",
     445: "믹싱밸브 이상",
     515: "컨트롤러 이상",
     517: "Dip 스위치 설정 이상",
@@ -584,12 +593,28 @@ class BoilerDevice:
 
     @property
     def repeat_reservation_interval(self) -> tuple[int, int] | None:
-        """The repeat-schedule interval, as (hours, minutes)."""
+        """The repeat schedule as (interval hours, run minutes): run M minutes every N hours."""
         hour = _integer(self.status.get("timeCycleReservationSettingHour"))
         minute = _integer(self.status.get("timeCycleReservationSettingMinute"))
         if hour is None and minute is None:
             return None
         return (hour or 0, minute or 0)
+
+    @property
+    def repeat_reservation_label(self) -> str | None:
+        """The repeat schedule in the manual's own wording: run M minutes every N hours.
+
+        The manual (NCB753, 4.3) sets N from 1 to 12 hours and M from 10 to 50 minutes. Reading
+        ``timeCycleReservationSettingHour`` as N and ``...Minute`` as M lines the field names up
+        with those ranges and with the values seen on a real device (1 and 10); it was not
+        confirmed in the app. A missing value or an interval of 0 hours gives no label rather
+        than a schedule that cannot exist.
+        """
+        hour = _integer(self.status.get("timeCycleReservationSettingHour"))
+        minute = _integer(self.status.get("timeCycleReservationSettingMinute"))
+        if hour is None or minute is None or hour < 1:
+            return None
+        return f"{hour}시간마다 {minute}분 가동"
 
     @property
     def day_cycle_reservation(self) -> str | None:

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — boiler wording checked against the manual
+
+- The boiler error names follow the NCB753 manual's tables (2026-09-01 edition): `E109` is
+  「FAN 이상」 and `E441` is 「온수 출구 온도 센서2 이상」, so it is no longer named the same as
+  `E407`.
+- The reservation sensor's `반복 주기` attribute reads as the manual writes it, for example
+  「1시간마다 10분 가동」 instead of 「1시간 10분」, which read as a single period; a template
+  matching the old text needs updating. The error sensor's `이상 발생 내용` changes for `E109`
+  and `E441` only.
+- README and code comments no longer say the room controller and boiler are joined by a
+  contact: in the reported installation another maker's valve controller drives the room
+  controller through a contact, the only way to keep the Navien room controller with it,
+  and the boiler itself declares away, hot-water-only and room-temperature heating
+  unsupported.
+
 ## v0.20.0 — 2026-11-06
 
 Boiler and diagnostics fixes, and the mat changes ported from the upstream project.

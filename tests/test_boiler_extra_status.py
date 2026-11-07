@@ -141,7 +141,11 @@ r.ok(
 
 r.section("schedules are read only")
 
-r.ok(device.repeat_reservation_interval == (1, 10), "the repeat interval is read as hours and minutes")
+r.ok(device.repeat_reservation_interval == (1, 10), "the repeat schedule is read as interval hours and run minutes")
+r.ok(device.repeat_reservation_label == "1시간마다 10분 가동", "the repeat schedule reads as the manual writes it")
+unset = make_boiler()
+unset.apply_status({"timeCycleReservationSettingHour": 0, "timeCycleReservationSettingMinute": 0}, now=10.0)
+r.ok(unset.repeat_reservation_label is None, "an interval of 0 hours gives no schedule label")
 r.ok(device.day_cycle_reservation == "0" * 24, "the raw 24-hour schedule is kept verbatim")
 r.ok(device.reservation_enabled("programReservationUse") is False, "a disabled schedule is read")
 device.apply_status({"programReservationUse": 2}, now=180.0)
@@ -152,6 +156,7 @@ r.ok(
 )
 reservation_source = source("sensor.py").split("class BoilerReservationSensor")[1]
 r.ok("Never write it" in reservation_source, "it records why schedules are never written")
+r.ok("repeat_reservation_label" in reservation_source, "the sensor shows the manual's wording of the schedule")
 r.ok("kept raw, uninterpreted" in source("boiler.py"), "it records that the table positions are left uninterpreted")
 
 
@@ -192,6 +197,11 @@ r.ok(BOILER_ERROR_NAMES[1] == "열교환기 과열", "E001 was transcribed")
 r.ok(BOILER_ERROR_NAMES[110] == "배기폐쇄", "three-digit numbers were transcribed too")
 r.ok(BOILER_ERROR_NAMES[792] == "환탕 라인 순환 이상", "the table was transcribed through its last entry")
 r.ok(len(BOILER_ERROR_NAMES) == 31, "the count matches the manual's table")
+r.ok(BOILER_ERROR_NAMES[109] == "FAN 이상", "E109 carries the table's name, not the description")
+r.ok(
+    BOILER_ERROR_NAMES[441] != BOILER_ERROR_NAMES[407] and "센서2" in BOILER_ERROR_NAMES[441],
+    "the second hot-water outlet sensor is told apart from the first",
+)
 
 coded = make_boiler()
 coded.apply_status({"errorCode": 110}, now=300.0)
