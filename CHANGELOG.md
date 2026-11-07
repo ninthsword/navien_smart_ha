@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.20.1 — 2026-11-08
+## v0.20.1 — 2026-11-07
 
 Boiler wording and readings checked against the NCB753 manual.
 
