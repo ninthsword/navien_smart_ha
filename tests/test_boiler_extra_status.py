@@ -218,7 +218,7 @@ r.ok(
 )
 
 
-r.section("the new entities really are created")
+r.section("the new entities really are created (two of them only when declared)")
 
 sensor_setup = source("sensor.py").split("async_add_entities(entities)")[0]
 for name in (
@@ -229,6 +229,9 @@ for name in (
     "BoilerReservationSensor",
 ):
     r.ok(name in sensor_setup, f"{name} is registered")
+declared_setup = sensor_setup.split("def boiler_declared_sensors")[1].split("entities.extend(")[0]
+for name in ("BoilerHeatingIntensitySensor", "BoilerReservationSensor"):
+    r.ok(name in declared_setup, f"{name} waits for the feature declaration")
 
 binary_setup = source("binary_sensor.py").split("async_add_entities(entities)")[0]
 r.ok("BoilerHotWaterRunning" in binary_setup, "the hot-water-in-use sensor is registered")

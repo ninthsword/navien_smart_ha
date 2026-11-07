@@ -136,6 +136,15 @@ BOILER_TEMPERATURE_CONTROLS: dict[str, tuple[str, int, str]] = {
     "ondol": ("ondol-heat", 33554438, "11111111"),
 }
 
+# Feature keys of the schedules the reservation sensor reads (all four seen in a real
+# feature declaration). Any one of them declared available (2) is enough for the sensor.
+BOILER_RESERVATION_FEATURES: tuple[str, ...] = (
+    "weeklyReservationUse",
+    "fastDHWReservationUse",
+    "timeCycleReservationUse",
+    "dayCycleReservationUse",
+)
+
 # Single-value switches confirmed from the modelCode=20 control calls of the current Navien
 # Smart app. State and command are both 1=off, 2=on, and the all-controllers mask
 # (11111111) is replaced by the first bit (10000000) for the hot-water function.
@@ -519,9 +528,9 @@ class BoilerDevice:
     def outside_temperature(self) -> float | None:
         """Outside temperature. **Not measured by the boiler — a regional weather observation.**
 
-        Confirmed by comparison. At one point this value read 27.0C while the KMA observation
-        for Seoul (Songwol-dong, Jongno-gu) at the same moment was **exactly 27.0C**, whereas
-        the neighbourhood estimate (Eungam 2-dong) was 25.8C. That every value seen so far has
+        Confirmed by comparison. At one point this value read 27.0C while the KMA observation of
+        the city's representative station at the same moment was **exactly 27.0C**, whereas the
+        KMA neighbourhood estimate for the home was 25.8C. That every value seen so far has
         been a whole degree (260, 270) also fits a station reading passed straight through.
 
         So **this is not the temperature in the user's yard.** It arrives even on a boiler
