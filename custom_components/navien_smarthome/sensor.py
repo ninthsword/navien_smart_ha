@@ -25,6 +25,7 @@ from . import NavienSmartConfigEntry
 from .airone import AironeDevice, as_number, level_text, text_or_none
 from .boiler import (
     BOILER_OPERATION_MODE_NAMES,
+    BOILER_RESERVATION_FEATURES,
     BOILER_STATE_HEATING,
     BOILER_STATE_IDLE,
     BOILER_STATE_OFF,
@@ -109,23 +110,26 @@ async def async_setup_entry(
             )
         )
         entities.append(BoilerWifiSignalSensor(coordinator, boiler))
-        entities.append(BoilerHeatingIntensitySensor(coordinator, boiler))
-        entities.append(BoilerReservationSensor(coordinator, boiler))
         entities.append(BoilerHumiditySensor(coordinator, boiler))
         entities.append(BoilerModeSensor(coordinator, boiler))
         entities.append(BoilerErrorSensor(coordinator, boiler))
 
-    def boiler_gas_sensors(boiler: BoilerDevice) -> list[SensorEntity]:
-        if not boiler.supports_feature("gasUsageUse"):
-            return []
-        return [
-            BoilerMonthlyGasSensor(coordinator, boiler),
-            BoilerDailyGasSensor(coordinator, boiler),
-        ]
+    def boiler_declared_sensors(boiler: BoilerDevice) -> list[SensorEntity]:
+        # Only what the feature declaration marks available (2): a value of 1 was seen
+        # accepted and never executed (away), so it is not offered as a reading either.
+        declared: list[SensorEntity] = []
+        if boiler.supports_feature("gasUsageUse"):
+            declared.append(BoilerMonthlyGasSensor(coordinator, boiler))
+            declared.append(BoilerDailyGasSensor(coordinator, boiler))
+        if boiler.supports_feature("heatingIntensityUse"):
+            declared.append(BoilerHeatingIntensitySensor(coordinator, boiler))
+        if any(boiler.supports_feature(key) for key in BOILER_RESERVATION_FEATURES):
+            declared.append(BoilerReservationSensor(coordinator, boiler))
+        return declared
 
     entities.extend(
         boiler_entities_as_declared(
-            entry, coordinator, async_add_entities, boiler_gas_sensors
+            entry, coordinator, async_add_entities, boiler_declared_sensors
         )
     )
     async_add_entities(entities)
@@ -341,8 +345,8 @@ class BoilerReservationSensor(BoilerEntity, SensorEntity):  # pyright: ignore[re
         if device is None:
             return None
         attrs: dict[str, Any] = {}
-        if (interval := device.repeat_reservation_interval) is not None:
-            attrs["반복 주기"] = f"{interval[0]}시간 {interval[1]}분"
+        if (schedule := device.repeat_reservation_label) is not None:
+            attrs["반복 주기"] = schedule
         if (table := device.day_cycle_reservation) is not None:
             # What each position means is unknown, so the raw table is kept uninterpreted.
             attrs["24시간 예약 원문"] = table

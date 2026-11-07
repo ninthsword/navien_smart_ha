@@ -444,3 +444,41 @@ async def test_known_id_outranks_the_derived_one_in_a_two_boiler_account(
         assert coordinator.drop_counts["boiler_no_device"] == 0
     finally:
         await REAL_STOP_MQTT(coordinator)
+
+
+async def test_undeclared_readings_appear_only_when_declared(
+    hass: HomeAssistant, loaded_entry
+) -> None:
+    """Heating intensity and the reservation sensor exist only for a declared feature (2)."""
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    registry = er.async_get(hass)
+    readings = (f"{DEVICE_ID}_heating_intensity", f"{DEVICE_ID}_reservation")
+
+    def present() -> list[bool]:
+        return [
+            registry.async_get_entity_id("sensor", DOMAIN, unique_id) is not None
+            for unique_id in readings
+        ]
+
+    undeclared = {
+        **FEATURE,
+        "heatingIntensityUse": 1,
+        "weeklyReservationUse": 1,
+        "fastDHWReservationUse": 1,
+        "timeCycleReservationUse": 1,
+        "dayCycleReservationUse": 1,
+    }
+    deliver(coordinator, {"macAddress": PHYSICAL_ID, "feature": undeclared})
+    await hass.async_block_till_done()
+    assert present() == [False, False]
+    assert registry.async_get_entity_id("sensor", DOMAIN, f"{DEVICE_ID}_monthly_gas_usage")
+
+    schedule_only = {**undeclared, "timeCycleReservationUse": 2}
+    deliver(coordinator, {"macAddress": PHYSICAL_ID, "feature": schedule_only})
+    await hass.async_block_till_done()
+    assert present() == [False, True]
+
+    both = {**schedule_only, "heatingIntensityUse": 2}
+    deliver(coordinator, {"macAddress": PHYSICAL_ID, "feature": both})
+    await hass.async_block_till_done()
+    assert present() == [True, True]

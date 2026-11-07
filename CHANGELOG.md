@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — boiler wording and readings checked against the manual
+
+- The boiler error names follow the NCB753 manual's tables (2026-09-01 edition): `E109` is
+  「FAN 이상」 and `E441` is 「온수 출구 온도 센서2 이상」, so it is no longer named the same as
+  `E407`.
+- The reservation sensor's `반복 주기` attribute reads as the manual writes it, for example
+  「1시간마다 10분 가동」 instead of 「1시간 10분」, which read as a single period; a template
+  matching the old text needs updating. The error sensor's `이상 발생 내용` changes for `E109`
+  and `E441` only.
+- The heating-intensity and reservation sensors are created only when the boiler's feature
+  declaration marks them available (2): `heatingIntensityUse` for the first, any of the
+  weekly, fast-hot-water, repeat and 24-hour schedule flags for the second. A boiler that
+  declares them unsupported (1) or leaves the keys out no longer gets them; their old
+  entries stay in the entity registry as unavailable until removed.
+- README and code comments no longer say the room controller and boiler are joined by a
+  contact: in the reported installation another maker's valve controller drives the room
+  controller through a contact, the only way to keep the Navien room controller with it,
+  and the boiler itself declares away, hot-water-only and room-temperature heating
+  unsupported.
+
 ## v0.20.0 — 2026-11-06
 
 Boiler and diagnostics fixes, and the mat changes ported from the upstream project.
@@ -98,9 +118,9 @@ NR-67D boiler support, and the first release published from this fork.
   `NR-67D` sends, 25 were parsed and never used. Only those whose meaning is certain are
   surfaced.
   - **Outside temperature** — in 0.1C units, and **not measured by the boiler but a regional
-    weather observation**. When this read 27.0C the KMA observation for Seoul at the same
-    moment was exactly 27.0C while the neighbourhood estimate was 25.8C, and every value seen
-    so far has been a whole degree. `outsideTemperatureDisplayUse` is not used as a
+    weather observation**. When this read 27.0C the KMA observation of the city's
+    representative station at the same moment was exactly 27.0C while the KMA neighbourhood
+    estimate was 25.8C, and every value seen so far has been a whole degree. `outsideTemperatureDisplayUse` is not used as a
     condition: it governs whether the room controller displays the value, not whether the
     data arrives, and this device has it at 1 while the temperature arrives normally.
   - **Hot water in use** — `DHWUse`, on the same 1=off, 2=on scheme as the hot-water feature
