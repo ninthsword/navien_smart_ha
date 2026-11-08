@@ -166,3 +166,68 @@ jobs:
         run: |
           devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.10/bin/python devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
           .venv-ha2026.10/bin/ruff check --no-cache devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
+
+  home-assistant-2026-11:
+    name: Home Assistant 2026.11.0 compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked compatibility dependencies
+        run: |
+          python -m pip install uv==0.12.5
+          uv venv --python 3.14.7 .venv-ha2026.11
+          uv pip sync --python .venv-ha2026.11/bin/python --require-hashes requirements-ha2026.11.lock
+          npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+      - name: Check stable core and exact dependency metadata
+        run: |
+          .venv-ha2026.11/bin/python -B - <<'PYTHON'
+          from importlib.metadata import distributions, version, PackageNotFoundError
+          import sys
+          from packaging.requirements import Requirement
+          from packaging.utils import canonicalize_name
+
+          EXPECTED = ("pytest-homeassistant-custom-component", "homeassistant==2026.10.4", "2026.11.0")
+          def validate(core, plugin, python, issues):
+              assert core == "2026.11.0", core
+              assert plugin == "0.13.375", plugin
+              assert python == (3, 14, 7), python
+              assert issues == [EXPECTED], issues
+
+          issues = []
+          for dist in distributions():
+              for raw in dist.requires or []:
+                  requirement = Requirement(raw)
+                  if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                      continue
+                  try:
+                      installed = version(requirement.name)
+                  except PackageNotFoundError:
+                      installed = "MISSING"
+                  if installed == "MISSING" or installed not in requirement.specifier:
+                      issues.append((canonicalize_name(dist.metadata["Name"]), str(requirement), installed))
+          validate(version("homeassistant"), version("pytest-homeassistant-custom-component"), sys.version_info[:3], sorted(issues))
+          print("Stable HA environment verified; only the exact plugin core pin mismatch is accepted")
+          PYTHON
+      # tests_ha is not run here: the newest test plugin (0.13.375) cannot start on 2026.11.
+      # The tests_ha run joins this job once a plugin release supports 2026.11.
+      - name: Check compatibility types, tests, lint, and the smoke run
+        run: |
+          devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.11/bin/python
+          .venv-ha2026.11/bin/python -B tests/run.py
+          .venv-ha2026.11/bin/ruff check --no-cache custom_components tests tests_ha tools devtools/ha2026_11_smoke.py devtools/test_ha2026_11_smoke.py
+          .venv-ha2026.11/bin/mypy --cache-dir=/dev/null custom_components
+          .venv-ha2026.11/bin/python -B devtools/ha2026_11_smoke.py
+      - name: Check the smoke tool
+        run: |
+          .venv-ha2026.11/bin/python -B -m unittest discover -s devtools -p test_ha2026_11_smoke.py -v
+          devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.11/bin/python devtools/ha2026_11_smoke.py devtools/test_ha2026_11_smoke.py

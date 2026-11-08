@@ -1,0 +1,2 @@
+# The newest test plugin pins the 2026.10.4 core; exercise the stable 2026.11 core explicitly.
+homeassistant==2026.11.0

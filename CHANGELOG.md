@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Home Assistant 2026.11 compatibility.
+
+- The thermostat gives Home Assistant its temperature unit, current temperature and target
+  temperature under both the old names and the `native_` names 2026.11 reads, so 2026.11 logs
+  no deprecation warning for this integration and the values on 2026.8 to 2026.10 are
+  unchanged. The config flow's form schemas type-check on 2026.8 through 2026.11.
+- CI gains a Home Assistant 2026.11.0 job with its own hash-locked environment: types, offline
+  tests, lint and `devtools/ha2026_11_smoke.py`, which starts Home Assistant in-process with
+  synthetic devices and fails on any Navien warning or Python-level network attempt. The
+  real-HA pytest suite joins once a test plugin release supports 2026.11.
+- The synthetic test devices moved to `tests_ha/devices.py`, so tools that run Home Assistant
+  itself no longer import the pytest plugin.
+
 ## v0.20.1 — 2026-11-07
 
 Boiler wording and readings checked against the NCB753 manual.

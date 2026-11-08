@@ -15,7 +15,7 @@ but sending `enable: false` in particular was never confirmed.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
@@ -56,7 +56,6 @@ async def async_setup_entry(
 class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
     """Heating temperature for one zone."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.TURN_ON
@@ -133,17 +132,25 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         """
         return super().available
 
-    @property
-    # HA declares a cached descriptor; retain dynamic property semantics.
-    def current_temperature(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def _current_temperature(self) -> float | None:
         device = self.device
         return None if device is None else device.zone_current(self._zone)
 
-    @property
-    # HA declares a cached descriptor; retain dynamic property semantics.
-    def target_temperature(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def _target_temperature(self) -> float | None:
         device = self.device
         return None if device is None else device.zone_setting(self._zone)
+
+    # Home Assistant 2026.11 serves the temperatures under native_ names and declares the old
+    # names Final and deprecated until 2027.11; 2026.8 to 2026.10 read only the old names. A
+    # class providing both keeps the native ones without a deprecation warning. The block is
+    # hidden from type checkers, which would otherwise see an override of a Final name on
+    # 2026.11 or of a cached descriptor on the older versions.
+    if not TYPE_CHECKING:
+        _attr_temperature_unit = _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+        current_temperature = native_current_temperature = property(
+            _current_temperature
+        )
+        target_temperature = native_target_temperature = property(_target_temperature)
 
     @property
     # HA declares a cached descriptor; retain dynamic property semantics.

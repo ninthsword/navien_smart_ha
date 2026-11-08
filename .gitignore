@@ -41,4 +41,5 @@ AGENTS.md
 # Generated project-local type-checker dependencies
 /devtools/pyright/node_modules/
 /.venv-ha2026.10/
+/.venv-ha2026.11/
 /.venv-ui/
