@@ -151,6 +151,11 @@ def steps(page: Page, base: str, shots: Shots) -> None:
     shots.take(page, "03-search")
     page.get_by_text("Navien Smart").filter(visible=True).first.click()
 
+    screen = "config flow connection menu"
+    login_option = page.get_by_text("나비엔 스마트 계정으로 로그인")
+    see(login_option, "나비엔 스마트 계정으로 로그인", screen)
+    login_option.click()
+
     screen = "config flow login step"
     see_text(page, "나비엔 스마트", screen, exact=True)
     username = page.get_by_role("textbox", name="아이디")

@@ -20,6 +20,8 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
 from . import NavienSmartConfigEntry
+from .ble_mat import is_mat_entry
+from .ble_mat.setup import mat_diagnostics
 from .boiler import BOILER_GAS_REFRESH_SECONDS, BOILER_SILENCE_REFRESH_SECONDS
 from .const import (
     AIRONE_INFERRED_UNITS,
@@ -70,6 +72,8 @@ TO_REDACT = {
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: NavienSmartConfigEntry
 ) -> dict[str, Any]:
+    if is_mat_entry(entry):
+        return mat_diagnostics(entry)
     coordinator = entry.runtime_data
 
     supported: list[dict[str, Any]] = []

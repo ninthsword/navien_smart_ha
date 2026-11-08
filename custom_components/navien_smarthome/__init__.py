@@ -15,6 +15,12 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import NavienSmartApi, NavienSmartAuthError, NavienSmartError
+from .ble_mat import is_mat_entry
+from .ble_mat.setup import (
+    async_remove_mat_entry,
+    async_setup_mat_entry,
+    async_unload_mat_entry,
+)
 from .const import CONF_HOME_SEQ
 from .coordinator import NavienSmartCoordinator
 from .entity import airone_device_info
@@ -41,6 +47,8 @@ NavienSmartConfigEntry = ConfigEntry[NavienSmartCoordinator]
 
 async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) -> bool:
     """Log in with the stored credentials and stand up the coordinator."""
+    if is_mat_entry(entry):
+        return await async_setup_mat_entry(hass, entry)
     # Form login needs to hold cookies, so this uses its own session rather than
     # polluting the shared one.
     http = async_create_clientsession(hass)
@@ -85,7 +93,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) 
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) -> bool:
+    if is_mat_entry(entry):
+        return await async_unload_mat_entry(hass, entry)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) -> None:
+    """Remove a Bluetooth mat's store; a cloud entry has nothing to remove here."""
+    if is_mat_entry(entry):
+        await async_remove_mat_entry(hass, entry)
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: NavienSmartConfigEntry) -> None:

@@ -1,6 +1,9 @@
 {
   "domain": "navien_smarthome",
   "name": "Navien Smart",
+  "after_dependencies": [
+    "bluetooth"
+  ],
   "codeowners": [
     "@ninthsword"
   ],
@@ -15,5 +18,5 @@
   "requirements": [
     "paho-mqtt>=2.1.0"
   ],
-  "version": "0.21.0"
+  "version": "0.22.0"
 }

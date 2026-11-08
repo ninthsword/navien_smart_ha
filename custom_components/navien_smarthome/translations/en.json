@@ -3,11 +3,30 @@
     "step": {
       "user": {
         "title": "Navien Smart",
+        "description": "Choose how to connect.",
+        "menu_options": {
+          "cloud": "Sign in with a Navien Smart account",
+          "bluetooth_mat": "Bluetooth hot-water mat"
+        }
+      },
+      "cloud": {
+        "title": "Navien Smart",
         "description": "Sign in with your Navien Smart app account.",
         "data": {
           "username": "ID",
           "password": "Password"
         }
+      },
+      "bluetooth_mat": {
+        "title": "Bluetooth hot-water mat",
+        "description": "Choose the mat to connect.",
+        "data": {
+          "address": "Mat"
+        }
+      },
+      "bluetooth_mat_pair": {
+        "title": "Register the mat",
+        "description": "Fully close the Navien Smart phone app, put the mat in pairing mode, then submit. This is only needed the first time."
       },
       "home": {
         "title": "Select space",
@@ -26,11 +45,18 @@
     },
     "error": {
       "invalid_auth": "Invalid ID or password.",
-      "cannot_connect": "Could not reach the Navien server."
+      "cannot_connect": "Could not reach the Navien server.",
+      "mat_refused": "The mat refused registration. Restart pairing mode and try again.",
+      "mat_no_status": "The mat sent no status. Try again.",
+      "mat_connect_failed": "Could not connect to the mat. Make sure the app is closed and try again."
     },
     "abort": {
-      "already_configured": "This account is already configured.",
-      "reauth_successful": "Signed in again."
+      "already_configured": "This account or mat is already configured.",
+      "reauth_successful": "Signed in again.",
+      "no_devices": "No Bluetooth mat was found. Close the app and make sure the mat is on.",
+      "bluetooth_unavailable": "Home Assistant's Bluetooth integration is unavailable.",
+      "single_mat": "Single mats cannot be added yet; only left-right split mats are supported.",
+      "bluetooth_reauth_unsupported": "A Bluetooth mat has no account to log in to. If it cannot connect, remove the mat and register it again."
     }
   },
   "entity": {
