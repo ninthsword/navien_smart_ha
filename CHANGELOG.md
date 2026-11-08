@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.21.0 — 2026-11-08
 
 The NR-67D boiler's two setpoint number entities are replaced by a thermostat and a water heater.
 
