@@ -141,7 +141,7 @@ class MatThermostat(_MatEntity, ClimateEntity):
         )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        await self._conn.async_set_hvac_mode(hvac_mode)
+        await self._conn.async_set_hvac_mode(self._side, hvac_mode)
 
 
 class MatModeSensor(_MatEntity, SensorEntity):
@@ -207,6 +207,26 @@ class MatEnableSwitch(_MatEntity, SwitchEntity):
         await self._conn.async_set_enabled(False)
 
 
+class MatPowerSwitch(_MatEntity, SwitchEntity):
+    """The whole mat's power; the thermostats only turn their own side off."""
+
+    _attr_name = "전원"
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "power")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.status
+        self._attr_is_on = None if status is None else status.state is not MatState.OFF
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._conn.async_set_power(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._conn.async_set_power(False)
+
+
 async def async_setup_mat_climate(
     hass: HomeAssistant,
     entry: ConfigEntry[Any],
@@ -242,4 +262,4 @@ async def async_setup_mat_switches(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     conn: MatConnection = entry.runtime_data
-    async_add_entities([MatEnableSwitch(conn)])
+    async_add_entities([MatEnableSwitch(conn), MatPowerSwitch(conn)])
