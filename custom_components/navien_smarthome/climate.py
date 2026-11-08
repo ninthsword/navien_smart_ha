@@ -7,6 +7,8 @@ Stepped mats (`1.0L`) get no entity on this platform. They send no current value
 the card would stay empty, and showing a step in degrees would mislead the user. Those use a
 `number` slider instead.
 
+An NR-67D boiler that declares an ondol range gets one thermostat for its heating water.
+
 **Caution: no temperature mat has ever been operated directly by us.** This household has
 only stepped mats. The heating and cooling display and control of the four-season model
 (EMF520) were **confirmed by a user report**. The structure was settled from the app code,
@@ -15,7 +17,7 @@ but sending `enable: false` in particular was never confirmed.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
@@ -24,15 +26,21 @@ from homeassistant.components.climate.const import (
     HVACAction,
     HVACMode,
 )
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import PRECISION_HALVES, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
+from .boiler import (
+    BOILER_STATE_HEATING,
+    BOILER_STATE_IDLE,
+    BOILER_STATE_OFF,
+    BoilerDevice,
+)
 from .const import MODE_HEAT, ZONE_NAMES
 from .coordinator import NavienSmartCoordinator
-from .entity import NavienSmartEntity
+from .entity import BoilerEntity, NavienSmartEntity, boiler_entities_as_declared
 from .models import NavienDevice
 
 
@@ -42,7 +50,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    entities: list[NavienSmartThermostat] = []
+    entities: list[ClimateEntity] = []
     for device in (coordinator.data or {}).values():
         control = device.heat_control
         if control is None or not control.is_celsius:
@@ -50,13 +58,23 @@ async def async_setup_entry(
         entities.extend(
             NavienSmartThermostat(coordinator, device, zone) for zone in device.zones
         )
+
+    def boiler_thermostats(device: BoilerDevice) -> list[ClimateEntity]:
+        if device.model_code != "20" or device.temperature_bounds("ondol") is None:
+            return []
+        return [NavienBoilerThermostat(coordinator, device)]
+
+    entities.extend(
+        boiler_entities_as_declared(
+            entry, coordinator, async_add_entities, boiler_thermostats
+        )
+    )
     async_add_entities(entities)
 
 
 class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
     """Heating temperature for one zone."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.TURN_ON
@@ -133,17 +151,25 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         """
         return super().available
 
-    @property
-    # HA declares a cached descriptor; retain dynamic property semantics.
-    def current_temperature(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def _current_temperature(self) -> float | None:
         device = self.device
         return None if device is None else device.zone_current(self._zone)
 
-    @property
-    # HA declares a cached descriptor; retain dynamic property semantics.
-    def target_temperature(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def _target_temperature(self) -> float | None:
         device = self.device
         return None if device is None else device.zone_setting(self._zone)
+
+    # Home Assistant 2026.11 serves the temperatures under native_ names and declares the old
+    # names Final and deprecated until 2027.11; 2026.8 to 2026.10 read only the old names. A
+    # class providing both keeps the native ones without a deprecation warning. The block is
+    # hidden from type checkers, which would otherwise see an override of a Final name on
+    # 2026.11 or of a cached descriptor on the older versions.
+    if not TYPE_CHECKING:
+        _attr_temperature_unit = _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+        current_temperature = native_current_temperature = property(
+            _current_temperature
+        )
+        target_temperature = native_target_temperature = property(_target_temperature)
 
     @property
     # HA declares a cached descriptor; retain dynamic property semantics.
@@ -278,3 +304,155 @@ class NavienSmartThermostat(NavienSmartEntity, ClimateEntity):
         # it once the value is lowered to `off_value`. With no zone left on, a single-zone mat
         # powers off and a double mat is refused — that decision lives inside `build_zone_off`.
         await self.coordinator.async_send(device, device.build_zone_off(zones))
+
+
+_BOILER_HVAC_ACTIONS = {
+    BOILER_STATE_HEATING: HVACAction.HEATING,
+    BOILER_STATE_IDLE: HVACAction.IDLE,
+    BOILER_STATE_OFF: HVACAction.OFF,
+}
+
+
+class NavienBoilerThermostat(BoilerEntity, ClimateEntity):
+    """The NR-67D heating-water setpoint and the boiler's power.
+
+    Its off is the boiler's power off, which stops hot water as well. The setpoint is stored
+    whether or not the boiler is on, as the app does.
+    """
+
+    _attr_name = "난방"
+    _attr_icon = "mdi:radiator"
+    _attr_precision = PRECISION_HALVES
+    _attr_target_temperature_step = 0.5
+
+    def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.device_id}_boiler_heating"
+        bounds = device.temperature_bounds("ondol")
+        if bounds is None:
+            raise ValueError("ondol 설정온도 범위가 없습니다")
+        # The range seen at creation, kept only for the moment the device or the range is
+        # missing; the properties below normally use the range the server reports now.
+        self._fallback_bounds = bounds
+
+    def _bounds(self) -> tuple[float, float]:
+        device = self.device
+        if device is None:
+            return self._fallback_bounds
+        return device.temperature_bounds("ondol") or self._fallback_bounds
+
+    def _supports_power(self) -> bool:
+        device = self.device
+        return device is not None and device.supports_feature("powerUse")
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def supported_features(self) -> ClimateEntityFeature:  # pyright: ignore[reportIncompatibleVariableOverride]
+        features = ClimateEntityFeature.TARGET_TEMPERATURE
+        if self._supports_power():
+            features |= ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
+        return features
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def hvac_modes(self) -> list[HVACMode]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        if self._supports_power():
+            return [HVACMode.HEAT, HVACMode.OFF]
+        return [HVACMode.HEAT]
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def min_temp(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
+        return self._bounds()[0]
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def max_temp(self) -> float:  # pyright: ignore[reportIncompatibleVariableOverride]
+        return self._bounds()[1]
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def available(self) -> bool:  # pyright: ignore[reportIncompatibleVariableOverride]
+        device = self.device
+        return (
+            super().available
+            and device is not None
+            and device.temperature_bounds("ondol") is not None
+        )
+
+    def _current_temperature(self) -> float | None:
+        device = self.device
+        return None if device is None else device.supply_temperature
+
+    def _target_temperature(self) -> float | None:
+        device = self.device
+        return None if device is None else device.ondol_target_temperature
+
+    # The old and native names, for the reason given on NavienSmartThermostat.
+    if not TYPE_CHECKING:
+        _attr_temperature_unit = _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+        current_temperature = native_current_temperature = property(
+            _current_temperature
+        )
+        target_temperature = native_target_temperature = property(_target_temperature)
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def hvac_mode(self) -> HVACMode | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        device = self.device
+        power = None if device is None else device.switch_state("power")
+        if power is None:
+            return None
+        return HVACMode.HEAT if power else HVACMode.OFF
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def hvac_action(self) -> HVACAction | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        device = self.device
+        if device is None or device.operating_state is None:
+            return None
+        return _BOILER_HVAC_ACTIONS.get(device.operating_state)
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        device = self.device
+        if device is None:
+            return None
+        return {
+            "operation_busy": device.operation_busy,
+            "heating_idle": device.heating_is_idle,
+            "status_age_seconds": (
+                None if device.status_age is None else round(device.status_age, 1)
+            ),
+        }
+
+    async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Send the setpoint, then apply a mode the call carries.
+
+        Home Assistant passes `hvac_mode` through without checking it against `hvac_modes`, so
+        a mode this entity does not offer is refused here before anything is sent.
+        """
+        temperature = kwargs.get("temperature")
+        device = self.device
+        if device is None or temperature is None:
+            return
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE)
+        if hvac_mode is not None and hvac_mode not in self.hvac_modes:
+            raise ServiceValidationError(
+                f"이 보일러는 '{hvac_mode}' 모드를 지원하지 않습니다"
+            )
+        await self.coordinator.async_boiler_temperature(
+            device, "ondol", float(temperature)
+        )
+        if hvac_mode is not None:
+            await self.async_set_hvac_mode(hvac_mode)
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Send the power command only when it is declared and would change something."""
+        device = self.device
+        if device is None or not device.supports_feature("powerUse"):
+            return
+        turn_on = hvac_mode != HVACMode.OFF
+        if device.switch_state("power") != turn_on:
+            await self.coordinator.async_boiler_power(device, turn_on)

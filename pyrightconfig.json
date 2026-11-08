@@ -11,7 +11,9 @@
     "**/node_modules",
     "**/__pycache__",
     "**/.venv",
-    "**/.venv-ha2026.9"
+    "**/.venv-ha2026.9",
+    "**/.venv-ha2026.10",
+    "**/.venv-ha2026.11"
   ],
   "pythonVersion": "3.14",
   "typeCheckingMode": "standard",

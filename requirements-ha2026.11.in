@@ -1,0 +1,5 @@
+mypy==2.3.1
+ruff==0.16.4
+pytest-homeassistant-custom-component==0.13.375
+homeassistant==2026.11.0
+home-assistant-frontend==20261028.4

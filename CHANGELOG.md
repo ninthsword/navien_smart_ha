@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.21.0 — 2026-11-08
+
+The NR-67D boiler's two setpoint number entities are replaced by a thermostat and a water heater.
+
+- A modelCode 20 boiler now gets a `climate` entity for its heating water (`<deviceId>_boiler_heating`)
+  and a `water_heater` entity for its hot water (`<deviceId>_boiler_water_heater`), under the same
+  server feature gates, ranges and commands. The thermostat's off is the boiler's power off, which
+  stops hot water as well.
+- Migration: the `<deviceId>_hot_water_temperature_setting` and `<deviceId>_ondol_temperature_setting`
+  number entities are no longer created. Automations and dashboards must point at the new entities;
+  the old number entries remain in the entity registry until removed. The read-only 온돌 설정 온도
+  and 온수 설정 온도 sensors still give the setpoints.
+
+Home Assistant 2026.11 compatibility.
+
+- The thermostat gives Home Assistant its temperature unit, current temperature and target
+  temperature under both the old names and the `native_` names 2026.11 reads, so 2026.11 logs
+  no deprecation warning for this integration and the values on 2026.8 to 2026.10 are
+  unchanged. The config flow's form schemas type-check on 2026.8 through 2026.11.
+- CI gains a Home Assistant 2026.11.0 job with its own hash-locked environment: types, offline
+  tests, lint and `devtools/ha2026_11_smoke.py`, which starts Home Assistant in-process with
+  synthetic devices and fails on any Navien warning or Python-level network attempt. The
+  real-HA pytest suite joins once a test plugin release supports 2026.11.
+- The synthetic test devices moved to `tests_ha/devices.py`, so tools that run Home Assistant
+  itself no longer import the pytest plugin.
+
 ## v0.20.1 — 2026-11-07
 
 Boiler wording and readings checked against the NCB753 manual.

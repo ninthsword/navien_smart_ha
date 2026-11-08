@@ -25,6 +25,15 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
+def _form_schema(schema: vol.Schema) -> Any:
+    """Pass a voluptuous schema as `data_schema` on every supported Home Assistant version.
+
+    Home Assistant 2026.11 types `data_schema` as probatio's schema, while 2026.8 to 2026.10
+    type it as voluptuous's; the form itself is the same on all of them.
+    """
+    return schema
+
+
 class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
     """Username and password, then a home to use if there is more than one."""
 
@@ -64,7 +73,7 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_home()
 
         return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors
+            step_id="user", data_schema=_form_schema(STEP_USER_SCHEMA), errors=errors
         )
 
     async def async_step_home(
@@ -88,7 +97,9 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
         }
         return self.async_show_form(
             step_id="home",
-            data_schema=vol.Schema({vol.Required(CONF_HOME_SEQ): vol.In(options)}),
+            data_schema=_form_schema(
+                vol.Schema({vol.Required(CONF_HOME_SEQ): vol.In(options)})
+            ),
         )
 
     async def async_step_reauth(
@@ -128,7 +139,7 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            data_schema=_form_schema(vol.Schema({vol.Required(CONF_PASSWORD): str})),
             description_placeholders={CONF_USERNAME: entry.data[CONF_USERNAME]},
             errors=errors,
         )

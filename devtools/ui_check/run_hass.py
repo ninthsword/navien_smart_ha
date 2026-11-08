@@ -10,6 +10,8 @@ frontend, config flow, registries) runs unmodified through its own entry point.
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -25,7 +27,7 @@ from custom_components.navien_smarthome.coordinator import (  # noqa: E402
     NavienSmartCoordinator,
 )
 from custom_components.navien_smarthome.models import NavienDevice  # noqa: E402
-from tests_ha.conftest import make_airone, make_boiler, make_mat  # noqa: E402
+from tests_ha.devices import make_airone, make_boiler, make_mat  # noqa: E402
 
 SESSION = NavienSmartSession(
     access_token="synthetic-token",
@@ -53,8 +55,12 @@ def _placeholder_session(hass: Any) -> object:
     return object()
 
 
-def main() -> int:
-    config_dir = sys.argv[1]
+@contextmanager
+def navien_boundary() -> Iterator[None]:
+    """Replace the Navien login, refresh, state restore, MQTT and HTTP session factory.
+
+    Also used by devtools/ha2026_11_smoke.py, so both runs patch the same boundary.
+    """
     with (
         patch.object(
             NavienSmartApi, "async_login", new=AsyncMock(return_value=SESSION)
@@ -72,6 +78,12 @@ def main() -> int:
         patch.object(NavienSmartCoordinator, "async_start_mqtt", new=AsyncMock()),
         patch.object(NavienSmartCoordinator, "async_stop_mqtt", new=AsyncMock()),
     ):
+        yield
+
+
+def main() -> int:
+    config_dir = sys.argv[1]
+    with navien_boundary():
         from homeassistant.__main__ import main as hass_main
 
         sys.argv = ["hass", "--config", config_dir, "--skip-pip"]

@@ -292,7 +292,14 @@ except ValueError:
 else:
     outside_rejected = False
 r.ok(outside_rejected, "a command outside the server range is refused")
-r.ok("_attr_native_step = 0.5" in source("number.py"), "the number slider is in 0.5C units too")
+r.ok(
+    "_attr_target_temperature_step = 0.5" in source("climate.py"),
+    "the boiler thermostat is in 0.5C units too",
+)
+r.ok(
+    "_attr_target_temperature_step = 0.5" in source("water_heater.py"),
+    "the boiler water heater is in 0.5C units too",
+)
 r.ok(
     "async_refresh_boiler_status(device)" not in source("coordinator.py")
     and "not current.heating_is_idle" not in source("coordinator.py"),

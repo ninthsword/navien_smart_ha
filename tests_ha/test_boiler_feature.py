@@ -53,8 +53,8 @@ GATED = (
     ("switch", f"{DEVICE_ID}_fast_dhw"),
     ("switch", f"{DEVICE_ID}_smart_fast_dhw"),
     ("switch", f"{DEVICE_ID}_dhw_boost"),
-    ("number", f"{DEVICE_ID}_hot_water_temperature_setting"),
-    ("number", f"{DEVICE_ID}_ondol_temperature_setting"),
+    ("water_heater", f"{DEVICE_ID}_boiler_water_heater"),
+    ("climate", f"{DEVICE_ID}_boiler_heating"),
     ("sensor", f"{DEVICE_ID}_monthly_gas_usage"),
     ("sensor", f"{DEVICE_ID}_daily_gas_usage"),
 )

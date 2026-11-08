@@ -31,10 +31,19 @@
 보일러가 상태를 스스로 올리는 동안에는 추가로 묻지 않으며, 마지막 송수신 뒤 5분간
 아무 통신이 없을 때만 상태를 한 번 요청합니다. 요청이 실패해도 5분 뒤 다시 시도합니다.
 
-`NR-67D`(`modelCode=20`)에는 **온수 설정 온도**와 **난방수 설정 온도** 숫자
-엔티티도 만듭니다. 앱 2.10.4의 명령·토픽·값 인코딩을 그대로 따르고, 서버가 알려준
-범위(이 기기에서는 온수 30~60℃, 난방수 30~65℃) 안에서 0.5℃ 단위로만 보냅니다.
-히팅 여부와 관계없이 설정 온도를 제어하며, 명령 뒤 실제 상태를 다시 요청합니다.
+`NR-67D`(`modelCode=20`)에는 난방수를 다루는 **난방** 온도조절기(`climate`)와 온수를
+다루는 **온수** 온수기(`water_heater`) 엔티티도 만듭니다. 앱 2.10.4의 명령·토픽·값
+인코딩을 그대로 따르고, 서버가 알려준 범위(이 기기에서는 온수 30~60℃, 난방수 30~65℃)
+안에서 0.5℃ 단위로만 보냅니다. 히팅 여부와 관계없이 설정 온도를 제어하며, 명령 뒤 실제
+상태를 다시 요청합니다. 온도조절기의 현재 온도는 난방수 공급 온도입니다. 온도조절기를
+끄는 것은 보일러 **전원을 끄는 것**이라 온수도 함께 멈춥니다. 전원 제어를 서버가
+허용하지 않은 기기에는 끄기를 제공하지 않습니다.
+
+기존에 쓰던 **온수 설정 온도**와 **난방수 설정 온도** 숫자 엔티티는 위 두 엔티티로
+바뀌어 더는 만들어지지 않습니다. 자동화와 대시보드는 새 엔티티를 가리키도록 고쳐
+주세요. 예전 숫자 엔티티 항목은 엔티티 레지스트리에서 직접 삭제할 때까지 남아 있습니다.
+설정값은 읽기 전용 **온돌 설정 온도**와 **온수 설정 온도** 센서로 계속 볼 수 있습니다.
+
 앱과 기기 기능 정보에서 함께 확인된 경우 **전원**, **빠른온수**, **빠른온수
 스마트운전**, **터보온수** 스위치도 만듭니다. 명령 뒤에는 값을 미리 바꾸지 않고
 실제 상태를 다시 요청합니다. 가스 사용량 지원 기기에는 앱과 같은 조회로 **이번 달
@@ -644,3 +653,54 @@ devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --python
 devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.10/bin/python devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
 .venv-ha2026.10/bin/ruff check --no-cache devtools/ha2026_10_typing.py devtools/test_ha2026_10_typing.py
 ```
+
+## Home Assistant 2026.11 호환성 검증
+
+안정판 Home Assistant 2026.11.0, Python 3.14.7, `uv==0.12.5`, Node.js 24를
+사용합니다. 의존성 입력과 해시 잠금 파일은 `requirements-ha2026.11.in`,
+`requirements-ha2026.11.lock`입니다. 최신 테스트 플러그인
+`pytest-homeassistant-custom-component==0.13.375`의 메타데이터는
+`homeassistant==2026.10.4`를 요구하므로, `requirements-ha2026.11-overrides.in`으로
+안정판 코어를 선택합니다. 2026.11에서 첫 화면을 띄우는 `frontend`가 없으면 복구
+모드로 시작하므로 잠금 파일에 `home-assistant-frontend`도 포함합니다. CI는 설치된
+Python·코어·플러그인 버전을 확인하고, 플러그인의 이 코어 버전 요구와 설치된
+안정판 사이의 불일치가 정확히 하나일 때만 허용합니다.
+
+의존성 입력을 변경할 때는 같은 도구와 재정의 파일로 잠금을 다시 생성하세요.
+
+```sh
+uv pip compile --python 3.14.7 --generate-hashes --override requirements-ha2026.11-overrides.in requirements-ha2026.11.in -o requirements-ha2026.11.lock
+```
+
+다음 명령은 외부 서비스나 장치에 연결하지 않습니다. 기존 오프라인 테스트, 타입
+검사(pyright, mypy), 린트(ruff)를 실행하고, `devtools/ha2026_11_smoke.py`로
+Home Assistant 2026.11을 같은 프로세스에서 직접 시작합니다. 이 스모크 실행은
+가상 매트·보일러·에어원 기기로 통합구성요소를 설정 흐름으로 추가한 뒤, 항목이
+로드되었는지, 매트 온도조절기의 현재·목표 온도와 단위 간격이 기기 값과 같은지,
+보일러와 에어원 엔티티가 만들어졌는지, 통합구성요소가 경고 이상의 로그를 남기지
+않았는지 확인합니다. 실행 중에는 `http`를 127.0.0.1에만 열고, 마켓플레이스
+항목을 사용자가 비활성화한 상태로 미리 기록해 카탈로그를 받지 않으며, 루프백
+밖으로의 TCP 연결이나 localhost 외 이름 조회를 시도하면 실패로 처리합니다.
+
+```sh
+python -m pip install uv==0.12.5
+uv venv --python 3.14.7 .venv-ha2026.11
+uv pip sync --python .venv-ha2026.11/bin/python --require-hashes requirements-ha2026.11.lock
+npm ci --prefix devtools/pyright --ignore-scripts --no-audit --no-fund
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.11/bin/python
+.venv-ha2026.11/bin/python -B tests/run.py
+.venv-ha2026.11/bin/ruff check --no-cache custom_components tests tests_ha tools devtools/ha2026_11_smoke.py devtools/test_ha2026_11_smoke.py
+.venv-ha2026.11/bin/mypy --cache-dir=/dev/null custom_components
+.venv-ha2026.11/bin/python -B devtools/ha2026_11_smoke.py
+.venv-ha2026.11/bin/python -B -m unittest discover -s devtools -p test_ha2026_11_smoke.py -v
+devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --pythonpath .venv-ha2026.11/bin/python devtools/ha2026_11_smoke.py devtools/test_ha2026_11_smoke.py
+```
+
+실제 Home Assistant pytest 테스트(`tests_ha`)는 아직 2026.11에서 실행하지 않습니다.
+최신 테스트 플러그인이 2026.11에서 제거된 로거 도구를 가져오기 때문에 시작하지
+못하며, 2026.11을 지원하는 플러그인이 나오면 CI에 추가합니다.
+
+온도조절기 엔티티는 이제 Home Assistant에 온도 단위, 현재 온도, 목표 온도를 기존
+이름(`temperature_unit`, `current_temperature`, `target_temperature`)과 새 `native_`
+이름으로 함께 제공합니다. 2026.8~2026.10은 기존 이름을, 2026.11은 새 이름을 읽으므로
+2026.11에서 이 통합구성요소의 지원 중단 경고가 나타나지 않고 표시 값은 같습니다.
