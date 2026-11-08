@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.22.1 — 2026-11-09
 
 - Bluetooth mat: each thermostat's off now turns off only its own side, as the Navien app does, and
   the last side still on is refused; a one-side heating status is now controllable instead of being
