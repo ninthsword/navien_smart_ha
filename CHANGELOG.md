@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Bluetooth mat: each thermostat's off now turns off only its own side, as the Navien app does, and
+  the last side still on is refused; a one-side heating status is now controllable instead of being
+  refused as another mode. A new 전원 switch turns the whole mat on and off, and each side's target
+  is remembered while that side is off. One-side off follows the app and has not yet been confirmed
+  on a real mat. Automations that used a thermostat's off to stop the mat need the 전원 switch.
+
 ## v0.22.0 — 2026-11-09
 
 - Add a Bluetooth hot-water mat as a second connection type (left-right split mats only, confirmed

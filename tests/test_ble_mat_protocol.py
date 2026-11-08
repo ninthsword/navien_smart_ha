@@ -6,6 +6,8 @@ import sys
 
 from harness import Report
 from navien_smarthome.ble_mat.protocol import (
+    HEAT_LEFT_ONLY,
+    HEAT_RIGHT_ONLY,
     HandshakeReply,
     MatState,
     MatStatus,
@@ -55,9 +57,15 @@ r.ok(
 sleep = status(with_byte(HEATING, 2, 3))
 r.ok(sleep.state is MatState.OTHER, "sleep mode is other")
 r.ok(
-    status(with_byte(HEATING, 5, 3)).state is MatState.OTHER,
-    "one side only is other",
+    status(with_byte(HEATING, 5, 3)).state is MatState.HEATING,
+    "left side only is heating",
 )
+r.ok(
+    status(with_byte(HEATING, 5, 4)).state is MatState.HEATING,
+    "right side only is heating",
+)
+r.ok(status(with_byte(HEATING, 5, 0)).state is MatState.OTHER, "byte 5 of 0 is other")
+r.ok(status(with_byte(HEATING, 5, 9)).state is MatState.OTHER, "an unnamed byte 5 is other")
 r.ok(
     status(with_byte(with_byte(HEATING, 2, 6), 3, 0x02)).state is MatState.OFF,
     "mode 6 with the power bit is off",
@@ -101,6 +109,17 @@ r.ok(
     build_heating_frame(latest2, latest2, 30, 28).hex()
     == "b28001020002231e1c231e1cfefefefefefefe31",
     "on frame with targets 30 and 28",
+)
+
+r.ok(
+    build_heating_frame(latest, latest, 30, 28, HEAT_LEFT_ONLY).hex()
+    == "b28001020003241e1c231e1cfefefefefefefe33",
+    "heating frame, byte 5 of 3 (left only)",
+)
+r.ok(
+    build_heating_frame(latest, latest, 28, 34, HEAT_RIGHT_ONLY).hex()
+    == "b28001020004241e1c231c22fefefefefefefe38",
+    "heating frame, byte 5 of 4 (right only)",
 )
 
 r.section("the write characteristic")

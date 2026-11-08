@@ -99,15 +99,28 @@ class MatStatus:
     def state(self) -> MatState:
         if not self.power or self.mode == MODE_OFF:
             return MatState.OFF
-        if self.mode == MODE_HEAT and self.heat_type == HEAT_BOTH:
+        if self.mode == MODE_HEAT and self.heat_type in (
+            HEAT_BOTH,
+            HEAT_LEFT_ONLY,
+            HEAT_RIGHT_ONLY,
+        ):
             return MatState.HEATING
         return MatState.OTHER
+
+    @property
+    def left_on(self) -> bool:
+        return self.state is MatState.HEATING and self.heat_type != HEAT_RIGHT_ONLY
+
+    @property
+    def right_on(self) -> bool:
+        return self.state is MatState.HEATING and self.heat_type != HEAT_LEFT_ONLY
 
     @property
     def is_storable(self) -> bool:
         """Whether this status can later supply a power-on frame's targets."""
         return (
             self.state is MatState.HEATING
+            and self.heat_type == HEAT_BOTH
             and is_valid_target(self.left_target)
             and is_valid_target(self.right_target)
         )
@@ -176,19 +189,38 @@ def _volume(latest: MatStatus) -> int:
 
 
 def build_heating_frame(
-    latest: MatStatus, source: MatStatus, left: int, right: int
+    latest: MatStatus,
+    source: MatStatus,
+    left: int,
+    right: int,
+    heat_type: int = HEAT_BOTH,
 ) -> bytes:
     """Set both sides' targets and run; `source` supplies byte 9, `latest` the rest."""
     frame = _blank(KIND_CONTROL)
     frame[2] = MODE_HEAT
     frame[3] = FLAG_POWER | (latest.raw[3] & FLAG_LOCK)
     frame[4] = _volume(latest)
-    frame[5] = HEAT_BOTH
+    frame[5] = heat_type
     frame[6:9] = latest.raw[6:9]
     frame[9] = source.raw[9]
     frame[10] = left
     frame[11] = right
     return _finish(frame)
+
+
+def merge_one_side(stored: MatStatus, status: MatStatus) -> MatStatus | None:
+    """The stored status with the target of the side `status` shows on, if that is one side.
+
+    None when `status` is not one-side heating or reports that side's target out of range.
+    """
+    if status.state is not MatState.HEATING or status.heat_type == HEAT_BOTH:
+        return None
+    index = 10 if status.heat_type == HEAT_LEFT_ONLY else 11
+    if not is_valid_target(status.raw[index]):
+        return None
+    frame = bytearray(stored.raw)
+    frame[index] = status.raw[index]
+    return MatStatus(_finish(frame))
 
 
 def build_off_frame(latest: MatStatus) -> bytes:
