@@ -12,10 +12,17 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_ADDRESS, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import NavienSmartApi, NavienSmartAuthError, NavienSmartError
+from .ble_mat import transport
+from .ble_mat.connection import (
+    CONF_MAT_ID,
+    RegistrationNoStatus,
+    RegistrationRefused,
+    async_register_mat,
+)
 from .const import CONF_HOME_SEQ, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,10 +50,81 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
         self._username: str | None = None
         self._password: str | None = None
         self._homes: list[dict[str, Any]] = []
+        self._mat_address: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Choose the connection type; credentials go straight to the login step."""
+        if user_input is not None:
+            return await self.async_step_cloud(user_input)
+        return self.async_show_menu(step_id="user", menu_options=["cloud", "bluetooth_mat"])
+
+    async def async_step_bluetooth_mat(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick a mat that is advertising and not configured yet."""
+        if user_input is not None:
+            self._mat_address = user_input[CONF_ADDRESS]
+            await self.async_set_unique_id(self._mat_address)
+            self._abort_if_unique_id_configured()
+            return await self.async_step_bluetooth_mat_pair()
+        try:
+            found = transport.async_discovered_mats(self.hass)
+        except Exception as err:
+            _LOGGER.debug("블루투스 사용 불가: %s", type(err).__name__)
+            return self.async_abort(reason="bluetooth_unavailable")
+        configured = self._async_current_ids()
+        options = {
+            mat.address: f"{mat.name} ({mat.address})"
+            for mat in found
+            if mat.address not in configured
+        }
+        if not options:
+            return self.async_abort(reason="no_devices")
+        return self.async_show_form(
+            step_id="bluetooth_mat",
+            data_schema=_form_schema(
+                vol.Schema({vol.Required(CONF_ADDRESS): vol.In(options)})
+            ),
+        )
+
+    async def async_step_bluetooth_mat_pair(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Connect only on submit, with the app closed and the mat in pairing mode."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            assert self._mat_address is not None
+            try:
+                registration = await async_register_mat(self.hass, self._mat_address)
+            except RegistrationRefused:
+                errors["base"] = "mat_refused"
+            except RegistrationNoStatus:
+                errors["base"] = "mat_no_status"
+            except Exception as err:
+                _LOGGER.debug("블루투스 매트 등록 실패: %s", type(err).__name__)
+                errors["base"] = "mat_connect_failed"
+            else:
+                if not registration.is_double:
+                    return self.async_abort(reason="single_mat")
+                return self.async_create_entry(
+                    title="나비엔 온수매트 (블루투스)",
+                    data={
+                        CONF_ADDRESS: self._mat_address,
+                        CONF_MAT_ID: registration.issued_id.hex(),
+                    },
+                )
+        return self.async_show_form(
+            step_id="bluetooth_mat_pair",
+            data_schema=_form_schema(vol.Schema({})),
+            errors=errors,
+        )
+
+    async def async_step_cloud(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The account login."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -73,7 +151,7 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_home()
 
         return self.async_show_form(
-            step_id="user", data_schema=_form_schema(STEP_USER_SCHEMA), errors=errors
+            step_id="cloud", data_schema=_form_schema(STEP_USER_SCHEMA), errors=errors
         )
 
     async def async_step_home(
@@ -112,8 +190,11 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
         the flow never opens, and a user who changed their password would have to delete
         and reinstall the integration — losing every entity id and all long-term statistics.
 
-        `entry_data` is unused; the username is read from the existing entry below.
+        `entry_data` is otherwise unused; the username is read from the existing entry below.
+        A Bluetooth entry has no account to log in to.
         """
+        if CONF_MAT_ID in entry_data:
+            return self.async_abort(reason="bluetooth_reauth_unsupported")
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(

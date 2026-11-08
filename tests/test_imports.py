@@ -20,6 +20,30 @@ def _import_integration_module(name: str) -> object:
         import navien_smarthome
 
         return navien_smarthome
+    if name == "ble_mat":
+        import navien_smarthome.ble_mat as ble_mat
+
+        return ble_mat
+    if name == "ble_mat.connection":
+        import navien_smarthome.ble_mat.connection as connection
+
+        return connection
+    if name == "ble_mat.entities":
+        import navien_smarthome.ble_mat.entities as entities
+
+        return entities
+    if name == "ble_mat.protocol":
+        import navien_smarthome.ble_mat.protocol as protocol
+
+        return protocol
+    if name == "ble_mat.setup":
+        import navien_smarthome.ble_mat.setup as setup
+
+        return setup
+    if name == "ble_mat.transport":
+        import navien_smarthome.ble_mat.transport as transport
+
+        return transport
     if name == "airone":
         import navien_smarthome.airone as airone
 
@@ -99,7 +123,15 @@ r = Report()
 
 r.section("integration modules")
 
-modules = sorted(path.stem for path in SRC.glob("*.py"))
+modules = [
+    *sorted(path.stem for path in SRC.glob("*.py")),
+    "ble_mat",
+    "ble_mat.connection",
+    "ble_mat.entities",
+    "ble_mat.protocol",
+    "ble_mat.setup",
+    "ble_mat.transport",
+]
 for name in modules:
     try:
         _import_integration_module(name)
@@ -113,6 +145,18 @@ except LookupError:
     r.ok(True, "unknown module names are rejected")
 else:
     r.ok(False, "unknown module names are rejected")
+
+
+r.section("Bluetooth libraries stay lazy")
+
+r.ok(
+    "homeassistant.components.bluetooth" not in sys.modules,
+    "no integration module imported homeassistant.components.bluetooth",
+)
+r.ok(
+    "bleak_retry_connector" not in sys.modules,
+    "no integration module imported bleak_retry_connector",
+)
 
 
 r.section("public tools")

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import importlib
 import ipaddress
 import json
 import logging
@@ -221,6 +222,9 @@ async def _run(config: Path) -> list[str]:
     from custom_components.navien_smarthome.const import DOMAIN
     from tests_ha.devices import make_airone, make_boiler, make_mat
 
+    # A deprecated-name warning in the Bluetooth thermostat must fail this tool too.
+    importlib.import_module("custom_components.navien_smarthome.ble_mat.entities")
+
     failures: list[str] = []
     hass = await bootstrap.async_setup_hass(
         RuntimeConfig(config_dir=str(config), skip_pip=True)
@@ -244,6 +248,9 @@ async def _run(config: Path) -> list[str]:
 
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": "user"}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "cloud"}
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_USERNAME: USERNAME, CONF_PASSWORD: PASSWORD}

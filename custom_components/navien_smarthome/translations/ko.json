@@ -3,11 +3,30 @@
     "step": {
       "user": {
         "title": "나비엔 스마트",
+        "description": "연결 방식을 고릅니다.",
+        "menu_options": {
+          "cloud": "나비엔 스마트 계정으로 로그인",
+          "bluetooth_mat": "블루투스 온수매트"
+        }
+      },
+      "cloud": {
+        "title": "나비엔 스마트",
         "description": "나비엔 스마트 앱 계정으로 로그인합니다.",
         "data": {
           "username": "아이디",
           "password": "비밀번호"
         }
+      },
+      "bluetooth_mat": {
+        "title": "블루투스 온수매트",
+        "description": "연결할 매트를 고릅니다.",
+        "data": {
+          "address": "매트"
+        }
+      },
+      "bluetooth_mat_pair": {
+        "title": "매트 등록",
+        "description": "휴대폰의 나비엔 스마트 앱을 완전히 종료하고 매트를 페어링 모드로 만든 뒤 확인을 눌러 주세요. 처음 한 번만 등록하면 됩니다."
       },
       "home": {
         "title": "공간 선택",
@@ -26,11 +45,18 @@
     },
     "error": {
       "invalid_auth": "아이디 또는 비밀번호가 올바르지 않습니다.",
-      "cannot_connect": "나비엔 서버에 연결하지 못했습니다."
+      "cannot_connect": "나비엔 서버에 연결하지 못했습니다.",
+      "mat_refused": "매트가 등록을 거부했습니다. 페어링 모드를 다시 시작한 뒤 시도해 주세요.",
+      "mat_no_status": "매트가 상태를 보내지 않았습니다. 다시 시도해 주세요.",
+      "mat_connect_failed": "매트에 연결하지 못했습니다. 앱을 닫았는지 확인하고 다시 시도해 주세요."
     },
     "abort": {
-      "already_configured": "이 계정은 이미 등록되어 있습니다.",
-      "reauth_successful": "다시 로그인했습니다."
+      "already_configured": "이미 등록된 계정 또는 매트입니다.",
+      "reauth_successful": "다시 로그인했습니다.",
+      "no_devices": "연결할 수 있는 블루투스 매트를 찾지 못했습니다. 앱을 닫고 매트가 켜져 있는지 확인해 주세요.",
+      "bluetooth_unavailable": "Home Assistant의 블루투스 기능을 사용할 수 없습니다.",
+      "single_mat": "1인용(일체형) 매트는 아직 추가할 수 없습니다. 좌우 분리형만 지원합니다.",
+      "bluetooth_reauth_unsupported": "다시 로그인할 수 없는 블루투스 매트입니다. 연결에 문제가 있으면 매트를 삭제한 뒤 다시 등록해 주세요."
     }
   },
   "entity": {

@@ -1,6 +1,9 @@
 {
   "domain": "navien_smarthome",
   "name": "Navien Smart",
+  "after_dependencies": [
+    "bluetooth"
+  ],
   "codeowners": [
     "@ninthsword"
   ],

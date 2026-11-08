@@ -39,7 +39,12 @@ async def test_user_flow_creates_entry(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": "user"}
         )
+        assert result.get("type") is FlowResultType.MENU
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"next_step_id": "cloud"}
+        )
         assert result.get("type") is FlowResultType.FORM
+        assert result.get("step_id") == "cloud"
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -70,7 +75,7 @@ async def test_user_flow_reports_invalid_auth(hass: HomeAssistant) -> None:
         )
 
     assert result.get("type") is FlowResultType.FORM
-    assert result.get("step_id") == "user"
+    assert result.get("step_id") == "cloud"
     assert result.get("errors") == {"base": "invalid_auth"}
 
 

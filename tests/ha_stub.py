@@ -44,7 +44,12 @@ stub("homeassistant.helpers", pkg=True)
 stub("homeassistant.components", pkg=True)
 stub("homeassistant.util", pkg=True)
 stub("homeassistant.util.dt", now=lambda: None)
-stub("homeassistant.core", HomeAssistant=type("H", (), {}), callback=lambda f: f)
+stub(
+    "homeassistant.core",
+    HomeAssistant=type("H", (), {}),
+    callback=lambda f: f,
+    CALLBACK_TYPE=object,
+)
 stub("homeassistant.util.ssl", get_default_context=lambda: None)
 stub(
     "homeassistant.config_entries",
@@ -57,6 +62,7 @@ stub(
 stub(
     "homeassistant.const",
     EntityCategory=enum(CONFIG="config", DIAGNOSTIC="diagnostic"),
+    CONF_ADDRESS="address",
     CONF_PASSWORD="password",
     CONF_USERNAME="username",
     Platform=enum(
@@ -71,6 +77,7 @@ stub(
     ),
     ATTR_TEMPERATURE="temperature",
     PRECISION_HALVES=0.5,
+    PRECISION_WHOLE=1,
     STATE_OFF="off",
     PERCENTAGE="%",
     CONCENTRATION_PARTS_PER_MILLION="ppm",

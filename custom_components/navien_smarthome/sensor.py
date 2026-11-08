@@ -23,6 +23,8 @@ from homeassistant.util import dt as dt_util
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice, as_number, level_text, text_or_none
+from .ble_mat import is_mat_entry
+from .ble_mat.entities import async_setup_mat_sensors
 from .boiler import (
     BOILER_OPERATION_MODE_NAMES,
     BOILER_RESERVATION_FEATURES,
@@ -53,6 +55,9 @@ async def async_setup_entry(
     entry: NavienSmartConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
+    if is_mat_entry(entry):
+        await async_setup_mat_sensors(hass, entry, async_add_entities)
+        return
     coordinator = entry.runtime_data
     entities: list[SensorEntity] = []
     for device in (coordinator.data or {}).values():
