@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Bluetooth mat: add the 조작 잠금 switch, 조작음 select, 빠른 난방 switch and its minutes sensor,
+  이온케어 button, running sensor and period select, the 왼쪽/오른쪽 온도로 맞추기 buttons, and the 수위
+  and 오류 내용 sensors. Fast heat and ion care are available only on models that report them. The
+  thermostats now follow the heat range the mat reports. These functions follow the app and have
+  not yet been confirmed on a real mat; setting the ion care period may start or stop ion care, as
+  the app's own frame does.
+- Bluetooth mat: turning off the last thermostat now powers the whole mat off (the app refuses
+  this), and powering on returns to the last state, one side or both. A built-in 30 degrees is used
+  where no temperature is remembered, so no power-on is refused for lack of one.
+
 ## v0.22.1 — 2026-11-09
 
 - Bluetooth mat: each thermostat's off now turns off only its own side, as the Navien app does, and
