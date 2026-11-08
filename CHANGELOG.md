@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The NR-67D boiler's two setpoint number entities are replaced by a thermostat and a water heater.
+
+- A modelCode 20 boiler now gets a `climate` entity for its heating water (`<deviceId>_boiler_heating`)
+  and a `water_heater` entity for its hot water (`<deviceId>_boiler_water_heater`), under the same
+  server feature gates, ranges and commands. The thermostat's off is the boiler's power off, which
+  stops hot water as well.
+- Migration: the `<deviceId>_hot_water_temperature_setting` and `<deviceId>_ondol_temperature_setting`
+  number entities are no longer created. Automations and dashboards must point at the new entities;
+  the old number entries remain in the entity registry until removed. The read-only 온돌 설정 온도
+  and 온수 설정 온도 sensors still give the setpoints.
+
 Home Assistant 2026.11 compatibility.
 
 - The thermostat gives Home Assistant its temperature unit, current temperature and target

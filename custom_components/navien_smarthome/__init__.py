@@ -32,6 +32,8 @@ PLATFORMS: list[Platform] = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    # The NR-67D boiler's hot-water setpoint.
+    Platform.WATER_HEATER,
 ]
 
 NavienSmartConfigEntry = ConfigEntry[NavienSmartCoordinator]

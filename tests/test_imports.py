@@ -88,6 +88,10 @@ def _import_integration_module(name: str) -> object:
         import navien_smarthome.switch as switch
 
         return switch
+    if name == "water_heater":
+        import navien_smarthome.water_heater as water_heater
+
+        return water_heater
     raise LookupError(f"unknown integration module: {name}")
 
 

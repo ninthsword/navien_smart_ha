@@ -485,10 +485,14 @@ r.section("the setpoint range follows the current value")
 
 # Reading it once at startup and freezing it leaves the slider showing the old range after
 # the server changes it: the user moves it and the command is rejected.
-num = source("number.py")
-r.ok("def native_min_value" in num, "the minimum is exposed as a property")
-r.ok("def native_max_value" in num, "the maximum is exposed as a property")
-r.ok("_fallback_bounds" in num, "a value is kept for the moment the device disappears")
+for module in ("climate.py", "water_heater.py"):
+    text = source(module)
+    r.ok("def min_temp" in text, f"{module}: the minimum is exposed as a property")
+    r.ok("def max_temp" in text, f"{module}: the maximum is exposed as a property")
+    r.ok(
+        "_fallback_bounds" in text,
+        f"{module}: a value is kept for the moment the device disappears",
+    )
 
 
 r.section("there are no unused imports")

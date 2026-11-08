@@ -7,7 +7,8 @@ under custom_components), starts Home Assistant through homeassistant.bootstrap 
 boundary patched as devtools/ui_check/run_hass.py patches it, adds the entry through the config
 flow with synthetic credentials, stops Home Assistant and removes the directory. Prints PASS and
 exits 0 only when the entry is loaded, the mat's thermostats show make_mat's values, the boiler's
-and the Airone's entities exist and no logger under custom_components.navien_smarthome emitted a
+climate and water_heater states show make_boiler's values, the boiler's and the Airone's entities
+exist and no logger under custom_components.navien_smarthome emitted a
 WARNING or higher record; otherwise prints each failure and exits 1.
 
 The run is kept off the network by two mechanisms and checked by a third:
@@ -271,6 +272,42 @@ async def _run(config: Path) -> list[str]:
                 "current_temperature": mat.zone_current(zone),
                 "temperature": mat.zone_setting(zone),
                 "target_temp_step": control.step,
+            }
+            for name, value in expected.items():
+                if state.attributes.get(name) != value:
+                    failures.append(
+                        f"{entity_id} {name} is {state.attributes.get(name)!r}, expected {value!r}"
+                    )
+        boiler = make_boiler()
+        boiler_checks = (
+            (
+                "climate",
+                "boiler_heating",
+                boiler.supply_temperature,
+                boiler.ondol_target_temperature,
+                boiler.temperature_bounds("ondol"),
+            ),
+            (
+                "water_heater",
+                "boiler_water_heater",
+                boiler.hot_water_temperature,
+                boiler.hot_water_target_temperature,
+                boiler.temperature_bounds("hot_water"),
+            ),
+        )
+        for domain, suffix, current, target, bounds in boiler_checks:
+            unique_id = f"{boiler.device_id}_{suffix}"
+            entity_id = registry.async_get_entity_id(domain, DOMAIN, unique_id)
+            state = hass.states.get(entity_id) if entity_id else None
+            if state is None or bounds is None:
+                failures.append(f"no {domain} state for {unique_id}")
+                continue
+            expected = {
+                "current_temperature": current,
+                "temperature": target,
+                "min_temp": bounds[0],
+                "max_temp": bounds[1],
+                "target_temp_step": 0.5,
             }
             for name, value in expected.items():
                 if state.attributes.get(name) != value:
