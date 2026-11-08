@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.22.0 — 2026-11-09
 
 - Add a Bluetooth hot-water mat as a second connection type (left-right split mats only, confirmed
   on an EQM560): one thermostat per side, 운전 모드, 오류 and 블루투스 상태 entities, and a
