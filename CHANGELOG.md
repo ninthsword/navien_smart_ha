@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Boiler: the 난방 순환 유량(추정) sensor is renamed 난방 순환 유량. An existing entity id and the value are
-  unchanged, and the value remains an estimate.
+- Boiler: the 난방 순환 유량(추정), 난방 펌프 가동(추정) and 온수 최저작동유량(추정) sensors drop the (추정)
+  mark from their names. An existing entity id and the values are unchanged, and the values remain
+  estimates.
 
 ## v0.24.0 — 2026-11-09
 

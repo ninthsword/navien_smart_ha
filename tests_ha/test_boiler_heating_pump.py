@@ -269,6 +269,16 @@ async def test_a_heating_request_runs_the_pump_while_the_burner_is_idle(
     assert float(state_of(hass, flow_id(hass))) == 21
 
 
+async def test_the_pump_sensor_name_carries_no_estimate_mark(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, devices: Devices
+) -> None:
+    await arrange(hass, loaded_entry, devices[2], {ROOM_A: IDLE})
+
+    state = hass.states.get(pump_id(hass))
+    assert state is not None
+    assert state.attributes["friendly_name"].endswith(" 난방 펌프 가동")
+
+
 async def test_the_circulation_flow_sensor_name_carries_no_estimate_mark(
     hass: HomeAssistant, loaded_entry: MockConfigEntry, devices: Devices
 ) -> None:

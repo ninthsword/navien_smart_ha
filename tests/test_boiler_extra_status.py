@@ -108,7 +108,7 @@ r.section("flow rates and signal")
 
 r.ok(device.hot_water_flow_rate == 3.2, "the hot-water reference value is in 0.1 units")
 r.ok(device.heating_flow_rate == 22, "heating flow is whole litres per minute, not divided by 10")
-r.ok('("hot_water_flow_rate", "온수 최저작동유량(추정)")' in source("sensor.py"), "the hot-water value is named as an estimated threshold")
+r.ok('("hot_water_flow_rate", "온수 최저작동유량")' in source("sensor.py"), "the hot-water value is named as a minimum operating flow")
 r.ok(device.wifi_rssi == 54, "the Wi-Fi signal passes through as a raw integer")
 r.ok("The unit was never confirmed" in source("boiler.py"), "it records that the unit is unknown")
 r.ok("L/min" in source("sensor.py"), "the flow sensors use litres per minute")
@@ -250,7 +250,7 @@ flow_coordinator = create_autospec(
 heating_flow = BoilerFlowRateSensor(flow_coordinator, flow_device, "heating_flow_rate", "난방 유량")
 heating_flow.coordinator = flow_coordinator
 reference = BoilerFlowRateSensor(
-    flow_coordinator, flow_device, "hot_water_flow_rate", "온수 최저작동유량(추정)"
+    flow_coordinator, flow_device, "hot_water_flow_rate", "온수 최저작동유량"
 )
 reference.coordinator = flow_coordinator
 flow_device.apply_status({"heatFlowRate": 21, "DHWInternalFlowRate": 33}, now=380.0)
@@ -265,7 +265,7 @@ r.ok(
     (heating_flow._attr_unique_id or "").endswith("_heating_flow_rate"),
     "the heating sensor keeps its unique ID",
 )
-r.ok(reference._attr_name == "온수 최저작동유량(추정)", "the hot-water name is the estimated threshold")
+r.ok(reference._attr_name == "온수 최저작동유량", "the hot-water name is the minimum operating flow")
 for missing in (None, "x", True):
     flow_device.apply_status({"heatFlowRate": missing}, now=385.0)
     r.ok(heating_flow.native_value is None, f"heating flow {missing!r} is unknown")

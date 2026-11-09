@@ -111,7 +111,7 @@ async def async_setup_entry(
         entities.extend(
             BoilerFlowRateSensor(coordinator, boiler, key, label)
             for key, label in (
-                ("hot_water_flow_rate", "온수 최저작동유량(추정)"),
+                ("hot_water_flow_rate", "온수 최저작동유량"),
                 ("heating_flow_rate", "난방 유량"),
             )
         )
