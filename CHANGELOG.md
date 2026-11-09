@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Bluetooth mat: add instant off/on reservation selects, a stored on-reservation temperature,
+  a sleep switch and stored hours per side. These follow the app and have not yet been confirmed
+  on a real mat. Reservations and sleep replace each other; canceling an on reservation may also
+  power the mat on. Changed reservation hours are confirmed only by the reservation staying active,
+  and the app's high-temperature warning for an on reservation is not shown.
+- Bluetooth mat: allow the whole-mat power switch to turn off during powered reservations and
+  sleep, while keeping the thermostats and other controls refused in those modes.
+
 ## v0.25.0 — 2026-11-09
 
 - Bluetooth mat: show the device as 숙면매트 and let its configure form select a product name

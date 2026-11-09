@@ -14,7 +14,10 @@ from navien_smarthome.ble_mat.protocol import (
     build_authentication_frame,
     build_heating_frame,
     build_off_frame,
+    build_off_reservation_frame,
+    build_on_reservation_frame,
     build_registration_frame,
+    build_sleep_frame,
     parse_frame,
 )
 from navien_smarthome.ble_mat.transport import CHARACTERISTIC_WRITE
@@ -156,5 +159,91 @@ r.ok(readback.heat_range == (28, 45) and readback.model_code == 0, "a readback c
 r.ok(status(with_byte(HEATING, 2, 8)).model_code == 0, "mode 8 carries no capabilities")
 off_status = status(with_byte(OFF, 15, 9))
 r.ok(off_status.fast_heat_minutes == 0, "an off frame reads no fast heat")
+
+r.section("reservation and sleep status is per frame")
+reserved = status(with_byte(with_byte(HEATING, 2, 2), 12, 5))
+r.ok(
+    reserved.off_reservation_active and reserved.off_reservation_hours == 5,
+    "mode 2 with power reads the off reservation from byte 12",
+)
+r.ok(reserved.state is MatState.OTHER, "a powered reservation stays other")
+on_reserved = status(with_byte(with_byte(with_byte(OFF, 10, 1), 11, 7), 13, 9))
+r.ok(
+    on_reserved.on_reservation_active and on_reserved.on_reservation_hours == 7,
+    "mode 6 reads the on reservation from byte 11",
+)
+on_mode_2 = status(with_byte(with_byte(on_reserved.raw, 2, 2), 13, 9))
+r.ok(
+    on_mode_2.on_reservation_active and on_mode_2.on_reservation_hours == 9,
+    "unpowered mode 2 reads the on reservation from byte 13",
+)
+r.ok(
+    not status(HEATING).off_reservation_active
+    and status(HEATING).off_reservation_hours is None
+    and not status(OFF).on_reservation_active
+    and status(OFF).on_reservation_hours is None,
+    "an inactive reservation has no carried hours",
+)
+r.ok(sleep.sleep_running and sleep.state is MatState.OTHER, "powered mode 3 runs sleep")
+r.ok(
+    not status(with_byte(sleep.raw, 3, 0)).sleep_running,
+    "unpowered mode 3 does not run sleep",
+)
+for value, bounds in (
+    (0xFE, (30, 37)),
+    (0x00, (30, 35)),
+    (0x02, (30, 35)),
+    (0x03, (30, 35)),
+    (0x12, (30, 33)),
+    (0x1F, (30, 33)),
+    (0x22, None),
+    (0xFF, None),
+):
+    r.ok(status(with_byte(HEATING, 17, value)).sleep_range == bounds, f"sleep range {value:#x}")
+for mode in (1, 2, 3, 6, 9):
+    for heat_type, sides in (
+        (2, (True, True)),
+        (3, (True, False)),
+        (4, (False, True)),
+        (0, (False, False)),
+        (9, (False, False)),
+    ):
+        frame = status(with_byte(with_byte(HEATING, 2, mode), 5, heat_type))
+        r.ok(frame.selected_sides == sides, f"mode {mode}, byte 5 {heat_type}: selected sides")
+
+r.section("reservation and sleep control vectors")
+r.ok(
+    build_off_reservation_frame(status(HEATING), 5)
+    == bytes.fromhex("b28002020002241e1c231e1c05fefefefefefe3a"),
+    "set off reservation",
+)
+r.ok(
+    build_off_reservation_frame(reserved, None)
+    == bytes.fromhex("b28001020002241e1c231e1cfefefefefefefe32"),
+    "cancel off reservation",
+)
+off_source = status(with_byte(with_byte(HEATING, 2, 6), 3, 0))
+r.ok(
+    build_on_reservation_frame(off_source, 5, 30)
+    == bytes.fromhex("b280060000fe241e1cfe010500fefe1efefefefa"),
+    "set on reservation",
+)
+on_source = status(with_byte(with_byte(off_source.raw, 10, 1), 11, 5))
+r.ok(
+    build_on_reservation_frame(on_source, None, 0)
+    == bytes.fromhex("b280060200fe241e1cfe0105fefefe00fefefedc"),
+    "cancel on reservation",
+)
+sleep_source = status(with_byte(with_byte(HEATING, 10, 31), 11, 32))
+r.ok(
+    build_sleep_frame(sleep_source, 8, 8, True)
+    == bytes.fromhex("b28003020002241e1c231f200008080101fefe55"),
+    "start sleep",
+)
+r.ok(
+    build_sleep_frame(sleep_source, 0, 0, False)
+    == bytes.fromhex("b28003020002241e1c231f200000000000fefe43"),
+    "stop sleep",
+)
 
 sys.exit(r.finish())

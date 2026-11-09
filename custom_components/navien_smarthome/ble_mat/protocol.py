@@ -23,6 +23,8 @@ REPLY_ISSUED = 1
 REPLY_AUTHENTICATED = 2
 
 MODE_HEAT = 1
+MODE_RESERVATION = 2
+MODE_SLEEP = 3
 MODE_ERROR = 5
 MODE_OFF = 6
 MODE_DISCHARGE_OR_FAST_HEAT = 7
@@ -90,6 +92,50 @@ class MatStatus:
     @property
     def heat_type(self) -> int:
         return self.raw[5]
+
+    @property
+    def selected_sides(self) -> tuple[bool, bool]:
+        """The sides selected by byte 5, independently of the operating mode."""
+        return (
+            self.heat_type in (HEAT_BOTH, HEAT_LEFT_ONLY),
+            self.heat_type in (HEAT_BOTH, HEAT_RIGHT_ONLY),
+        )
+
+    @property
+    def off_reservation_active(self) -> bool:
+        return self.mode == MODE_RESERVATION and self.power
+
+    @property
+    def off_reservation_hours(self) -> int | None:
+        return self.raw[12] if self.off_reservation_active else None
+
+    @property
+    def on_reservation_active(self) -> bool:
+        return (self.mode == MODE_OFF and self.raw[10] == 1) or (
+            self.mode == MODE_RESERVATION and not self.power
+        )
+
+    @property
+    def on_reservation_hours(self) -> int | None:
+        if not self.on_reservation_active:
+            return None
+        return self.raw[11] if self.mode == MODE_OFF else self.raw[13]
+
+    @property
+    def sleep_running(self) -> bool:
+        return self.mode == MODE_SLEEP and self.power
+
+    @property
+    def sleep_range(self) -> tuple[int, int] | None:
+        """This frame's sleep range; unknown codes do not inherit an earlier range."""
+        if self.raw[17] == FILL:
+            return (30, 37)
+        code = self.raw[17] >> 4
+        if code == 0:
+            return (30, 35)
+        if code == 1:
+            return (30, 33)
+        return None
 
     @property
     def volume(self) -> int:
@@ -314,6 +360,45 @@ def build_volume_frame(latest: MatStatus, volume: int) -> bytes:
 def build_fast_heat_frame(latest: MatStatus, on: bool) -> bytes:
     frame = _running_frame(latest, MODE_DISCHARGE_OR_FAST_HEAT)
     frame[12] = int(on)
+    return _finish(frame)
+
+
+def build_off_reservation_frame(latest: MatStatus, hours: int | None) -> bytes:
+    """Set an off reservation, or cancel it with a normal heat frame."""
+    frame = _running_frame(latest, MODE_HEAT if hours is None else MODE_RESERVATION)
+    if hours is not None:
+        frame[12] = hours
+    return _finish(frame)
+
+
+def build_on_reservation_frame(
+    latest: MatStatus, hours: int | None, temperature: int
+) -> bytes:
+    """Set an on reservation; cancellation echoes its value and sets the power bit."""
+    frame = _blank(KIND_CONTROL)
+    frame[2] = MODE_OFF
+    frame[3] = (latest.raw[3] & FLAG_LOCK) | (FLAG_POWER if hours is None else 0)
+    frame[4] = _volume(latest)
+    frame[6:9] = latest.raw[6:9]
+    frame[10] = 1
+    if hours is None:
+        frame[11] = latest.raw[11] if latest.mode == MODE_OFF else latest.raw[13]
+    else:
+        frame[11] = hours
+        frame[12] = 0
+    frame[15] = temperature
+    return _finish(frame)
+
+
+def build_sleep_frame(
+    latest: MatStatus, left_hours: int, right_hours: int, on: bool
+) -> bytes:
+    frame = _running_frame(latest, MODE_SLEEP)
+    frame[12] = 0
+    frame[13] = left_hours
+    frame[14] = right_hours
+    frame[15] = int(on)
+    frame[16] = int(on)
     return _finish(frame)
 
 

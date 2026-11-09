@@ -63,6 +63,8 @@ def status(**fields: int) -> bytes:
         "right": 11,
         "byte9": 9,
         "byte12": 12,
+        "byte13": 13,
+        "byte14": 14,
         "fast": 15,
         "ion": 16,
         "model": 17,
@@ -410,6 +412,12 @@ async def test_mat_device_registry_information(
             "ion_care_run",
             "left_match_temperature",
             "right_match_temperature",
+            "off_reservation",
+            "on_reservation",
+            "left_sleep_hours",
+            "right_sleep_hours",
+            "sleep",
+            "on_reservation_temperature",
         )
     }
 
@@ -941,15 +949,22 @@ async def test_power_switch_state(hass: HomeAssistant, mat: FakeMat) -> None:
     assert state_of(hass, power).state == "unavailable"
 
 
-async def test_power_switch_refusals(hass: HomeAssistant, mat: FakeMat) -> None:
+@pytest.mark.parametrize("mode", [2, 3])
+async def test_power_switch_refusals(
+    hass: HomeAssistant, mat: FakeMat, mode: int
+) -> None:
     mat.first_status = OFF_STATUS
     await setup_mat(hass, mat)
-    await feed_and_settle(hass, mat, SLEEP)
+    await feed_and_settle(hass, mat, status(mode=mode))
     with pytest.raises(ServiceValidationError):
         await set_power(hass, "turn_on")
-    with pytest.raises(ServiceValidationError):
-        await set_power(hass, "turn_off")
     assert mat.controls() == []
+
+    mat.respond = confirm_with(OFF_STATUS)
+    await set_power(hass, "turn_off")
+    assert mat.controls() == [
+        bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8")
+    ]
 
 
 # One side at a time.
@@ -1656,7 +1671,7 @@ async def test_no_control_frame_before_authentication(
 # Platforms and diagnostics.
 
 
-async def test_forwards_only_its_six_platforms(
+async def test_forwards_only_its_seven_platforms(
     hass: HomeAssistant, mat: FakeMat
 ) -> None:
     entry = make_entry(hass)
@@ -1668,6 +1683,7 @@ async def test_forwards_only_its_six_platforms(
         "binary_sensor",
         "button",
         "climate",
+        "number",
         "select",
         "sensor",
         "switch",
@@ -1909,6 +1925,12 @@ async def test_new_entities_wait_for_a_status(
         ("button", "ion_care_run"),
         ("button", "left_match_temperature"),
         ("button", "right_match_temperature"),
+        ("select", "off_reservation"),
+        ("select", "on_reservation"),
+        ("select", "left_sleep_hours"),
+        ("select", "right_sleep_hours"),
+        ("switch", "sleep"),
+        ("number", "on_reservation_temperature"),
     ):
         assert state_of(hass, unique(hass, domain, suffix)).state == "unavailable"
 
@@ -2644,3 +2666,616 @@ async def test_flow_single_mat_aborts(hass: HomeAssistant, mat: FakeMat) -> None
     assert done.get("reason") == "single_mat"
     assert not hass.config_entries.async_entries(DOMAIN)
     assert mat.disconnected == mat.clients
+
+
+# Instant reservations and sleep. Expected control frames are literals, not protocol output.
+
+
+SLEEP_READY = status(left=31, right=32)
+OFF_RESERVATION = status(mode=2, byte12=5)
+SLEEP_RUNNING = status(mode=3, left=31, right=32)
+
+
+async def schedule_command(hass: HomeAssistant, command: str) -> None:
+    calls: dict[str, tuple[str, str, str, dict[str, str]]] = {
+        "off_set": ("select", "off_reservation", "select_option", {"option": "5시간"}),
+        "off_cancel": ("select", "off_reservation", "select_option", {"option": "해제"}),
+        "on_set": ("select", "on_reservation", "select_option", {"option": "5시간"}),
+        "on_cancel": ("select", "on_reservation", "select_option", {"option": "해제"}),
+        "sleep_start": ("switch", "sleep", "turn_on", {}),
+        "sleep_stop": ("switch", "sleep", "turn_off", {}),
+    }
+    domain, suffix, service, data = calls[command]
+    await hass.services.async_call(
+        domain,
+        service,
+        {"entity_id": unique(hass, domain, suffix), **data},
+        blocking=True,
+    )
+
+
+async def set_on_reservation_temperature(hass: HomeAssistant, value: float) -> None:
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": unique(hass, "number", "on_reservation_temperature"), "value": value},
+        blocking=True,
+    )
+
+
+@pytest.mark.parametrize("mode", [1, 2, 3])
+async def test_off_reservation_frame_and_active_confirmation(
+    hass: HomeAssistant, mat: FakeMat, mode: int
+) -> None:
+    mat.first_status = status(mode=mode, flags=0x0E, volume=0x23, left=31, right=32)
+    await setup_mat(hass, mat)
+    # A different value still confirms the reservation; the wire meaning is not yet proven.
+    mat.respond = confirm_with(status(mode=2, byte12=9))
+    await schedule_command(hass, "off_set")
+    assert mat.controls() == [
+        bytes.fromhex("b28002062002241e1c231f2005fefefefefefe63")
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "select", "off_reservation")).state == "9시간"
+
+
+async def test_off_reservation_cancel_frame_and_mode_confirmation(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(mode=2, flags=0x0E, volume=0x23, left=31, right=32, byte12=5)
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(HEATING)
+    await schedule_command(hass, "off_cancel")
+    assert mat.controls() == [
+        bytes.fromhex("b28001062002241e1c231f20fefefefefefefe5b")
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "select", "off_reservation")).state == "해제"
+
+
+async def test_on_reservation_fractional_temperature_frame_and_confirmation(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(mode=6, flags=0x0C, volume=0x23)
+    await setup_mat(hass, mat)
+    temperature = unique(hass, "number", "on_reservation_temperature")
+    initial = state_of(hass, temperature)
+    assert float(initial.state) == 30
+    assert initial.attributes["step"] == 1
+    assert (initial.attributes["min"], initial.attributes["max"]) == (28, 45)
+    await set_on_reservation_temperature(hass, 32.5)
+    await hass.async_block_till_done()
+    assert float(state_of(hass, temperature).state) == 33
+    assert mat.controls() == []
+    mat.respond = confirm_with(status(mode=6, flags=0, left=1, right=9))
+    await schedule_command(hass, "on_set")
+    assert mat.controls() == [
+        bytes.fromhex("b280060420fe241e1cfe010500fefe21fefefe21")
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "select", "on_reservation")).state == "9시간"
+
+
+@pytest.mark.parametrize("mode", [2, 6])
+async def test_on_reservation_cancel_echoes_its_value_and_may_power_on(
+    hass: HomeAssistant, mat: FakeMat, mode: int
+) -> None:
+    mat.first_status = status(
+        mode=mode, flags=0x0C, volume=0x23, left=1, right=5, byte13=5
+    )
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(HEATING)
+    await schedule_command(hass, "on_cancel")
+    assert mat.controls() == [
+        bytes.fromhex("b280060620fe241e1cfe0105fefefe00fefefe00")
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "select", "on_reservation")).state == "해제"
+
+
+@pytest.mark.parametrize("mode", [1, 2])
+async def test_sleep_two_sides_frame_and_mode_confirmation(
+    hass: HomeAssistant, mat: FakeMat, mode: int
+) -> None:
+    mat.first_status = status(mode=mode, flags=0x0E, volume=0x23, left=31, right=32)
+    await setup_mat(hass, mat)
+    await choose(hass, unique(hass, "select", "left_sleep_hours"), "5시간")
+    await choose(hass, unique(hass, "select", "right_sleep_hours"), "10시간")
+    assert mat.controls() == []
+    mat.respond = confirm_with(status(mode=3, left=31, right=32, byte13=6, byte14=9))
+    await schedule_command(hass, "sleep_start")
+    assert mat.controls() == [
+        bytes.fromhex("b28003062002241e1c231f2000050a0101fefe78")
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "switch", "sleep")).state == "on"
+    # Settings remain the user's chosen hours, independently of status hour bytes.
+    assert state_of(hass, unique(hass, "select", "left_sleep_hours")).state == "5시간"
+    assert state_of(hass, unique(hass, "select", "right_sleep_hours")).state == "10시간"
+
+
+@pytest.mark.parametrize(
+    ("heat", "left", "right", "expected"),
+    [
+        (3, 31, 45, "b28003020003241e1c231f2d0006ff0101fefe58"),
+        (4, 45, 32, "b28003020004241e1c232d2000ff090101fefe5d"),
+    ],
+)
+async def test_sleep_from_reservation_uses_byte_5_and_checks_only_the_selected_side(
+    hass: HomeAssistant, mat: FakeMat, heat: int, left: int, right: int, expected: str
+) -> None:
+    mat.first_status = status(mode=2, heat=heat, left=left, right=right)
+    await setup_mat(hass, mat)
+    await choose(hass, unique(hass, "select", "left_sleep_hours"), "6시간")
+    await choose(hass, unique(hass, "select", "right_sleep_hours"), "9시간")
+    mat.respond = confirm_with(status(mode=3, heat=heat, left=left, right=right))
+    await schedule_command(hass, "sleep_start")
+    assert mat.controls() == [bytes.fromhex(expected)]
+
+
+async def test_sleep_stop_frame_and_confirmation(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(mode=3, flags=0x0E, volume=0x23, left=31, right=32)
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(HEATING)
+    await schedule_command(hass, "sleep_stop")
+    assert mat.controls() == [
+        bytes.fromhex("b28003062002241e1c231f200000000000fefe67")
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "switch", "sleep")).state == "off"
+
+
+SCHEDULE_COMMANDS = [
+    ("off_set", HEATING, status(mode=2, byte12=9), "b28002020002241e1c231e1c05fefefefefefe3a"),
+    ("off_cancel", OFF_RESERVATION, HEATING, "b28001020002241e1c231e1cfefefefefefefe32"),
+    ("on_set", OFF_STATUS, OFF_RESERVED, "b280060000fe241e1cfe010500fefe1efefefefa"),
+    ("on_cancel", OFF_RESERVED, HEATING, "b280060200fe241e1cfe0105fefefe00fefefedc"),
+    ("sleep_start", SLEEP_READY, SLEEP_RUNNING, "b28003020002241e1c231f200008080101fefe55"),
+    ("sleep_stop", SLEEP_RUNNING, HEATING, "b28003020002241e1c231f200000000000fefe43"),
+]
+
+
+@pytest.mark.parametrize(("command", "start", "confirmed", "expected"), SCHEDULE_COMMANDS)
+async def test_schedule_commands_resend_confirm_and_report_final_error(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    command: str,
+    start: bytes,
+    confirmed: bytes,
+    expected: str,
+) -> None:
+    mat.first_status = start
+    await setup_mat(hass, mat)
+    answers = iter([None, confirmed])
+    mat.respond = lambda _frame: next(answers)
+    await schedule_command(hass, command)
+    assert mat.controls() == [bytes.fromhex(expected)] * 2
+
+    await feed_and_settle(hass, mat, start)
+    mat.respond = None
+    with pytest.raises(HomeAssistantError) as raised:
+        await schedule_command(hass, command)
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert mat.controls() == [bytes.fromhex(expected)] * 4
+
+
+@pytest.mark.parametrize(
+    ("command", "start", "moved", "confirmed", "first", "second"),
+    [
+        (
+            "off_set", HEATING,
+            status(mode=3, flags=6, volume=0x23, left=32, right=33, byte9=0x25),
+            OFF_RESERVATION,
+            "b28002020002241e1c231e1c05fefefefefefe3a",
+            "b28002062002241e1c25202105fefefefefefe67",
+        ),
+        (
+            "off_cancel", OFF_RESERVATION,
+            status(mode=2, flags=6, volume=0x23, left=32, right=33, byte9=0x25),
+            HEATING,
+            "b28001020002241e1c231e1cfefefefefefefe32",
+            "b28001062002241e1c252021fefefefefefefe5f",
+        ),
+        (
+            "on_set", OFF_STATUS,
+            status(mode=6, flags=4, volume=0x23, left=1, right=9),
+            OFF_RESERVED,
+            "b280060000fe241e1cfe010500fefe1efefefefa",
+            "b280060420fe241e1cfe010500fefe1efefefe1e",
+        ),
+        (
+            "on_cancel", OFF_RESERVED,
+            status(mode=2, flags=4, volume=0x23, byte13=9),
+            HEATING,
+            "b280060200fe241e1cfe0105fefefe00fefefedc",
+            "b280060620fe241e1cfe0109fefefe00fefefe04",
+        ),
+        (
+            "sleep_start", SLEEP_READY,
+            status(flags=6, volume=0x23, left=32, right=33, byte9=0x25),
+            SLEEP_RUNNING,
+            "b28003020002241e1c231f200008080101fefe55",
+            "b28003062002241e1c2520210008080101fefe7d",
+        ),
+        (
+            "sleep_stop", SLEEP_RUNNING,
+            status(mode=3, flags=6, volume=0x23, left=32, right=33, byte9=0x25),
+            HEATING,
+            "b28003020002241e1c231f200000000000fefe43",
+            "b28003062002241e1c2520210000000000fefe6b",
+        ),
+    ],
+)
+async def test_schedule_resends_rebuild_echoes_without_changing_the_action(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    command: str,
+    start: bytes,
+    moved: bytes,
+    confirmed: bytes,
+    first: str,
+    second: str,
+) -> None:
+    mat.first_status = start
+    await setup_mat(hass, mat)
+    mat.during_write = moved  # before the confirmation window, so this cannot confirm
+    answers = iter([None, confirmed])
+    mat.respond = lambda _frame: next(answers)
+    await schedule_command(hass, command)
+    assert mat.controls() == [bytes.fromhex(first), bytes.fromhex(second)]
+
+
+@pytest.mark.parametrize(
+    ("command", "start", "moved"),
+    [
+        ("off_set", HEATING, status(mode=9)),
+        ("off_set", HEATING, status(mode=2, flags=0)),
+        ("off_set", HEATING, status(mode=3, heat=0)),
+        ("off_cancel", OFF_RESERVATION, OFF_STATUS),
+        ("off_cancel", OFF_RESERVATION, HEATING),
+        ("on_set", OFF_STATUS, HEATING),
+        ("on_set", OFF_STATUS, status(mode=2, flags=0, byte13=5)),
+        ("on_cancel", OFF_RESERVED, HEATING),
+        ("sleep_start", SLEEP_READY, status(mode=9, left=31, right=32)),
+        ("sleep_start", SLEEP_READY, status(heat=3, left=31, right=32)),
+        ("sleep_start", SLEEP_READY, status(left=34, right=32)),
+        ("sleep_start", SLEEP_READY, status(model=0x22, left=31, right=32)),
+        ("sleep_start", SLEEP_READY, SLEEP_RUNNING),
+        ("sleep_stop", SLEEP_RUNNING, HEATING),
+        ("sleep_stop", SLEEP_RUNNING, status(mode=3, flags=0)),
+    ],
+)
+async def test_schedule_resend_stops_when_the_original_condition_no_longer_holds(
+    hass: HomeAssistant, mat: FakeMat, command: str, start: bytes, moved: bytes
+) -> None:
+    mat.first_status = start
+    await setup_mat(hass, mat)
+    mat.during_write = moved
+    with pytest.raises(HomeAssistantError) as raised:
+        await schedule_command(hass, command)
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    expected = next(row[3] for row in SCHEDULE_COMMANDS if row[0] == command)
+    assert mat.controls() == [bytes.fromhex(expected)]
+
+
+UNRESERVED_STATES = [
+    HEATING,
+    OFF_STATUS,
+    status(mode=3, flags=0),
+    *[status(mode=mode) for mode in (4, 5, 7, 8, 9, 99)],
+    status(heat=0),
+]
+NO_OP_SCHEDULES = [
+    *[(command, frame) for command in ("off_cancel", "on_cancel", "sleep_stop")
+      for frame in UNRESERVED_STATES],
+    ("off_cancel", OFF_RESERVED),
+    ("off_cancel", status(mode=2, flags=0)),
+    ("off_cancel", SLEEP_RUNNING),
+    ("on_cancel", OFF_RESERVATION),
+    ("on_cancel", SLEEP_RUNNING),
+    ("sleep_stop", OFF_RESERVATION),
+    ("sleep_stop", OFF_RESERVED),
+    ("sleep_stop", status(mode=2, flags=0)),
+    ("sleep_start", SLEEP_RUNNING),
+    ("sleep_start", status(mode=3, heat=0, model=0x22)),
+]
+
+
+@pytest.mark.parametrize(("command", "frame"), NO_OP_SCHEDULES)
+async def test_schedule_defined_no_ops_in_every_state(
+    hass: HomeAssistant, mat: FakeMat, command: str, frame: bytes
+) -> None:
+    mat.first_status = frame
+    await setup_mat(hass, mat)
+    await schedule_command(hass, command)
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize(
+    ("command", "frame"),
+    [
+        *[("off_set", status(mode=mode)) for mode in (4, 5, 6, 7, 8, 9)],
+        ("off_set", status(mode=2, flags=0)),
+        ("off_set", status(mode=3, flags=0)),
+        *[("off_set", status(mode=mode, heat=heat)) for mode in (1, 2, 3) for heat in (0, 9)],
+        *[("on_set", status(mode=mode)) for mode in (1, 2, 3, 4, 5, 7, 8, 9)],
+        ("on_set", status(mode=2, flags=0)),
+        *[("sleep_start", status(mode=mode)) for mode in (4, 5, 6, 7, 8, 9)],
+        ("sleep_start", status(mode=2, flags=0)),
+        ("sleep_start", status(mode=3, flags=0)),
+        *[("sleep_start", status(mode=mode, heat=heat)) for mode in (1, 2) for heat in (0, 9)],
+    ],
+)
+async def test_schedule_commands_refuse_other_states_and_invalid_heat_types(
+    hass: HomeAssistant, mat: FakeMat, command: str, frame: bytes
+) -> None:
+    mat.first_status = frame
+    await setup_mat(hass, mat)
+    expected = (
+        connection.ERROR_SLEEP_STATE if command == "sleep_start"
+        else connection.ERROR_RESERVATION_STATE
+    )
+    with pytest.raises(ServiceValidationError) as raised:
+        await schedule_command(hass, command)
+    assert str(raised.value) == expected
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize("mode", [2, 3])
+@pytest.mark.parametrize(
+    "command",
+    [
+        lambda hass: set_temp(hass, "left", 31),
+        lambda hass: set_mode(hass, "left", "heat"),
+        lambda hass: set_mode(hass, "left", "off"),
+        lambda hass: set_power(hass, "turn_on"),
+        lambda hass: turn(hass, "turn_on", unique(hass, "switch", "lock")),
+        lambda hass: turn(hass, "turn_off", unique(hass, "switch", "lock")),
+        lambda hass: choose(hass, unique(hass, "select", "volume"), "2단계"),
+        lambda hass: turn(hass, "turn_on", unique(hass, "switch", "fast_heat")),
+        lambda hass: turn(hass, "turn_off", unique(hass, "switch", "fast_heat")),
+        lambda hass: press(hass, unique(hass, "button", "ion_care_run")),
+        lambda hass: choose(hass, unique(hass, "select", "ion_care_period"), "3시간"),
+        lambda hass: press(hass, unique(hass, "button", "left_match_temperature")),
+        lambda hass: press(hass, unique(hass, "button", "right_match_temperature")),
+    ],
+)
+async def test_other_controls_stay_refused_in_reservation_and_sleep(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    mode: int,
+    command: Callable[[HomeAssistant], Any],
+) -> None:
+    mat.first_status = status(mode=mode)
+    await setup_mat(hass, mat)
+    with pytest.raises(ServiceValidationError):
+        await command(hass)
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [status(mode=4), status(mode=5), status(mode=7), status(mode=8), status(mode=9), status(heat=0)],
+)
+async def test_power_off_stays_refused_in_unaccepted_modes(
+    hass: HomeAssistant, mat: FakeMat, frame: bytes
+) -> None:
+    mat.first_status = frame
+    await setup_mat(hass, mat)
+    with pytest.raises(ServiceValidationError):
+        await set_power(hass, "turn_off")
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize(
+    ("suffix", "frame", "expected"),
+    [
+        ("off_reservation", OFF_RESERVATION, "5시간"),
+        ("off_reservation", status(mode=2, byte12=99), "unknown"),
+        ("off_reservation", HEATING, "해제"),
+        ("on_reservation", OFF_RESERVED, "5시간"),
+        ("on_reservation", status(mode=6, left=1, right=99), "unknown"),
+        ("on_reservation", status(mode=2, flags=0, byte13=7), "7시간"),
+        ("on_reservation", status(mode=2, flags=0, byte13=99), "unknown"),
+        ("on_reservation", OFF_STATUS, "해제"),
+    ],
+)
+async def test_reservation_select_active_inactive_and_unknown_values(
+    hass: HomeAssistant, mat: FakeMat, suffix: str, frame: bytes, expected: str
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, frame)
+    entity = unique(hass, "select", suffix)
+    assert state_of(hass, entity).state == expected
+    await feed_and_settle(hass, mat, HEATING)
+    assert state_of(hass, entity).state == "해제"
+
+
+@pytest.mark.parametrize("model", [0xFE, 0x11, 0x12, 0x13])
+async def test_reservation_and_sleep_option_lists(
+    hass: HomeAssistant, mat: FakeMat, model: int
+) -> None:
+    mat.first_status = status(model=model)
+    await setup_mat(hass, mat)
+    off = state_of(hass, unique(hass, "select", "off_reservation"))
+    hours = range(1, 15) if model == 0x13 else range(3, 13)
+    assert off.attributes["options"] == ["해제", *[f"{h}시간" for h in hours]]
+    on = state_of(hass, unique(hass, "select", "on_reservation"))
+    assert on.attributes["options"] == ["해제", *[f"{h}시간" for h in range(3, 13)]]
+    for side in ("left", "right"):
+        sleep_hours = state_of(hass, unique(hass, "select", f"{side}_sleep_hours"))
+        assert sleep_hours.attributes["options"] == [f"{h}시간" for h in range(5, 11)]
+        assert sleep_hours.state == "8시간"
+
+
+@pytest.mark.parametrize(
+    ("model", "left", "right"),
+    [
+        (0xFE, 29, 30), (0xFE, 30, 38),
+        (0x02, 29, 30), (0x02, 30, 36),
+        (0x12, 29, 30), (0x12, 30, 34),
+        (0x22, 31, 32), (0xFF, 31, 32),
+    ],
+)
+async def test_sleep_refuses_targets_outside_each_range_or_an_unknown_range(
+    hass: HomeAssistant, mat: FakeMat, model: int, left: int, right: int
+) -> None:
+    mat.first_status = status(model=model, left=left, right=right)
+    await setup_mat(hass, mat)
+    with pytest.raises(ServiceValidationError) as raised:
+        await schedule_command(hass, "sleep_start")
+    assert str(raised.value) == "수면 적정 온도로 변경 후 실행해 주세요."
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize("heat", [3, 4])
+async def test_sleep_from_reservation_refuses_the_selected_sides_target_outside_range(
+    hass: HomeAssistant, mat: FakeMat, heat: int
+) -> None:
+    mat.first_status = status(mode=2, heat=heat, left=34, right=34)
+    await setup_mat(hass, mat)
+    with pytest.raises(ServiceValidationError) as raised:
+        await schedule_command(hass, "sleep_start")
+    assert str(raised.value) == "수면 적정 온도로 변경 후 실행해 주세요."
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize(
+    ("model", "high", "expected"),
+    [
+        (0xFE, 37, "b28003020002241e1c231e250008080101fefe59"),
+        (0x02, 35, "b28003020002241e1c231e230008080101fefe57"),
+        (0x12, 33, "b28003020002241e1c231e210008080101fefe55"),
+    ],
+)
+async def test_sleep_accepts_the_boundaries_of_each_range(
+    hass: HomeAssistant, mat: FakeMat, model: int, high: int, expected: str
+) -> None:
+    mat.first_status = status(model=model, left=30, right=high)
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(status(mode=3, model=model, left=30, right=high))
+    await schedule_command(hass, "sleep_start")
+    assert mat.controls() == [bytes.fromhex(expected)]
+
+
+@pytest.mark.parametrize("temperature", [25, 33, 50])
+async def test_schedule_settings_survive_reload_including_temperature_endpoints(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any], temperature: int
+) -> None:
+    mat.first_status = status(range=3)
+    entry = await setup_mat(hass, mat)
+    await set_on_reservation_temperature(hass, temperature)
+    await choose(hass, unique(hass, "select", "left_sleep_hours"), "6시간")
+    await choose(hass, unique(hass, "select", "right_sleep_hours"), "10시간")
+    assert mat.controls() == []
+    original = entry.runtime_data
+    # Load before any live status, then receive a narrower range. Stored 25/50 stay intact.
+    mat.first_status = OFF_STATUS
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    assert entry.runtime_data is not original
+    assert float(state_of(hass, unique(hass, "number", "on_reservation_temperature")).state) == temperature
+    assert state_of(hass, unique(hass, "select", "left_sleep_hours")).state == "6시간"
+    assert state_of(hass, unique(hass, "select", "right_sleep_hours")).state == "10시간"
+    key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+    saved = hass_storage[key]["data"]
+    assert saved["enabled"] is True
+    assert saved["heating_status"] == status(range=3).hex()
+    assert saved["on_reservation_temperature"] == temperature
+    assert saved["left_sleep_hours"] == 6
+    assert saved["right_sleep_hours"] == 10
+
+
+@pytest.mark.parametrize("stored", [None, True, False, "30", [], {}, 24, 51, 30.5])
+async def test_malformed_on_reservation_temperature_defaults(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any], stored: Any
+) -> None:
+    entry = make_entry(hass)
+    key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+    hass_storage[key] = {
+        "version": 1, "minor_version": 1, "key": key,
+        "data": {"on_reservation_temperature": stored},
+    }
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    assert float(state_of(hass, unique(hass, "number", "on_reservation_temperature")).state) == 30
+
+
+@pytest.mark.parametrize("stored", [None, True, False, "8", [], {}, 4, 11, 8.5])
+async def test_malformed_sleep_hours_default_on_both_sides(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any], stored: Any
+) -> None:
+    entry = make_entry(hass)
+    key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+    hass_storage[key] = {
+        "version": 1, "minor_version": 1, "key": key,
+        "data": {"left_sleep_hours": stored, "right_sleep_hours": stored},
+    }
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    for side in ("left", "right"):
+        assert state_of(hass, unique(hass, "select", f"{side}_sleep_hours")).state == "8시간"
+
+
+async def test_older_store_gives_schedule_defaults_and_preserves_existing_keys(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any]
+) -> None:
+    entry = make_entry(hass)
+    key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+    hass_storage[key] = {
+        "version": 1, "minor_version": 1, "key": key,
+        "data": {"enabled": True, "heating_status": HEATING.hex()},
+    }
+    mat.first_status = OFF_STATUS
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.enabled is True
+    assert entry.runtime_data.stored_status.raw == HEATING
+    assert float(state_of(hass, unique(hass, "number", "on_reservation_temperature")).state) == 30
+    for side in ("left", "right"):
+        assert state_of(hass, unique(hass, "select", f"{side}_sleep_hours")).state == "8시간"
+
+
+@pytest.mark.parametrize("temperature", [25, 50])
+async def test_on_reservation_refuses_stored_temperature_outside_the_live_range(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any], temperature: int
+) -> None:
+    entry = make_entry(hass)
+    key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+    hass_storage[key] = {
+        "version": 1, "minor_version": 1, "key": key,
+        "data": {"on_reservation_temperature": temperature},
+    }
+    mat.first_status = OFF_STATUS
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.on_reservation_temperature == temperature
+    with pytest.raises(ServiceValidationError) as raised:
+        await schedule_command(hass, "on_set")
+    assert str(raised.value) == connection.ERROR_RESERVATION_TEMPERATURE
+    assert mat.controls() == []
+
+
+async def test_on_reservation_resend_stops_if_the_live_range_excludes_its_temperature(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(mode=6, flags=0, range=3)
+    await setup_mat(hass, mat)
+    await set_on_reservation_temperature(hass, 25)
+    mat.during_write = status(mode=6, flags=0, range=4)
+    with pytest.raises(HomeAssistantError) as raised:
+        await schedule_command(hass, "on_set")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert mat.controls() == [
+        bytes.fromhex("b280060000fe241e1cfe010500fefe19fefefef5")
+    ]

@@ -26,7 +26,10 @@ from .protocol import (
     HEAT_LEFT_ONLY,
     HEAT_RIGHT_ONLY,
     INITIAL_TARGET,
+    MODE_HEAT,
     MODE_OFF,
+    MODE_RESERVATION,
+    MODE_SLEEP,
     REPLY_AUTHENTICATED,
     REPLY_ISSUED,
     REPLY_REFUSED,
@@ -39,7 +42,10 @@ from .protocol import (
     build_ion_care_frame,
     build_off_frame,
     build_off_lock_frame,
+    build_off_reservation_frame,
+    build_on_reservation_frame,
     build_registration_frame,
+    build_sleep_frame,
     build_volume_frame,
     merge_one_side,
     parse_frame,
@@ -81,6 +87,12 @@ ERROR_UNSUPPORTED_MODE = "이 매트는 '{mode}' 모드를 지원하지 않습�
 ERROR_NOT_HEATING = "매트가 난방 중일 때만 사용할 수 있습니다."
 ERROR_LOCK_STATE = "지금 상태에서는 조작 잠금을 바꿀 수 없습니다."
 ERROR_SIDE_OFF = "이쪽이 켜져 있을 때만 사용할 수 있습니다."
+ERROR_RESERVATION_STATE = "지금 상태에서는 이 예약을 설정할 수 없습니다."
+ERROR_RESERVATION_TEMPERATURE = "켜짐 예약 온도가 매트의 온도 범위를 벗어났습니다."
+ERROR_SLEEP_STATE = "지금 상태에서는 수면 모드를 실행할 수 없습니다."
+ERROR_SLEEP_TEMPERATURE = "수면 적정 온도로 변경 후 실행해 주세요."
+
+INITIAL_SLEEP_HOURS = 8
 
 
 class RegistrationRefused(Exception):
@@ -201,6 +213,9 @@ class MatConnection:
         self.enabled = True
         self.status: MatStatus | None = None
         self.stored_status: MatStatus | None = None
+        self.on_reservation_temperature = INITIAL_TARGET
+        self.left_sleep_hours = INITIAL_SLEEP_HOURS
+        self.right_sleep_hours = INITIAL_SLEEP_HOURS
         self.authenticated = False
         self.needs_registration = False
         self._listeners: list[CALLBACK_TYPE] = []
@@ -231,12 +246,24 @@ class MatConnection:
             data = {}
         self.enabled = data.get("enabled", True)
         self.stored_status = _parse_stored_status(data.get("heating_status"))
+        self.on_reservation_temperature = _stored_integer(
+            data.get("on_reservation_temperature"), 25, 50, INITIAL_TARGET
+        )
+        self.left_sleep_hours = _stored_integer(
+            data.get("left_sleep_hours"), 5, 10, INITIAL_SLEEP_HOURS
+        )
+        self.right_sleep_hours = _stored_integer(
+            data.get("right_sleep_hours"), 5, 10, INITIAL_SLEEP_HOURS
+        )
 
     def _payload(self) -> dict[str, Any]:
         stored = self.stored_status
         return {
             "enabled": self.enabled,
             "heating_status": None if stored is None else stored.raw.hex(),
+            "on_reservation_temperature": self.on_reservation_temperature,
+            "left_sleep_hours": self.left_sleep_hours,
+            "right_sleep_hours": self.right_sleep_hours,
         }
 
     @callback
@@ -460,7 +487,7 @@ class MatConnection:
                 return None
             return _power_on_intent(stored, None, None)
 
-        await self._async_command(decide)
+        await self._async_command(decide, allow_other=not on)
 
     async def async_set_lock(self, locked: bool) -> None:
         await self._async_command(lambda status, _stored: _lock_intent(status, locked))
@@ -483,8 +510,54 @@ class MatConnection:
         """Set both sides to `side`'s target."""
         await self._async_command(lambda status, _stored: _match_intent(status, side))
 
+    async def async_set_off_reservation(self, hours: int | None) -> None:
+        await self._async_command(
+            lambda status, _stored: _off_reservation_intent(status, hours),
+            allow_other=True,
+        )
+
+    async def async_set_on_reservation(self, hours: int | None) -> None:
+        await self._async_command(
+            lambda status, _stored: _on_reservation_intent(
+                status, hours, self.on_reservation_temperature
+            ),
+            allow_other=True,
+        )
+
+    async def async_set_sleep(self, on: bool) -> None:
+        await self._async_command(
+            lambda status, _stored: _sleep_intent(
+                status, on, self.left_sleep_hours, self.right_sleep_hours
+            ),
+            allow_other=True,
+        )
+
+    async def async_set_on_reservation_temperature(self, value: float) -> None:
+        async with self._command_lock:
+            status = self.status
+            if status is None:
+                raise HomeAssistantError(ERROR_NO_LINK)
+            temperature = round_half_up(value)
+            if not status.is_valid_target(temperature):
+                raise ServiceValidationError(ERROR_RESERVATION_TEMPERATURE)
+            self.on_reservation_temperature = temperature
+            self._store.async_delay_save(self._payload, 1)
+            self._publish()
+
+    async def async_set_sleep_hours(self, side: str, hours: int) -> None:
+        async with self._command_lock:
+            if side == SIDE_LEFT:
+                self.left_sleep_hours = hours
+            else:
+                self.right_sleep_hours = hours
+            self._store.async_delay_save(self._payload, 1)
+            self._publish()
+
     async def _async_command(
-        self, decide: Callable[[MatStatus, MatStatus | None], _Intent | None]
+        self,
+        decide: Callable[[MatStatus, MatStatus | None], _Intent | None],
+        *,
+        allow_other: bool = False,
     ) -> None:
         async with self._command_lock:
             # Read once: a reply to the first send can replace the stored status.
@@ -500,7 +573,7 @@ class MatConnection:
                     and not intent.holds(status)
                 ):
                     raise HomeAssistantError(ERROR_UNCONFIRMED)
-                if status.state is MatState.OTHER:
+                if status.state is MatState.OTHER and not allow_other:
                     raise ServiceValidationError(ERROR_OTHER_MODE)
                 if intent is None:
                     intent = decide(status, stored)
@@ -551,6 +624,18 @@ def _parse_stored_status(value: Any) -> MatStatus | None:
     except (TypeError, ValueError):
         return None
     return status if status is not None and status.is_restorable else None
+
+
+def _stored_integer(value: Any, low: int, high: int, default: int) -> int:
+    """Only whole numeric values in the storage domain survive a reload."""
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and low <= value <= high
+        and int(value) == value
+    ):
+        return int(value)
+    return default
 
 
 def _power_on_values(status: MatStatus) -> tuple[int, int, int, int, int]:
@@ -668,9 +753,120 @@ def _off_intent(
     """Turn off the whole mat."""
     if status.state is MatState.OFF:
         return None
+    if not _can_power_off(status):
+        raise ServiceValidationError(ERROR_OTHER_MODE)
     return _Intent(
         lambda latest: _Send(build_off_frame(latest), lambda s: s.state is MatState.OFF),
-        holds,
+        holds if holds is not None else lambda s: s.state is MatState.OFF or _can_power_off(s),
+    )
+
+
+def _can_power_off(status: MatStatus) -> bool:
+    return _is_heating(status) or (
+        status.power and status.mode in (MODE_RESERVATION, MODE_SLEEP)
+    )
+
+
+def _can_set_off_reservation(status: MatStatus, hours: int) -> bool:
+    hours_range = range(1, 15) if status.model_code == 3 else range(3, 13)
+    return _can_power_off(status) and any(status.selected_sides) and hours in hours_range
+
+
+def _off_reservation_intent(status: MatStatus, hours: int | None) -> _Intent | None:
+    if hours is None:
+        if not status.off_reservation_active:
+            return None
+        return _Intent(
+            lambda latest: _Send(
+                build_off_reservation_frame(latest, None), lambda s: s.mode == MODE_HEAT
+            ),
+            lambda s: s.off_reservation_active,
+        )
+    if not _can_set_off_reservation(status, hours):
+        raise ServiceValidationError(ERROR_RESERVATION_STATE)
+    return _Intent(
+        lambda latest: _Send(
+            build_off_reservation_frame(latest, hours), lambda s: s.off_reservation_active
+        ),
+        lambda s: _can_set_off_reservation(s, hours),
+    )
+
+
+def _on_reservation_intent(
+    status: MatStatus, hours: int | None, temperature: int
+) -> _Intent | None:
+    if hours is None:
+        if not status.on_reservation_active:
+            return None
+        return _Intent(
+            lambda latest: _Send(
+                build_on_reservation_frame(latest, None, 0),
+                lambda s: not s.on_reservation_active,
+            ),
+            lambda s: s.on_reservation_active,
+        )
+    if status.mode != MODE_OFF or hours not in range(3, 13):
+        raise ServiceValidationError(ERROR_RESERVATION_STATE)
+    if not status.is_valid_target(temperature):
+        raise ServiceValidationError(ERROR_RESERVATION_TEMPERATURE)
+    return _Intent(
+        lambda latest: _Send(
+            build_on_reservation_frame(latest, hours, temperature),
+            lambda s: s.on_reservation_active,
+        ),
+        lambda s: s.mode == MODE_OFF and s.is_valid_target(temperature),
+    )
+
+
+def _can_start_sleep(status: MatStatus) -> bool:
+    return (
+        (_is_heating(status) or (status.mode == MODE_RESERVATION and status.power))
+        and any(status.selected_sides)
+    )
+
+
+def _sleep_targets_in_range(status: MatStatus) -> bool:
+    bounds = status.sleep_range
+    if bounds is None:
+        return False
+    left_on, right_on = status.selected_sides
+    low, high = bounds
+    return (not left_on or low <= status.left_target <= high) and (
+        not right_on or low <= status.right_target <= high
+    )
+
+
+def _sleep_intent(
+    status: MatStatus, on: bool, left_hours: int, right_hours: int
+) -> _Intent | None:
+    if not on:
+        if not status.sleep_running:
+            return None
+        return _Intent(
+            lambda latest: _Send(
+                build_sleep_frame(latest, 0, 0, False), lambda s: s.mode != MODE_SLEEP
+            ),
+            lambda s: s.sleep_running,
+        )
+    if status.sleep_running:
+        return None
+    if not _can_start_sleep(status):
+        raise ServiceValidationError(ERROR_SLEEP_STATE)
+    if not _sleep_targets_in_range(status):
+        raise ServiceValidationError(ERROR_SLEEP_TEMPERATURE)
+    left_on, right_on = status.selected_sides
+    left = left_hours if left_on else 0xFF
+    right = right_hours if right_on else 0xFF
+    heat_type = status.heat_type
+    return _Intent(
+        lambda latest: _Send(
+            build_sleep_frame(latest, left, right, True), lambda s: s.mode == MODE_SLEEP
+        ),
+        lambda s: (
+            _can_start_sleep(s)
+            and s.heat_type == heat_type
+            and _sleep_targets_in_range(s)
+        ),
     )
 
 
