@@ -252,6 +252,23 @@ async def test_burning_does_not_enter_the_rule(
     assert state_of(hass, pump_id(hass)) == STATE_OFF
 
 
+async def test_a_heating_request_runs_the_pump_while_the_burner_is_idle(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, devices: Devices
+) -> None:
+    await arrange(
+        hass,
+        loaded_entry,
+        devices[2],
+        {ROOM_A: HEATING},
+        operationBusy=1,
+        DHWUse=1,
+        heatFlowRate=21,
+    )
+
+    assert state_of(hass, pump_id(hass)) == STATE_ON
+    assert float(state_of(hass, flow_id(hass))) == 21
+
+
 async def test_both_sensors_are_unavailable_with_the_boiler(
     hass: HomeAssistant, loaded_entry: MockConfigEntry, devices: Devices
 ) -> None:
