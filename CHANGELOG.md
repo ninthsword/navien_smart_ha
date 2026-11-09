@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.25.0 — 2026-11-09
 
 - Bluetooth mat: show the device as 숙면매트 and let its configure form select a product name
   from the app's thirteen models. Saving reloads the entry; omitting the selection clears the
