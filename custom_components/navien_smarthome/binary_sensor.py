@@ -19,7 +19,12 @@ from .ble_mat.entities import async_setup_mat_binary_sensors
 from .boiler import BoilerDevice
 from .const import AIRONE_SENSOR_KINDS
 from .coordinator import NavienSmartCoordinator
-from .entity import AironeEntity, BoilerEntity, NavienSmartEntity
+from .entity import (
+    AironeEntity,
+    BoilerEntity,
+    BoilerHeatingPumpEntity,
+    NavienSmartEntity,
+)
 from .models import NavienDevice
 
 
@@ -48,6 +53,7 @@ async def async_setup_entry(
         entities.append(BoilerHotWaterRunning(coordinator, boiler))
         entities.append(BoilerHotWaterSustained(coordinator, boiler))
         entities.append(BoilerFaultProblem(coordinator, boiler))
+        entities.append(BoilerHeatingPumpRunning(coordinator, boiler, entry))
 
     async_add_entities(entities)
 
@@ -237,6 +243,29 @@ class BoilerFaultProblem(BoilerEntity, BinarySensorEntity):  # pyright: ignore[r
         if device is None or (status := device.fault_status) is None:
             return None
         return {"faultStatus1": status[0], "faultStatus2": status[1]}
+
+
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerHeatingPumpRunning(BoilerHeatingPumpEntity, BinarySensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """Whether the heating pump is estimated to run."""
+
+    _attr_name = "난방 펌프 가동(추정)"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_icon = "mdi:pump"
+
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: BoilerDevice,
+        entry: NavienSmartConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, device, entry)
+        self._attr_unique_id = f"{device.device_id}_heating_pump_running"
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        return self._pump_running
 
 
 # Preserve the HA MRO mixing cached descriptors and dynamic properties.

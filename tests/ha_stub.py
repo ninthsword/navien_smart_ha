@@ -51,6 +51,7 @@ stub(
     CALLBACK_TYPE=object,
 )
 stub("homeassistant.util.ssl", get_default_context=lambda: None)
+stub("homeassistant.data_entry_flow", UnknownHandler=type("H", (Exception,), {}))
 stub(
     "homeassistant.config_entries",
     ConfigEntry=Base,
@@ -79,6 +80,8 @@ stub(
     PRECISION_HALVES=0.5,
     PRECISION_WHOLE=1,
     STATE_OFF="off",
+    STATE_UNAVAILABLE="unavailable",
+    STATE_UNKNOWN="unknown",
     PERCENTAGE="%",
     CONCENTRATION_PARTS_PER_MILLION="ppm",
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER="µg/m³",
@@ -122,6 +125,7 @@ stub(
     async_track_time_interval=lambda *a, **k: (lambda: None),
     async_track_time_change=lambda *a, **k: (lambda: None),
     async_call_later=lambda *a, **k: (lambda: None),
+    async_track_state_change_event=lambda *a, **k: (lambda: None),
 )
 stub("homeassistant.loader", async_get_integration=lambda *a, **k: None)
 stub(
@@ -130,7 +134,13 @@ stub(
     async_delete_issue=lambda *a, **k: None,
     IssueSeverity=enum(WARNING="warning", ERROR="error"),
 )
-stub("homeassistant.helpers.selector", TextSelector=Base, SelectSelector=Base)
+stub(
+    "homeassistant.helpers.selector",
+    TextSelector=Base,
+    SelectSelector=Base,
+    EntitySelector=Base,
+    EntitySelectorConfig=dict,
+)
 stub(
     "homeassistant.components.switch",
     pkg=True,
@@ -189,6 +199,7 @@ stub(
 )
 stub(
     "homeassistant.components.climate.const",
+    ATTR_HVAC_ACTION="hvac_action",
     ATTR_HVAC_MODE="hvac_mode",
     ClimateEntityFeature=enum(TARGET_TEMPERATURE=1, TURN_ON=2, TURN_OFF=4),
     HVACMode=enum(HEAT="heat", OFF="off", COOL="cool"),

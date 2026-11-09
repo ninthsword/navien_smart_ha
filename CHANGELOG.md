@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.24.0 — 2026-11-09
+
+- Boiler: the 난방 유량 sensor no longer divides its value by 10; it reads as litres per minute and so
+  is ten times its previous figure, which shows as a step in long-term statistics.
+- Boiler: the 온수 유량 sensor is renamed 온수 최저작동유량(추정), because its value does not change
+  while hot water runs. An existing entity id and the value are unchanged.
+- Boiler: add two estimated sensors, 난방 펌프 가동(추정) and 난방 순환 유량(추정), driven by the
+  `hvac_action` of climate entities chosen in the integration's new options form (난방 가동 엔티티).
+  The boiler reports no pump state, so both are estimates: the pump counts as off while hot water
+  is in use, the circulation flow is 0 while the pump is off and the heating flow while it is on,
+  and both are unknown with nothing selected. Bluetooth mat entries have no options.
+
 ## v0.23.0 — 2026-11-09
 
 - Bluetooth mat: add the 조작 잠금 switch, 조작음 select, 빠른 난방 switch and its minutes sensor,

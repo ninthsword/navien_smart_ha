@@ -719,6 +719,7 @@ def level_label(level: int) -> str:
 # --- config keys -----------------------------------------------------------
 
 CONF_HOME_SEQ: Final = "home_seq"
+CONF_HEATING_ENTITIES: Final = "heating_entities"
 
 # For the initial sync after a reconnect. State arrives by MQTT push, so there is no reason
 # to poll frequently.

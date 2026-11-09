@@ -44,6 +44,7 @@ from .entity import (
     AironeEntity,
     AironeMonitorEntity,
     BoilerEntity,
+    BoilerHeatingPumpEntity,
     NavienSmartEntity,
     boiler_entities_as_declared,
 )
@@ -110,10 +111,11 @@ async def async_setup_entry(
         entities.extend(
             BoilerFlowRateSensor(coordinator, boiler, key, label)
             for key, label in (
-                ("hot_water_flow_rate", "온수 유량"),
+                ("hot_water_flow_rate", "온수 최저작동유량(추정)"),
                 ("heating_flow_rate", "난방 유량"),
             )
         )
+        entities.append(BoilerHeatingCirculationFlowSensor(coordinator, boiler, entry))
         entities.append(BoilerWifiSignalSensor(coordinator, boiler))
         entities.append(BoilerHumiditySensor(coordinator, boiler))
         entities.append(BoilerModeSensor(coordinator, boiler))
@@ -239,7 +241,7 @@ class BoilerTemperatureSensor(BoilerEntity, SensorEntity):  # pyright: ignore[re
 
 # Preserve the HA MRO mixing cached descriptors and dynamic properties.
 class BoilerFlowRateSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
-    """Heating and hot-water flow. The unit was never confirmed, so it is shown only as L/min."""
+    """Two boiler readings shown as L/min: heating flow and the hot-water reference value."""
 
     _attr_native_unit_of_measurement = "L/min"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -264,6 +266,36 @@ class BoilerFlowRateSensor(BoilerEntity, SensorEntity):  # pyright: ignore[repor
     def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
         return None if device is None else getattr(device, self._key)
+
+
+# Preserve the HA MRO mixing cached descriptors and dynamic properties.
+class BoilerHeatingCirculationFlowSensor(BoilerHeatingPumpEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """The heating flow while the pump is estimated to run, and 0 while it is not."""
+
+    _attr_name = "난방 순환 유량(추정)"
+    _attr_native_unit_of_measurement = "L/min"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:waves-arrow-right"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: NavienSmartCoordinator,
+        device: BoilerDevice,
+        entry: NavienSmartConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, device, entry)
+        self._attr_unique_id = f"{device.device_id}_heating_circulation_flow"
+
+    @property
+    # HA declares a cached descriptor; retain dynamic property semantics.
+    def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
+        device = self.device
+        if device is None or (running := self._pump_running) is None:
+            return None
+        # The boiler holds its last flow figure while stopped, so it cannot be used here.
+        return device.heating_flow_rate if running else 0
 
 
 # Preserve the HA MRO mixing cached descriptors and dynamic properties.
