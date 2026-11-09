@@ -14,6 +14,7 @@ from harness import Report, source
 from navien_smarthome.binary_sensor import BoilerHotWaterSustained
 from navien_smarthome.boiler import BoilerDevice
 from navien_smarthome.coordinator import NavienSmartCoordinator
+from navien_smarthome.sensor import BoilerFlowRateSensor
 
 r = Report()
 
@@ -105,8 +106,9 @@ device.apply_status({"DHWUse": 1}, now=150.0)
 
 r.section("flow rates and signal")
 
-r.ok(device.hot_water_flow_rate == 3.2, "hot-water flow is in 0.1 units")
-r.ok(device.heating_flow_rate == 2.2, "heating flow is in 0.1 units too")
+r.ok(device.hot_water_flow_rate == 3.2, "the hot-water reference value is in 0.1 units")
+r.ok(device.heating_flow_rate == 22, "heating flow is whole litres per minute, not divided by 10")
+r.ok('("hot_water_flow_rate", "온수 최저작동유량(추정)")' in source("sensor.py"), "the hot-water value is named as an estimated threshold")
 r.ok(device.wifi_rssi == 54, "the Wi-Fi signal passes through as a raw integer")
 r.ok("The unit was never confirmed" in source("boiler.py"), "it records that the unit is unknown")
 r.ok("L/min" in source("sensor.py"), "the flow sensors use litres per minute")
@@ -237,6 +239,36 @@ binary_setup = source("binary_sensor.py").split("async_add_entities(entities)")[
 r.ok("BoilerHotWaterRunning" in binary_setup, "the hot-water-in-use sensor is registered")
 r.ok("BoilerHotWaterSustained" in binary_setup, "the sustained hot-water sensor is registered")
 r.ok("BoilerFaultProblem" in binary_setup, "the fault-status sensor is registered")
+
+
+r.section("flow sensor entities")
+
+flow_device = make_boiler()
+flow_coordinator = create_autospec(
+    NavienSmartCoordinator, instance=True, boilers={flow_device.device_id: flow_device}
+)
+heating_flow = BoilerFlowRateSensor(flow_coordinator, flow_device, "heating_flow_rate", "난방 유량")
+heating_flow.coordinator = flow_coordinator
+reference = BoilerFlowRateSensor(
+    flow_coordinator, flow_device, "hot_water_flow_rate", "온수 최저작동유량(추정)"
+)
+reference.coordinator = flow_coordinator
+flow_device.apply_status({"heatFlowRate": 21, "DHWInternalFlowRate": 33}, now=380.0)
+r.ok(heating_flow.native_value == 21, "the heating sensor shows the raw value")
+r.ok(reference.native_value == 3.3, "the hot-water value stays on the 0.1 scale")
+r.ok(heating_flow._attr_native_unit_of_measurement == "L/min", "heating flow keeps its unit")
+r.ok(
+    (reference._attr_unique_id or "").endswith("_hot_water_flow_rate"),
+    "the renamed sensor keeps its unique ID",
+)
+r.ok(
+    (heating_flow._attr_unique_id or "").endswith("_heating_flow_rate"),
+    "the heating sensor keeps its unique ID",
+)
+r.ok(reference._attr_name == "온수 최저작동유량(추정)", "the hot-water name is the estimated threshold")
+for missing in (None, "x", True):
+    flow_device.apply_status({"heatFlowRate": missing}, now=385.0)
+    r.ok(heating_flow.native_value is None, f"heating flow {missing!r} is unknown")
 
 
 r.section("sustained hot-water entity")

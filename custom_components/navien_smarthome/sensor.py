@@ -110,7 +110,7 @@ async def async_setup_entry(
         entities.extend(
             BoilerFlowRateSensor(coordinator, boiler, key, label)
             for key, label in (
-                ("hot_water_flow_rate", "온수 유량"),
+                ("hot_water_flow_rate", "온수 최저작동유량(추정)"),
                 ("heating_flow_rate", "난방 유량"),
             )
         )
@@ -239,7 +239,7 @@ class BoilerTemperatureSensor(BoilerEntity, SensorEntity):  # pyright: ignore[re
 
 # Preserve the HA MRO mixing cached descriptors and dynamic properties.
 class BoilerFlowRateSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
-    """Heating and hot-water flow. The unit was never confirmed, so it is shown only as L/min."""
+    """Two boiler readings shown as L/min: heating flow and the hot-water reference value."""
 
     _attr_native_unit_of_measurement = "L/min"
     _attr_state_class = SensorStateClass.MEASUREMENT

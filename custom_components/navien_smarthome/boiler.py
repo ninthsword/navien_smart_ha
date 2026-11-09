@@ -545,13 +545,23 @@ class BoilerDevice:
 
     @property
     def hot_water_flow_rate(self) -> float | None:
-        """Hot-water flow in L/min, read with the same scale as the other 0.1-unit values."""
+        """A reference value on the 0.1 scale, not the hot water flowing now.
+
+        On one NR-67D it held one value for seven days while hot water ran on and off. It may
+        be the minimum flow that fires the burner; that reading is unconfirmed.
+        """
         return _tenth(self.status.get("DHWInternalFlowRate"))
 
     @property
     def heating_flow_rate(self) -> float | None:
-        """Heating flow in L/min."""
-        return _tenth(self.status.get("heatFlowRate"))
+        """Heating flow, read as L/min without the 0.1 scale of the other readings.
+
+        On one NR-67D burning at a 5.5 degree rise, a raw 21 as L/min carries about 8 kW, while a
+        tenth of it would be far under the boiler's lowest output; that supports a factor near
+        1 but does not measure it. On that boiler the value changed only while burning, held
+        its last figure otherwise, and was never 0 in ten days.
+        """
+        return _number(self.status.get("heatFlowRate"))
 
     @property
     def wifi_rssi(self) -> int | None:
