@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bluetooth mat: show the device as 숙면매트 and let its configure form select a product name
+  from the app's thirteen models. Saving reloads the entry; omitting the selection clears the
+  device model. No serial number is added. Named errors now end with the manual's refill
+  instructions for Er 02 or its service contact for Er 05, 11, 15, 16, 17, 18 and 28.
 - Bluetooth mat: the 오류 내용 sensor uses the mat manual's name and description for each error code,
   and now names Er 15 (ion care error).
 - Boiler: the 난방 순환 유량(추정), 난방 펌프 가동(추정) and 온수 최저작동유량(추정) sensors drop the (추정)

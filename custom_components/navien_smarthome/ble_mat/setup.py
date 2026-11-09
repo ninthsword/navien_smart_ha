@@ -27,7 +27,12 @@ async def async_setup_mat_entry(hass: HomeAssistant, entry: ConfigEntry[Any]) ->
     entry.runtime_data = conn
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     conn.async_start()
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
+
+
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry[Any]) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_mat_entry(hass: HomeAssistant, entry: ConfigEntry[Any]) -> bool:

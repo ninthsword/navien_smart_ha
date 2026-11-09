@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from homeassistant.const import CONF_ADDRESS, STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.data_entry_flow import FlowResultType, UnknownHandler
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import event as event_helpers
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.navien_smarthome.ble_mat import CONF_MAT_MODEL
 from custom_components.navien_smarthome.ble_mat.connection import CONF_MAT_ID
 from custom_components.navien_smarthome.boiler import BoilerDevice
 from custom_components.navien_smarthome.const import CONF_HEATING_ENTITIES, DOMAIN
@@ -146,7 +147,7 @@ async def test_options_save_stores_and_reloads(
     reload.assert_called_once_with(loaded_entry.entry_id)
 
 
-async def test_bluetooth_mat_entry_offers_no_options(hass: HomeAssistant) -> None:
+async def test_bluetooth_mat_entry_offers_model_options(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id="AA:BB:CC:DD:EE:FF",
@@ -154,9 +155,11 @@ async def test_bluetooth_mat_entry_offers_no_options(hass: HomeAssistant) -> Non
     )
     entry.add_to_hass(hass)
 
-    assert not entry.supports_options
-    with pytest.raises(UnknownHandler):
-        await hass.config_entries.options.async_init(entry.entry_id)
+    assert entry.supports_options
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result.get("type") is FlowResultType.FORM
+    assert result.get("step_id") == "mat_model"
+    assert str(form_field(result)) == CONF_MAT_MODEL
 
 
 # The pump rule

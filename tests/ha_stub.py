@@ -138,6 +138,8 @@ stub(
     "homeassistant.helpers.selector",
     TextSelector=Base,
     SelectSelector=Base,
+    SelectSelectorConfig=dict,
+    SelectSelectorMode=enum(DROPDOWN="dropdown"),
     EntitySelector=Base,
     EntitySelectorConfig=dict,
 )
