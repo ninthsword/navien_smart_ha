@@ -94,6 +94,9 @@ class FakeMat:
 
     def __init__(self) -> None:
         self.visible = True
+        self.device_lookups = 0
+        self.last_advertisement: float | Exception | None = 1.0
+        self.advertisement_reads = 0
         self.connect_error: Exception | None = None
         self.write_error: list[Exception] = []
         self.missing_characteristics = False
@@ -136,7 +139,14 @@ class FakeMat:
         return self.discovered
 
     def ble_device(self, hass: HomeAssistant, address: str) -> Any:
+        self.device_lookups += 1
         return object() if self.visible else None
+
+    def last_advertisement_time(self, hass: HomeAssistant, address: str) -> float | None:
+        self.advertisement_reads += 1
+        if isinstance(self.last_advertisement, Exception):
+            raise self.last_advertisement
+        return self.last_advertisement
 
     async def connect(self, device: Any, on_disconnect: Callable[[], None]) -> Any:
         self.connect_calls += 1
@@ -197,6 +207,7 @@ def mat(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeMat]:
         transport,
         async_discovered_mats=fake.discovered_mats,
         async_ble_device=fake.ble_device,
+        async_last_advertisement_time=fake.last_advertisement_time,
         async_connect=fake.connect,
         async_start_notify=fake.start_notify,
         async_write=fake.write,

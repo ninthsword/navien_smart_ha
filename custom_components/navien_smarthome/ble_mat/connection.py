@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from asyncio import sleep
 from collections.abc import Callable
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -61,6 +63,8 @@ _LOGGER = logging.getLogger(__name__)
 CONF_MAT_ID = "mat_id"
 
 RETRY_DELAY = 30.0
+RETRY_FLOOR = 1.0
+ADVERTISEMENT_POLL_INTERVAL = 0.5
 SILENCE_TIMEOUT = 60.0
 REPLY_TIMEOUT = 15.0
 FIRST_STATUS_TIMEOUT = 15.0
@@ -117,6 +121,10 @@ class _LinkError(Exception):
 
 class _Refused(_LinkError):
     """The mat refused the stored id."""
+
+
+class _DeviceNotFound(_LinkError):
+    """Home Assistant has no connectable device for this address."""
 
 
 @dataclass(frozen=True)
@@ -240,6 +248,7 @@ class MatConnection:
         self._command_lock = asyncio.Lock()
         self._refusals = 0
         self._cache_cleared = False
+        self._attempt_authenticated = False
 
     @property
     def link_state(self) -> str:
@@ -327,6 +336,7 @@ class MatConnection:
     async def _async_run(self) -> None:
         self._refusals = 0
         self._cache_cleared = False
+        retry_floor = RETRY_FLOOR
         while True:
             try:
                 await self._async_attempt()
@@ -337,15 +347,45 @@ class MatConnection:
                     self.needs_registration = True
                     self._publish()
                     return
+                await sleep(RETRY_DELAY)
+                continue
             except Exception as err:
                 self._refusals = 0
+                if self._attempt_authenticated or isinstance(err, _DeviceNotFound):
+                    retry_floor = RETRY_FLOOR
+                else:
+                    retry_floor = min(retry_floor * 2, RETRY_DELAY)
                 _LOGGER.debug("블루투스 매트 연결 실패: %s", type(err).__name__)
-            await asyncio.sleep(RETRY_DELAY)
+            await self._async_wait_retry(retry_floor)
+
+    async def _async_wait_retry(self, floor: float) -> None:
+        """Wait out the floor, then watch fresh advertisements until the retry deadline."""
+        deadline = monotonic() + RETRY_DELAY
+        await sleep(min(floor, RETRY_DELAY))
+        if floor >= RETRY_DELAY:
+            return
+        have_baseline = False
+        baseline: float | None = None
+        while monotonic() < deadline:
+            try:
+                latest = transport.async_last_advertisement_time(self.hass, self.address)
+            except Exception:
+                # A failed read is not evidence that the mat has returned.
+                pass
+            else:
+                if have_baseline and latest != baseline:
+                    return
+                baseline = latest
+                have_baseline = True
+            await sleep(
+                min(ADVERTISEMENT_POLL_INTERVAL, max(0.0, deadline - monotonic()))
+            )
 
     async def _async_attempt(self) -> None:
+        self._attempt_authenticated = False
         device = transport.async_ble_device(self.hass, self.address)
         if device is None:
-            raise _LinkError("not seen")
+            raise _DeviceNotFound("not seen")
         self._generation += 1
         generation = self._generation
 
@@ -376,6 +416,7 @@ class MatConnection:
                 raise _Refused
             if reply.code != REPLY_AUTHENTICATED:
                 raise _LinkError("unexpected reply")
+            self._attempt_authenticated = True
             self._publish()
             await self._async_watch()
         finally:
@@ -954,12 +995,19 @@ def _custom_sleep_intent(
             _powered_custom,
         )
 
-    if not program["left"]:
-        return half_intent(2, program["right"], 2)
-    first = half_intent(1, program["left"], 1)
-    if not program["right"]:
-        return first
-    return _Intent(first.send, first.holds, half_intent(2, program["right"], 3))
+    first = (
+        half_intent(1, program["left"], 1)
+        if program["left"] else half_intent(2, program["right"], 2)
+    )
+    return _Intent(
+        first.send,
+        lambda s: (
+            _can_power_off(s)
+            and (not program["left"] or s.selected_sides[0])
+            and (not program["right"] or s.selected_sides[1])
+        ),
+        half_intent(2, program["right"], 3) if program["left"] and program["right"] else None,
+    )
 
 
 def _both_sides_on_intent(

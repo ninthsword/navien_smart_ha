@@ -48,6 +48,14 @@ def async_ble_device(hass: HomeAssistant, address: str) -> Any:
     return async_ble_device_from_address(hass, address, connectable=True)
 
 
+def async_last_advertisement_time(hass: HomeAssistant, address: str) -> float | None:
+    """Read the last connectable advertisement, including ones with unchanged data."""
+    from homeassistant.components.bluetooth import async_last_service_info
+
+    info = async_last_service_info(hass, address, connectable=True)
+    return None if info is None else info.time
+
+
 async def async_connect(device: Any, on_disconnect: Callable[[], None]) -> Any:
     from bleak_retry_connector import (
         BleakClientWithServiceCache,

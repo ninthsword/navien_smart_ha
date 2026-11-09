@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bluetooth mat: reconnect on a fresh connectable advertisement after a 1-second floor, rising
+  with consecutive failed attempts up to the 30-second retry delay. A missing device or
+  successful authentication resets the floor; refusals keep the full delay and the three-refusal stop.
+- Bluetooth mat: resend the first custom sleep frame once if it received no confirmation while
+  the mat remains powered in an accepted start mode with all program sides selected. The second
+  half of a two-side start still requires powered custom sleep before sending or resending.
 - Bluetooth mat: add three custom sleep programs in the mat's configure menu, a stored program
   select and a custom sleep switch on models with fast heat and ion care. Programs stay in Home
   Assistant separately from the phone's programs. Each side sends up to five sections with one

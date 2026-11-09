@@ -23,9 +23,14 @@ LEFT_FRAME = bytes.fromhex("b28009062002010202030000001e1f000000fef4")
 RIGHT_FRAME = bytes.fromhex("b28009062002020104000000002000000000fed6")
 
 
-def status(mode: int = 9, state: int = 0, readback: bool = False) -> bytes:
+def status(
+    mode: int = 9, state: int = 0, readback: bool = False, *, heat: int = 2, power: bool = True,
+) -> bytes:
     frame = bytearray(READY)
     frame[2] = mode
+    if not power:
+        frame[3] &= ~2
+    frame[5] = heat
     frame[14] = state
     if readback:
         frame[18] = 0xFF
@@ -84,6 +89,7 @@ async def exchange(
     conn._store = store
     conn.authenticated = True
     conn._handle_frame(status(1) if initial is None else initial)
+    previous = conn.status
     writes: list[bytes] = []
     answers = iter(replies)
 
@@ -104,6 +110,8 @@ async def exchange(
         else:
             r.ok(error is None, "exchange completed")
     r.ok(writes == expected, "literal exchange frames")
+    if replies and all(answer is None or MatStatus(answer).custom_readback for answer in replies):
+        r.ok(conn.status is previous, "custom readback does not replace the live status")
 
 
 async def exchanges() -> None:
@@ -116,8 +124,20 @@ async def exchanges() -> None:
         [status(state=1), status(state=1), status(state=1)],
         [LEFT_FRAME, RIGHT_FRAME, RIGHT_FRAME], connection.ERROR_UNCONFIRMED,
     )
-    await exchange([status(1)], [LEFT_FRAME], connection.ERROR_UNCONFIRMED)
-    await exchange([status(state=1, readback=True)], [LEFT_FRAME], connection.ERROR_UNCONFIRMED)
+    for mode in (1, 2, 3):
+        await exchange([], [LEFT_FRAME] * 2, connection.ERROR_UNCONFIRMED, initial=status(mode))
+        await exchange([status(mode)], [LEFT_FRAME] * 2, connection.ERROR_UNCONFIRMED)
+        await exchange(
+            [status(mode), status(state=1), status(state=3)],
+            [LEFT_FRAME, LEFT_FRAME, RIGHT_FRAME],
+        )
+    await exchange([status(6, power=False)], [LEFT_FRAME], connection.ERROR_UNCONFIRMED)
+    for mode in (1, 2, 3, 9):
+        for heat in (3, 4):
+            await exchange([status(mode, heat=heat)], [LEFT_FRAME], connection.ERROR_UNCONFIRMED)
+    for moved in (status(1), status(2), status(3), status(6, power=False), status(power=False)):
+        await exchange([status(state=1), moved], [LEFT_FRAME, RIGHT_FRAME], connection.ERROR_UNCONFIRMED)
+    await exchange([status(state=1, readback=True)], [LEFT_FRAME] * 2, connection.ERROR_UNCONFIRMED)
     await exchange([], [], initial=status(state=1))
     await exchange([], [], on=False)
     await exchange(

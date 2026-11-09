@@ -462,17 +462,80 @@ async def test_custom_second_half_stops_if_the_mat_moved_on_after_confirming_lef
     assert state_of(hass, unique(hass, "switch", "custom_sleep")).state == "off"
 
 
-@pytest.mark.parametrize("moved", [HEATING, status(mode=2), status(mode=3), OFF_STATUS])
-@pytest.mark.parametrize("half", [1, 2])
-async def test_custom_resend_requires_powered_mode_9_for_either_half(
-    hass: HomeAssistant, mat: FakeMat, moved: bytes, half: int
+@pytest.mark.parametrize("moved", [HEATING, status(mode=2), status(mode=3), OFF_STATUS, status(mode=9, flags=0)])
+async def test_custom_second_half_resend_requires_powered_mode_9(
+    hass: HomeAssistant, mat: FakeMat, moved: bytes
 ) -> None:
     await setup_custom(hass, mat, {"left": LEFT, "right": RIGHT})
-    answers = iter([moved] if half == 1 else [custom_status(1), moved])
+    answers = iter([custom_status(1), moved])
     mat.respond = lambda _frame: next(answers)
     with pytest.raises(HomeAssistantError, match=connection.ERROR_UNCONFIRMED):
         await custom_switch(hass, True)
-    assert mat.controls() == ([BOTH_LEFT_FRAME] if half == 1 else [BOTH_LEFT_FRAME, BOTH_RIGHT_FRAME])
+    assert mat.controls() == [BOTH_LEFT_FRAME, BOTH_RIGHT_FRAME]
+
+
+@pytest.mark.parametrize("mode", [1, 2, 3])
+@pytest.mark.parametrize(
+    ("program", "frame"),
+    [({"left": LEFT, "right": []}, LEFT_FRAME),
+     ({"left": [], "right": RIGHT}, RIGHT_FRAME),
+     ({"left": LEFT, "right": RIGHT}, BOTH_LEFT_FRAME)],
+)
+async def test_custom_first_frame_without_a_reply_resends_from_each_start_mode(
+    hass: HomeAssistant, mat: FakeMat, mode: int, program: Any, frame: bytes
+) -> None:
+    first = status(mode=mode, flags=0x0E, volume=0x23, left=31, right=32)
+    await setup_custom(hass, mat, program, first)
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_UNCONFIRMED) as raised:
+        await custom_switch(hass, True)
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert mat.controls() == [frame] * 2
+
+
+@pytest.mark.parametrize("mode", [1, 2, 3])
+async def test_custom_first_frame_resends_when_status_still_allows_start(
+    hass: HomeAssistant, mat: FakeMat, mode: int
+) -> None:
+    await setup_custom(hass, mat, {"left": LEFT, "right": RIGHT})
+    moved = status(mode=mode, flags=0x0E, volume=0x23, left=31, right=32)
+    answers = iter([moved, custom_status(1), custom_status(3)])
+    mat.respond = lambda _frame: next(answers)
+    await custom_switch(hass, True)
+    assert mat.controls() == [BOTH_LEFT_FRAME] * 2 + [BOTH_RIGHT_FRAME]
+
+
+@pytest.mark.parametrize(
+    ("program", "frame"),
+    [({"left": LEFT, "right": []}, LEFT_FRAME),
+     ({"left": [], "right": RIGHT}, RIGHT_FRAME),
+     ({"left": LEFT, "right": RIGHT}, BOTH_LEFT_FRAME)],
+)
+async def test_custom_first_frame_stops_resending_if_powered_off(
+    hass: HomeAssistant, mat: FakeMat, program: Any, frame: bytes
+) -> None:
+    await setup_custom(hass, mat, program)
+    mat.respond = confirm_with(OFF_STATUS)
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_UNCONFIRMED):
+        await custom_switch(hass, True)
+    assert mat.controls() == [frame]
+
+
+@pytest.mark.parametrize("mode", [1, 2, 3, 9])
+@pytest.mark.parametrize(
+    ("program", "heat", "frame"),
+    [({"left": LEFT, "right": []}, 4, LEFT_FRAME),
+     ({"left": [], "right": RIGHT}, 3, RIGHT_FRAME),
+     ({"left": LEFT, "right": RIGHT}, 3, BOTH_LEFT_FRAME),
+     ({"left": LEFT, "right": RIGHT}, 4, BOTH_LEFT_FRAME)],
+)
+async def test_custom_first_frame_stops_if_a_program_side_becomes_unselected(
+    hass: HomeAssistant, mat: FakeMat, mode: int, program: Any, heat: int, frame: bytes
+) -> None:
+    await setup_custom(hass, mat, program)
+    mat.respond = confirm_with(status(mode=mode, heat=heat, byte14=0))
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_UNCONFIRMED):
+        await custom_switch(hass, True)
+    assert mat.controls() == [frame]
 
 
 @pytest.mark.parametrize("ending", ["custom", "off", "other", "lost"])
@@ -577,7 +640,7 @@ async def test_custom_readback_does_not_confirm_a_command(
     mat.respond = confirm_with(custom_status(1, range=0xFF))
     with pytest.raises(HomeAssistantError, match=connection.ERROR_UNCONFIRMED):
         await custom_switch(hass, True)
-    assert mat.controls() == [LEFT_FRAME]
+    assert mat.controls() == [LEFT_FRAME] * 2
     assert entry.runtime_data.status is previous
 
 
