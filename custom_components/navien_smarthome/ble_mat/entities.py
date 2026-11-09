@@ -35,6 +35,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from ..const import DOMAIN
 from . import CONF_MAT_MODEL
 from .connection import LINK_STATES, SIDE_LEFT, SIDE_RIGHT, MatConnection
+from .programs import PROGRAM_OPTIONS
 from .protocol import (
     DEFAULT_HEAT_RANGE,
     HEAT_LEFT_ONLY,
@@ -397,6 +398,43 @@ class MatSleepSwitch(_MatEntity, SwitchEntity):
         await self._conn.async_set_sleep(False)
 
 
+class MatCustomSleepSwitch(_MatEntity, SwitchEntity):
+    _attr_name = "맞춤 수면"
+    _needs_extras = True
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "custom_sleep")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.status
+        self._attr_is_on = None if status is None else status.custom_sleep_running
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._conn.async_set_custom_sleep(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._conn.async_set_custom_sleep(False)
+
+
+class MatCustomProgramSelect(_MatEntity, SelectEntity):
+    """Choose a stored program without sending anything to the mat."""
+
+    _attr_name = "맞춤 수면 프로그램"
+    _attr_options = PROGRAM_OPTIONS
+    _needs_extras = True
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "custom_program")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        self._attr_current_option = PROGRAM_OPTIONS[self._conn.custom_program - 1]
+
+    async def async_select_option(self, option: str) -> None:
+        await self._conn.async_select_custom_program(PROGRAM_OPTIONS.index(option) + 1)
+
+
 class MatReservationSelect(_MatEntity, SelectEntity):
     """Whole-mat reservations; only their active state confirms a changed value."""
 
@@ -593,6 +631,7 @@ async def async_setup_mat_switches(
             MatLockSwitch(conn),
             MatFastHeatSwitch(conn),
             MatSleepSwitch(conn),
+            MatCustomSleepSwitch(conn),
         ]
     )
 
@@ -611,6 +650,7 @@ async def async_setup_mat_selects(
             MatReservationSelect(conn, True),
             MatSleepHoursSelect(conn, SIDE_LEFT),
             MatSleepHoursSelect(conn, SIDE_RIGHT),
+            MatCustomProgramSelect(conn),
         ]
     )
 

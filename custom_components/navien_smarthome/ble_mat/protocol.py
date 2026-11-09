@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from .programs import Section
+
 FRAME_LENGTH = 20
 HEADER = 0xB2
 FILL = 0xFE
@@ -124,6 +126,19 @@ class MatStatus:
     @property
     def sleep_running(self) -> bool:
         return self.mode == MODE_SLEEP and self.power
+
+    @property
+    def custom_readback(self) -> bool:
+        return self.mode == MODE_CUSTOM_SLEEP and self.raw[18] == READBACK
+
+    @property
+    def custom_sleep_running(self) -> bool:
+        return (
+            self.mode == MODE_CUSTOM_SLEEP
+            and self.power
+            and not self.custom_readback
+            and self.raw[14] != 0
+        )
 
     @property
     def sleep_range(self) -> tuple[int, int] | None:
@@ -409,6 +424,28 @@ def build_ion_care_frame(latest: MatStatus, period: int, start: bool) -> bytes:
     if period > 0:
         frame[16] = period << 4
     return _finish(frame)
+
+
+def build_custom_sleep_frame(
+    latest: MatStatus, heat_type: int, half: int, sections: list[Section]
+) -> bytes:
+    """Send one side; the count makes zero-filled unused sections irrelevant."""
+    frame = _blank(KIND_CONTROL)
+    frame[2] = MODE_CUSTOM_SLEEP
+    frame[3] = FLAG_POWER | (latest.raw[3] & FLAG_LOCK)
+    frame[4] = _volume(latest)
+    frame[5] = heat_type
+    frame[6] = half
+    frame[7] = len(sections)
+    frame[8:18] = bytes(10)
+    for index, section in enumerate(sections):
+        frame[8 + index] = section["hours"]
+        frame[13 + index] = section["temperature"]
+    return _finish(frame)
+
+
+def build_custom_sleep_stop_frame(latest: MatStatus) -> bytes:
+    return _finish(_running_frame(latest, MODE_HEAT))
 
 
 def merge_one_side(stored: MatStatus | None, status: MatStatus) -> MatStatus | None:

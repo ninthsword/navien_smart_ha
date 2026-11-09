@@ -142,6 +142,9 @@ stub(
     SelectSelectorMode=enum(DROPDOWN="dropdown"),
     EntitySelector=Base,
     EntitySelectorConfig=dict,
+    NumberSelector=Base,
+    NumberSelectorConfig=dict,
+    NumberSelectorMode=enum(BOX="box"),
 )
 stub(
     "homeassistant.components.switch",

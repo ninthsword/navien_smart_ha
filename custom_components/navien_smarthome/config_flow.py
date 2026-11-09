@@ -23,6 +23,9 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -35,6 +38,12 @@ from .ble_mat.connection import (
     RegistrationNoStatus,
     RegistrationRefused,
     async_register_mat,
+)
+from .ble_mat.programs import (
+    CONF_CUSTOM_PROGRAMS,
+    CustomProgram,
+    Section,
+    read_program,
 )
 from .const import CONF_HEATING_ENTITIES, CONF_HOME_SEQ, DOMAIN
 
@@ -268,7 +277,13 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class NavienSmartOptionsFlow(OptionsFlow):
-    """Select heating entities for a cloud entry or a product name for a mat."""
+    """Select cloud heating entities or configure a mat's name and custom programs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._program_number = "1"
+        self._program: CustomProgram | None = None
+        self._custom_left: list[Section] = []
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -279,7 +294,7 @@ class NavienSmartOptionsFlow(OptionsFlow):
         when the field is omitted, and an omitted field has to clear the selection.
         """
         if is_mat_entry(self.config_entry):
-            return await self.async_step_mat_model(user_input)
+            return await self.async_step_mat_menu(user_input)
         if user_input is not None:
             return self.async_create_entry(
                 data={CONF_HEATING_ENTITIES: user_input.get(CONF_HEATING_ENTITIES, [])}
@@ -301,18 +316,24 @@ class NavienSmartOptionsFlow(OptionsFlow):
             ),
         )
 
+    async def async_step_mat_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_menu(
+            step_id="mat_menu", menu_options=["mat_model", "custom_program"]
+        )
+
     async def async_step_mat_model(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Store the product name; omitting the optional field clears it."""
         if user_input is not None:
-            return self.async_create_entry(
-                data=(
-                    {CONF_MAT_MODEL: user_input[CONF_MAT_MODEL]}
-                    if CONF_MAT_MODEL in user_input
-                    else {}
-                )
-            )
+            options = dict(self.config_entry.options)
+            if CONF_MAT_MODEL in user_input:
+                options[CONF_MAT_MODEL] = user_input[CONF_MAT_MODEL]
+            else:
+                options.pop(CONF_MAT_MODEL, None)
+            return self.async_create_entry(data=options)
         stored = self.config_entry.options.get(CONF_MAT_MODEL)
         return self.async_show_form(
             step_id="mat_model",
@@ -331,3 +352,141 @@ class NavienSmartOptionsFlow(OptionsFlow):
                 )
             ),
         )
+
+    async def async_step_custom_program(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick a local program, or remove only that program."""
+        conn = getattr(self.config_entry, "runtime_data", None)
+        status = getattr(conn, "status", None)
+        if status is not None and status.custom_sleep_running:
+            return self.async_abort(reason="custom_sleep_running")
+        if user_input is not None:
+            self._program_number = user_input["program"]
+            if user_input.get("reset", False):
+                return self._save_custom_program(None)
+            self._program = read_program(self.config_entry.options, self._program_number)
+            return await self.async_step_custom_left()
+        return self.async_show_form(
+            step_id="custom_program",
+            data_schema=_form_schema(
+                vol.Schema(
+                    {
+                        vol.Required("program", default="1"): SelectSelector(
+                            SelectSelectorConfig(
+                                options=["1", "2", "3"],
+                                translation_key="custom_program",
+                                mode=SelectSelectorMode.DROPDOWN,
+                            )
+                        ),
+                        vol.Required("reset", default=False): bool,
+                    }
+                )
+            ),
+        )
+
+    async def async_step_custom_left(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            sections, error = _custom_sections(user_input)
+            if error is None:
+                self._custom_left = sections
+                return await self.async_step_custom_right()
+            errors["base"] = error
+        return self._custom_side_form("left", user_input, errors)
+
+    async def async_step_custom_right(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if user_input.get("enabled") and user_input.get("copy_left"):
+                sections = [section.copy() for section in self._custom_left]
+                error = None if sections else "custom_copy_left"
+            else:
+                sections, error = _custom_sections(user_input)
+            if error is None and not self._custom_left and not sections:
+                error = "custom_side_required"
+            if error is None:
+                return self._save_custom_program(
+                    {"left": self._custom_left, "right": sections}
+                )
+            errors["base"] = error
+        return self._custom_side_form("right", user_input, errors)
+
+    def _custom_side_form(
+        self, side: str, user_input: dict[str, Any] | None, errors: dict[str, str]
+    ) -> ConfigFlowResult:
+        rows = (
+            [] if self._program is None
+            else self._program["left"] if side == "left" else self._program["right"]
+        )
+        defaults: dict[str, Any] = {"enabled": self._program is None or bool(rows)}
+        for index in range(1, 6):
+            section = rows[index - 1] if index <= len(rows) else None
+            defaults[f"hours_{index}"] = 0 if section is None else section["hours"]
+            defaults[f"temperature_{index}"] = (
+                30 if section is None else section["temperature"]
+            )
+        defaults["copy_left"] = False
+        if user_input is not None:
+            defaults.update(user_input)
+        fields: dict[Any, Any] = {
+            vol.Required("enabled", default=defaults["enabled"]): bool,
+        }
+        if side == "right":
+            fields[vol.Required("copy_left", default=defaults["copy_left"])] = bool
+        for index in range(1, 6):
+            for key, low, high in (("hours", 0, 12), ("temperature", 25, 50)):
+                name = f"{key}_{index}"
+                fields[vol.Required(name, default=defaults[name])] = NumberSelector(
+                    NumberSelectorConfig(
+                        min=low, max=high, step=1, mode=NumberSelectorMode.BOX
+                    )
+                )
+        return self.async_show_form(
+            step_id=f"custom_{side}",
+            data_schema=_form_schema(vol.Schema(fields)),
+            errors=errors,
+        )
+
+    def _save_custom_program(self, program: CustomProgram | None) -> ConfigFlowResult:
+        options = dict(self.config_entry.options)
+        stored = options.get(CONF_CUSTOM_PROGRAMS)
+        programs = dict(stored) if isinstance(stored, dict) else {}
+        if program is None:
+            programs.pop(self._program_number, None)
+        else:
+            programs[self._program_number] = program
+        options[CONF_CUSTOM_PROGRAMS] = programs
+        return self.async_create_entry(data=options)
+
+
+def _custom_sections(user_input: dict[str, Any]) -> tuple[list[Section], str | None]:
+    """Zero-hour rows end a side's contiguous list; disabled sides store no rows."""
+    if not user_input.get("enabled", False):
+        return [], None
+    sections: list[Section] = []
+    gap = False
+    for index in range(1, 6):
+        hours = user_input.get(f"hours_{index}", 0)
+        temperature = user_input.get(f"temperature_{index}", 30)
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not low <= value <= high
+            or int(value) != value
+            for value, low, high in ((hours, 0, 12), (temperature, 25, 50))
+        ):
+            return [], "custom_rows"
+        if hours == 0:
+            gap = True
+        elif gap:
+            return [], "custom_contiguous"
+        else:
+            sections.append({"hours": int(hours), "temperature": int(temperature)})
+    if not 1 <= sum(section["hours"] for section in sections) <= 12:
+        return [], "custom_hours"
+    return sections, None

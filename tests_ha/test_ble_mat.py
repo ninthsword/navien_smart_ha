@@ -33,6 +33,7 @@ from custom_components.navien_smarthome.ble_mat.connection import (
     LINK_DISABLED,
     LINK_NEEDS_REGISTRATION,
 )
+from custom_components.navien_smarthome.ble_mat.programs import CONF_CUSTOM_PROGRAMS
 from custom_components.navien_smarthome.const import DOMAIN
 from custom_components.navien_smarthome.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -307,6 +308,18 @@ def mat_device(hass: HomeAssistant, entry: MockConfigEntry) -> dr.DeviceEntry:
     return devices[0]
 
 
+async def mat_options_form(
+    hass: HomeAssistant, entry: MockConfigEntry, step: str = "mat_model"
+) -> dict[str, Any]:
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result.get("type") is FlowResultType.MENU
+    assert result.get("step_id") == "mat_menu"
+    assert result.get("menu_options") == ["mat_model", "custom_program"]
+    return dict(await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": step}
+    ))
+
+
 @pytest.mark.parametrize("stored", [None, "EQM560"])
 async def test_mat_model_form_prefills_and_serializes(
     hass: HomeAssistant, stored: str | None
@@ -318,7 +331,7 @@ async def test_mat_model_form_prefills_and_serializes(
     import_module("custom_components.navien_smarthome.config_flow")
     assert entry.supports_options
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await mat_options_form(hass, entry)
 
     assert result.get("type") is FlowResultType.FORM
     assert result.get("step_id") == "mat_model"
@@ -362,7 +375,7 @@ async def test_mat_model_selector_refuses_invalid_values(
     hass: HomeAssistant, invalid: str
 ) -> None:
     entry = make_entry(hass)
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await mat_options_form(hass, entry)
     schema: Any = result.get("data_schema")
 
     with pytest.raises(vol.Invalid):
@@ -418,6 +431,8 @@ async def test_mat_device_registry_information(
             "right_sleep_hours",
             "sleep",
             "on_reservation_temperature",
+            "custom_sleep",
+            "custom_program",
         )
     }
 
@@ -434,7 +449,10 @@ async def test_mat_model_save_reloads_and_updates_device(
     model: str | None,
 ) -> None:
     entry = make_entry(hass)
-    hass.config_entries.async_update_entry(entry, options={CONF_MAT_MODEL: "EQM560"})
+    programs = {"1": {"left": [{"hours": 2, "temperature": 30}], "right": []}}
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_MAT_MODEL: "EQM560", CONF_CUSTOM_PROGRAMS: programs}
+    )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     await until(lambda: entry.runtime_data.status is not None)
@@ -449,7 +467,7 @@ async def test_mat_model_save_reloads_and_updates_device(
     with patch.object(
         hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
     ) as reload:
-        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await mat_options_form(hass, entry)
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], submitted
         )
@@ -458,7 +476,7 @@ async def test_mat_model_save_reloads_and_updates_device(
         await hass.async_block_till_done()
 
     assert result.get("type") is FlowResultType.CREATE_ENTRY
-    assert entry.options == submitted
+    assert entry.options == {CONF_CUSTOM_PROGRAMS: programs, **submitted}
     reload.assert_called_once_with(entry.entry_id)
     assert entry.runtime_data is not previous_connection
     updated = mat_device(hass, entry)
@@ -949,7 +967,7 @@ async def test_power_switch_state(hass: HomeAssistant, mat: FakeMat) -> None:
     assert state_of(hass, power).state == "unavailable"
 
 
-@pytest.mark.parametrize("mode", [2, 3])
+@pytest.mark.parametrize("mode", [2, 3, 9])
 async def test_power_switch_refusals(
     hass: HomeAssistant, mat: FakeMat, mode: int
 ) -> None:
@@ -2703,7 +2721,7 @@ async def set_on_reservation_temperature(hass: HomeAssistant, value: float) -> N
     )
 
 
-@pytest.mark.parametrize("mode", [1, 2, 3])
+@pytest.mark.parametrize("mode", [1, 2, 3, 9])
 async def test_off_reservation_frame_and_active_confirmation(
     hass: HomeAssistant, mat: FakeMat, mode: int
 ) -> None:
@@ -2773,7 +2791,7 @@ async def test_on_reservation_cancel_echoes_its_value_and_may_power_on(
     assert state_of(hass, unique(hass, "select", "on_reservation")).state == "해제"
 
 
-@pytest.mark.parametrize("mode", [1, 2])
+@pytest.mark.parametrize("mode", [1, 2, 9])
 async def test_sleep_two_sides_frame_and_mode_confirmation(
     hass: HomeAssistant, mat: FakeMat, mode: int
 ) -> None:
@@ -2801,10 +2819,12 @@ async def test_sleep_two_sides_frame_and_mode_confirmation(
         (4, 45, 32, "b28003020004241e1c232d2000ff090101fefe5d"),
     ],
 )
+@pytest.mark.parametrize("mode", [2, 9])
 async def test_sleep_from_reservation_uses_byte_5_and_checks_only_the_selected_side(
-    hass: HomeAssistant, mat: FakeMat, heat: int, left: int, right: int, expected: str
+    hass: HomeAssistant, mat: FakeMat, heat: int, left: int, right: int, expected: str,
+    mode: int,
 ) -> None:
-    mat.first_status = status(mode=2, heat=heat, left=left, right=right)
+    mat.first_status = status(mode=mode, heat=heat, left=left, right=right)
     await setup_mat(hass, mat)
     await choose(hass, unique(hass, "select", "left_sleep_hours"), "6시간")
     await choose(hass, unique(hass, "select", "right_sleep_hours"), "9시간")
@@ -2931,7 +2951,6 @@ async def test_schedule_resends_rebuild_echoes_without_changing_the_action(
 @pytest.mark.parametrize(
     ("command", "start", "moved"),
     [
-        ("off_set", HEATING, status(mode=9)),
         ("off_set", HEATING, status(mode=2, flags=0)),
         ("off_set", HEATING, status(mode=3, heat=0)),
         ("off_cancel", OFF_RESERVATION, OFF_STATUS),
@@ -2939,7 +2958,6 @@ async def test_schedule_resends_rebuild_echoes_without_changing_the_action(
         ("on_set", OFF_STATUS, HEATING),
         ("on_set", OFF_STATUS, status(mode=2, flags=0, byte13=5)),
         ("on_cancel", OFF_RESERVED, HEATING),
-        ("sleep_start", SLEEP_READY, status(mode=9, left=31, right=32)),
         ("sleep_start", SLEEP_READY, status(heat=3, left=31, right=32)),
         ("sleep_start", SLEEP_READY, status(left=34, right=32)),
         ("sleep_start", SLEEP_READY, status(model=0x22, left=31, right=32)),
@@ -2998,16 +3016,18 @@ async def test_schedule_defined_no_ops_in_every_state(
 @pytest.mark.parametrize(
     ("command", "frame"),
     [
-        *[("off_set", status(mode=mode)) for mode in (4, 5, 6, 7, 8, 9)],
+        *[("off_set", status(mode=mode)) for mode in (4, 5, 6, 7, 8)],
         ("off_set", status(mode=2, flags=0)),
         ("off_set", status(mode=3, flags=0)),
-        *[("off_set", status(mode=mode, heat=heat)) for mode in (1, 2, 3) for heat in (0, 9)],
+        *[("off_set", status(mode=mode, heat=heat)) for mode in (1, 2, 3, 9) for heat in (0, 9)],
         *[("on_set", status(mode=mode)) for mode in (1, 2, 3, 4, 5, 7, 8, 9)],
         ("on_set", status(mode=2, flags=0)),
-        *[("sleep_start", status(mode=mode)) for mode in (4, 5, 6, 7, 8, 9)],
+        *[("sleep_start", status(mode=mode)) for mode in (4, 5, 6, 7, 8)],
         ("sleep_start", status(mode=2, flags=0)),
         ("sleep_start", status(mode=3, flags=0)),
-        *[("sleep_start", status(mode=mode, heat=heat)) for mode in (1, 2) for heat in (0, 9)],
+        *[("sleep_start", status(mode=mode, heat=heat)) for mode in (1, 2, 9) for heat in (0, 9)],
+        ("off_set", status(mode=9, flags=0)),
+        ("sleep_start", status(mode=9, flags=0)),
     ],
 )
 async def test_schedule_commands_refuse_other_states_and_invalid_heat_types(
@@ -3025,7 +3045,7 @@ async def test_schedule_commands_refuse_other_states_and_invalid_heat_types(
     assert mat.controls() == []
 
 
-@pytest.mark.parametrize("mode", [2, 3])
+@pytest.mark.parametrize("mode", [2, 3, 9])
 @pytest.mark.parametrize(
     "command",
     [
@@ -3059,7 +3079,7 @@ async def test_other_controls_stay_refused_in_reservation_and_sleep(
 
 @pytest.mark.parametrize(
     "frame",
-    [status(mode=4), status(mode=5), status(mode=7), status(mode=8), status(mode=9), status(heat=0)],
+    [status(mode=4), status(mode=5), status(mode=7), status(mode=8), status(heat=0)],
 )
 async def test_power_off_stays_refused_in_unaccepted_modes(
     hass: HomeAssistant, mat: FakeMat, frame: bytes

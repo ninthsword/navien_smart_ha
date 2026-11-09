@@ -77,7 +77,68 @@
         "data": {
           "mat_model": "Product name"
         }
+      },
+      "mat_menu": {
+        "title": "Mat settings",
+        "description": "Choose a product name or edit a custom sleep program.",
+        "menu_options": {
+          "mat_model": "Product name",
+          "custom_program": "Custom sleep programs"
+        }
+      },
+      "custom_program": {
+        "title": "Choose a custom sleep program",
+        "description": "Choose one of the three programs stored in Home Assistant. Reset removes only the chosen program.",
+        "data": {
+          "program": "Program",
+          "reset": "Reset"
+        }
+      },
+      "custom_left": {
+        "title": "Custom sleep: left side",
+        "description": "Enable this side and enter consecutive sections starting at row 1, totaling 1 to 12 hours. Zero hours leaves a row unused; temperatures are whole degrees from 25 to 50.",
+        "data": {
+          "enabled": "Use the left side",
+          "hours_1": "Section 1 hours",
+          "temperature_1": "Section 1 temperature",
+          "hours_2": "Section 2 hours",
+          "temperature_2": "Section 2 temperature",
+          "hours_3": "Section 3 hours",
+          "temperature_3": "Section 3 temperature",
+          "hours_4": "Section 4 hours",
+          "temperature_4": "Section 4 temperature",
+          "hours_5": "Section 5 hours",
+          "temperature_5": "Section 5 temperature"
+        }
+      },
+      "custom_right": {
+        "title": "Custom sleep: right side",
+        "description": "Set the right side, or copy the left side while the right side is enabled. At least one side must be enabled. Zero hours leaves a row unused; use consecutive rows totaling 1 to 12 hours at 25 to 50 whole degrees.",
+        "data": {
+          "enabled": "Use the right side",
+          "copy_left": "Apply the left side's hours and temperatures",
+          "hours_1": "Section 1 hours",
+          "temperature_1": "Section 1 temperature",
+          "hours_2": "Section 2 hours",
+          "temperature_2": "Section 2 temperature",
+          "hours_3": "Section 3 hours",
+          "temperature_3": "Section 3 temperature",
+          "hours_4": "Section 4 hours",
+          "temperature_4": "Section 4 temperature",
+          "hours_5": "Section 5 hours",
+          "temperature_5": "Section 5 temperature"
+        }
       }
+    },
+    "error": {
+      "custom_rows": "Enter whole hours from 0 to 12 and whole temperatures from 25 to 50.",
+      "custom_contiguous": "Use consecutive sections starting at section 1.",
+      "custom_hours": "An enabled side needs a total of 1 to 12 hours.",
+      "custom_copy_left": "Enable and configure the left side before copying it.",
+      "custom_side_required": "Enable at least one side."
+    },
+    "abort": {
+      "custom_sleep_running": "Stop the active custom sleep program before editing it."
     }
   },
   "entity": {
@@ -92,6 +153,15 @@
       },
       "airone_fan": {
         "name": "Fan"
+      }
+    }
+  },
+  "selector": {
+    "custom_program": {
+      "options": {
+        "1": "Program 1",
+        "2": "Program 2",
+        "3": "Program 3"
       }
     }
   }

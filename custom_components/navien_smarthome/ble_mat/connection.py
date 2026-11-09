@@ -21,11 +21,13 @@ from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
 from . import transport
+from .programs import CustomProgram, Section, read_program
 from .protocol import (
     HEAT_BOTH,
     HEAT_LEFT_ONLY,
     HEAT_RIGHT_ONLY,
     INITIAL_TARGET,
+    MODE_CUSTOM_SLEEP,
     MODE_HEAT,
     MODE_OFF,
     MODE_RESERVATION,
@@ -37,6 +39,8 @@ from .protocol import (
     MatState,
     MatStatus,
     build_authentication_frame,
+    build_custom_sleep_frame,
+    build_custom_sleep_stop_frame,
     build_fast_heat_frame,
     build_heating_frame,
     build_ion_care_frame,
@@ -91,6 +95,10 @@ ERROR_RESERVATION_STATE = "지금 상태에서는 이 예약을 설정할 수 �
 ERROR_RESERVATION_TEMPERATURE = "켜짐 예약 온도가 매트의 온도 범위를 벗어났습니다."
 ERROR_SLEEP_STATE = "지금 상태에서는 수면 모드를 실행할 수 없습니다."
 ERROR_SLEEP_TEMPERATURE = "수면 적정 온도로 변경 후 실행해 주세요."
+ERROR_CUSTOM_PROGRAM = "맞춤 수면 프로그램을 먼저 구성해 주세요."
+ERROR_CUSTOM_STATE = "지금 상태에서는 맞춤 수면을 실행할 수 없습니다."
+ERROR_CUSTOM_TEMPERATURE = "맞춤 수면 프로그램의 온도가 매트의 온도 범위를 벗어났습니다."
+ERROR_CUSTOM_SIDE_OFF = "작동할 편측의 난방이 꺼져 있습니다. 난방을 켠 후 재시도 해주세요."
 
 INITIAL_SLEEP_HOURS = 8
 
@@ -133,6 +141,7 @@ class _Intent:
     # What must still be true for a resend; without it a command must not repeat itself on a mat
     # that has moved on, such as turning back on one that left the heating state meanwhile.
     holds: Callable[[MatStatus], bool] | None = None
+    following: _Intent | None = None
 
 
 def _store_for(hass: HomeAssistant, entry_id: str) -> Store[dict[str, Any]]:
@@ -216,6 +225,7 @@ class MatConnection:
         self.on_reservation_temperature = INITIAL_TARGET
         self.left_sleep_hours = INITIAL_SLEEP_HOURS
         self.right_sleep_hours = INITIAL_SLEEP_HOURS
+        self.custom_program = 1
         self.authenticated = False
         self.needs_registration = False
         self._listeners: list[CALLBACK_TYPE] = []
@@ -255,6 +265,7 @@ class MatConnection:
         self.right_sleep_hours = _stored_integer(
             data.get("right_sleep_hours"), 5, 10, INITIAL_SLEEP_HOURS
         )
+        self.custom_program = _stored_integer(data.get("custom_program"), 1, 3, 1)
 
     def _payload(self) -> dict[str, Any]:
         stored = self.stored_status
@@ -264,6 +275,7 @@ class MatConnection:
             "on_reservation_temperature": self.on_reservation_temperature,
             "left_sleep_hours": self.left_sleep_hours,
             "right_sleep_hours": self.right_sleep_hours,
+            "custom_program": self.custom_program,
         }
 
     @callback
@@ -415,6 +427,8 @@ class MatConnection:
         if frame is None or not self.authenticated:
             return
         self._activity.set()
+        if frame.custom_readback:
+            return
         if self._since_send is not None:
             self._since_send.append(frame)
             self._changed.set()
@@ -532,6 +546,22 @@ class MatConnection:
             allow_other=True,
         )
 
+    async def async_select_custom_program(self, number: int) -> None:
+        async with self._command_lock:
+            self.custom_program = number
+            self._store.async_delay_save(self._payload, 1)
+            self._publish()
+
+    async def async_set_custom_sleep(self, on: bool) -> None:
+        if not on and self.status is None:
+            return
+        await self._async_command(
+            lambda status, _stored: _custom_sleep_intent(
+                status, on, read_program(self.entry.options, str(self.custom_program))
+            ),
+            allow_other=True,
+        )
+
     async def async_set_on_reservation_temperature(self, value: float) -> None:
         async with self._command_lock:
             status = self.status
@@ -563,25 +593,30 @@ class MatConnection:
             # Read once: a reply to the first send can replace the stored status.
             stored = self.stored_status
             intent: _Intent | None = None
-            for _ in range(SEND_ATTEMPTS):
-                status = self.status
-                if status is None:
-                    raise HomeAssistantError(ERROR_NO_LINK)
-                if (
-                    intent is not None
-                    and intent.holds is not None
-                    and not intent.holds(status)
-                ):
-                    raise HomeAssistantError(ERROR_UNCONFIRMED)
-                if status.state is MatState.OTHER and not allow_other:
-                    raise ServiceValidationError(ERROR_OTHER_MODE)
-                if intent is None:
-                    intent = decide(status, stored)
+            while True:
+                for _ in range(SEND_ATTEMPTS):
+                    status = self.status
+                    if status is None:
+                        raise HomeAssistantError(ERROR_NO_LINK)
+                    if (
+                        intent is not None
+                        and intent.holds is not None
+                        and not intent.holds(status)
+                    ):
+                        raise HomeAssistantError(ERROR_UNCONFIRMED)
+                    if status.state is MatState.OTHER and not allow_other:
+                        raise ServiceValidationError(ERROR_OTHER_MODE)
                     if intent is None:
-                        return
-                if await self._async_send_and_confirm(intent.send(status)):
-                    return
-            raise HomeAssistantError(ERROR_UNCONFIRMED)
+                        intent = decide(status, stored)
+                        if intent is None:
+                            return
+                    if await self._async_send_and_confirm(intent.send(status)):
+                        if intent.following is None:
+                            return
+                        intent = intent.following
+                        break
+                else:
+                    raise HomeAssistantError(ERROR_UNCONFIRMED)
 
     async def _async_send_and_confirm(self, send: _Send) -> bool:
         try:
@@ -763,7 +798,7 @@ def _off_intent(
 
 def _can_power_off(status: MatStatus) -> bool:
     return _is_heating(status) or (
-        status.power and status.mode in (MODE_RESERVATION, MODE_SLEEP)
+        status.power and status.mode in (MODE_RESERVATION, MODE_SLEEP, MODE_CUSTOM_SLEEP)
     )
 
 
@@ -820,7 +855,10 @@ def _on_reservation_intent(
 
 def _can_start_sleep(status: MatStatus) -> bool:
     return (
-        (_is_heating(status) or (status.mode == MODE_RESERVATION and status.power))
+        (
+            _is_heating(status)
+            or (status.mode in (MODE_RESERVATION, MODE_CUSTOM_SLEEP) and status.power)
+        )
         and any(status.selected_sides)
     )
 
@@ -868,6 +906,60 @@ def _sleep_intent(
             and _sleep_targets_in_range(s)
         ),
     )
+
+
+def _powered_custom(status: MatStatus) -> bool:
+    return status.mode == MODE_CUSTOM_SLEEP and status.power
+
+
+def _custom_sleep_intent(
+    status: MatStatus, on: bool, program: CustomProgram | None
+) -> _Intent | None:
+    if not on:
+        if not status.custom_sleep_running:
+            return None
+        return _Intent(
+            lambda latest: _Send(
+                build_custom_sleep_stop_frame(latest), lambda s: s.mode == MODE_HEAT
+            ),
+            lambda s: s.custom_sleep_running,
+        )
+    if status.custom_sleep_running:
+        return None
+    if not status.has_extras or not _can_power_off(status) or not any(status.selected_sides):
+        raise ServiceValidationError(ERROR_CUSTOM_STATE)
+    if program is None:
+        raise ServiceValidationError(ERROR_CUSTOM_PROGRAM)
+    if any(
+        not status.is_valid_target(section["temperature"])
+        for sections in (program["left"], program["right"])
+        for section in sections
+    ):
+        raise ServiceValidationError(ERROR_CUSTOM_TEMPERATURE)
+    left, right = status.selected_sides
+    if (program["left"] and not left) or (program["right"] and not right):
+        raise ServiceValidationError(ERROR_CUSTOM_SIDE_OFF)
+    heat_type = (
+        HEAT_BOTH
+        if program["left"] and program["right"]
+        else HEAT_LEFT_ONLY if program["left"] else HEAT_RIGHT_ONLY
+    )
+
+    def half_intent(half: int, sections: list[Section], state: int) -> _Intent:
+        return _Intent(
+            lambda latest: _Send(
+                build_custom_sleep_frame(latest, heat_type, half, sections),
+                lambda s: _powered_custom(s) and s.raw[14] == state,
+            ),
+            _powered_custom,
+        )
+
+    if not program["left"]:
+        return half_intent(2, program["right"], 2)
+    first = half_intent(1, program["left"], 1)
+    if not program["right"]:
+        return first
+    return _Intent(first.send, first.holds, half_intent(2, program["right"], 3))
 
 
 def _both_sides_on_intent(
