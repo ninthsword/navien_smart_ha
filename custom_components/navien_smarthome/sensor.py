@@ -111,7 +111,7 @@ async def async_setup_entry(
         entities.extend(
             BoilerFlowRateSensor(coordinator, boiler, key, label)
             for key, label in (
-                ("hot_water_flow_rate", "온수 최저작동유량(추정)"),
+                ("hot_water_flow_rate", "온수 최저작동유량"),
                 ("heating_flow_rate", "난방 유량"),
             )
         )
@@ -272,7 +272,7 @@ class BoilerFlowRateSensor(BoilerEntity, SensorEntity):  # pyright: ignore[repor
 class BoilerHeatingCirculationFlowSensor(BoilerHeatingPumpEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """The heating flow while the pump is estimated to run, and 0 while it is not."""
 
-    _attr_name = "난방 순환 유량(추정)"
+    _attr_name = "난방 순환 유량"
     _attr_native_unit_of_measurement = "L/min"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 1

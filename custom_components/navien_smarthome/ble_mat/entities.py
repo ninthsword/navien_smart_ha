@@ -32,6 +32,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from ..const import DOMAIN
+from . import CONF_MAT_MODEL
 from .connection import LINK_STATES, SIDE_LEFT, SIDE_RIGHT, MatConnection
 from .protocol import (
     DEFAULT_HEAT_RANGE,
@@ -58,11 +59,23 @@ VOLUME_OPTIONS = ["음소거", "1단계", "2단계", "3단계"]
 ION_CARE_PERIOD_OPTIONS = [f"{hours}시간" for hours in range(1, 13)]
 
 ERROR_INSPECT = "보일러를 점검해 주세요."
-ERROR_WATER_LOW = "물이 부족합니다. 물을 보충해주세요.(Er 02)"
-ERROR_TANK_SENSOR = f"물탱크 공급 온도센서 에러(Er 05)가 발생했습니다. {ERROR_INSPECT}"
-ERROR_WATER_LEVEL = f"수위감지 에러(Er 11)가 발생했습니다. {ERROR_INSPECT}"
-ERROR_RETURN_SENSOR = f"환수온도센서 에러(Er 18)가 발생했습니다. {ERROR_INSPECT}"
-ERROR_LEAK = f"누수 에러(Er 28)가 발생했습니다. {ERROR_INSPECT}"
+ERROR_CONTACT = "1588-1144로 연락해주세요."
+# The wording of each named error comes from the mat's manual ("에러코드 안내").
+ERROR_WATER_LOW = (
+    "물 부족 에러(Er 02): 물이 부족한 경우입니다. 물 보충 안내 방법에 따라 물을 보충해주세요."
+)
+ERROR_TANK_SENSOR = (
+    f"물탱크 공급 온도 센서 에러(Er 05): 공급 온도에 이상이 발생된 경우입니다. {ERROR_CONTACT}"
+)
+ERROR_WATER_LEVEL = f"수위 감지 에러(Er 11): 정상 수위 감지가 아닐 경우입니다. {ERROR_CONTACT}"
+ERROR_ION_CARE = f"이온 케어 에러(Er 15): 이온 케어 장치에 이상이 발생된 경우입니다. {ERROR_CONTACT}"
+ERROR_TANK_OVERHEAT = f"물탱크 과열 에러(Er 16): 물탱크의 온도가 과열되었을 경우입니다. {ERROR_CONTACT}"
+ERROR_HEATING = (
+    "난방 이상 에러(Er 17): 난방과 관련된 부품(온도퓨즈, 전류퓨즈)에 이상이 생긴 경우입니다. "
+    f"{ERROR_CONTACT}"
+)
+ERROR_RETURN_SENSOR = f"환수 온도 센서 에러(Er 18): 환수 온도 센서에 이상이 발생된 경우입니다. {ERROR_CONTACT}"
+ERROR_LEAK = f"누수 에러(Er 28): 매트 내부 호스 파손에 의한 누수가 감지되었을 경우입니다. {ERROR_CONTACT}"
 ERROR_GENERIC = f"에러가 발생했습니다. {ERROR_INSPECT}"
 ERROR_MESSAGES = {
     2: ERROR_WATER_LOW,
@@ -71,8 +84,9 @@ ERROR_MESSAGES = {
     205: ERROR_TANK_SENSOR,
     11: ERROR_WATER_LEVEL,
     311: ERROR_WATER_LEVEL,
-    16: f"물탱크 과열 에러(Er 16)가 발생했습니다. {ERROR_INSPECT}",
-    17: f"난방 이상 에러(Er 17)가 발생했습니다. {ERROR_INSPECT}",
+    15: ERROR_ION_CARE,
+    16: ERROR_TANK_OVERHEAT,
+    17: ERROR_HEATING,
     18: ERROR_RETURN_SENSOR,
     19: ERROR_RETURN_SENSOR,
     218: ERROR_RETURN_SENSOR,
@@ -95,8 +109,9 @@ class _MatEntity(Entity):
         self._attr_unique_id = f"{conn.address.replace(':', '').lower()}_{suffix}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, conn.address)},
-            name="나비엔 온수매트",
+            name="숙면매트",
             manufacturer="경동나비엔",
+            model=conn.entry.options.get(CONF_MAT_MODEL),
         )
         self._refresh()
 

@@ -19,12 +19,17 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_ADDRESS, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import UnknownHandler
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
-from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .api import NavienSmartApi, NavienSmartAuthError, NavienSmartError
-from .ble_mat import is_mat_entry, transport
+from .ble_mat import CONF_MAT_MODEL, MAT_MODELS, is_mat_entry, transport
 from .ble_mat.connection import (
     CONF_MAT_ID,
     RegistrationNoStatus,
@@ -57,15 +62,13 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
     @classmethod
     @callback
     def async_supports_options_flow(cls, config_entry: ConfigEntry) -> bool:
-        """Only a cloud entry has options; a Bluetooth mat has nothing to select."""
-        return not is_mat_entry(config_entry)
+        """Both cloud and Bluetooth mat entries have options."""
+        return True
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Refuse a Bluetooth mat here too, for a request that bypasses the hidden button."""
-        if is_mat_entry(config_entry):
-            raise UnknownHandler
+        """Offer the options for the entry's connection type."""
         return NavienSmartOptionsFlow()
 
     def __init__(self) -> None:
@@ -265,7 +268,7 @@ class NavienSmartConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class NavienSmartOptionsFlow(OptionsFlow):
-    """Select the climate entities whose heat requests run the heating pump."""
+    """Select heating entities for a cloud entry or a product name for a mat."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -275,6 +278,8 @@ class NavienSmartOptionsFlow(OptionsFlow):
         The stored list is a suggested value, not a default: voluptuous fills a default in
         when the field is omitted, and an omitted field has to clear the selection.
         """
+        if is_mat_entry(self.config_entry):
+            return await self.async_step_mat_model(user_input)
         if user_input is not None:
             return self.async_create_entry(
                 data={CONF_HEATING_ENTITIES: user_input.get(CONF_HEATING_ENTITIES, [])}
@@ -290,6 +295,37 @@ class NavienSmartOptionsFlow(OptionsFlow):
                             description={"suggested_value": stored},
                         ): EntitySelector(
                             EntitySelectorConfig(domain="climate", multiple=True)
+                        )
+                    }
+                )
+            ),
+        )
+
+    async def async_step_mat_model(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Store the product name; omitting the optional field clears it."""
+        if user_input is not None:
+            return self.async_create_entry(
+                data=(
+                    {CONF_MAT_MODEL: user_input[CONF_MAT_MODEL]}
+                    if CONF_MAT_MODEL in user_input
+                    else {}
+                )
+            )
+        stored = self.config_entry.options.get(CONF_MAT_MODEL)
+        return self.async_show_form(
+            step_id="mat_model",
+            data_schema=_form_schema(
+                vol.Schema(
+                    {
+                        vol.Optional(
+                            CONF_MAT_MODEL,
+                            description={"suggested_value": stored},
+                        ): SelectSelector(
+                            SelectSelectorConfig(
+                                options=MAT_MODELS, mode=SelectSelectorMode.DROPDOWN
+                            )
                         )
                     }
                 )

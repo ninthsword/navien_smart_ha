@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterator
+from importlib import import_module
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.navien_smarthome import PLATFORMS as CLOUD_PLATFORMS
-from custom_components.navien_smarthome.ble_mat import connection, transport
+from custom_components.navien_smarthome.ble_mat import (
+    CONF_MAT_MODEL,
+    connection,
+    transport,
+)
 from custom_components.navien_smarthome.ble_mat.connection import (
     CONF_MAT_ID,
     LINK_CONNECTED,
@@ -275,6 +284,192 @@ async def feed_and_settle(hass: HomeAssistant, mat: FakeMat, frame: bytes) -> No
 
 def confirm_with(frame: bytes) -> Callable[[bytes], bytes]:
     return lambda _sent: frame
+
+
+# Options and device information.
+
+
+def serialize_form(result: Any) -> list[dict[str, Any]]:
+    """Use the form serializer available to this Home Assistant version's flow view."""
+    try:
+        serialize = import_module("probatio").to_field_list
+    except (ImportError, AttributeError):
+        serialize = import_module("voluptuous_serialize").convert
+    return serialize(result["data_schema"], custom_serializer=cv.custom_serializer)
+
+
+def mat_device(hass: HomeAssistant, entry: MockConfigEntry) -> dr.DeviceEntry:
+    """Return the entry's one device; identifiers are not unique from 2026.9."""
+    devices = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    assert len(devices) == 1
+    return devices[0]
+
+
+@pytest.mark.parametrize("stored", [None, "EQM560"])
+async def test_mat_model_form_prefills_and_serializes(
+    hass: HomeAssistant, stored: str | None
+) -> None:
+    entry = make_entry(hass)
+    if stored is not None:
+        hass.config_entries.async_update_entry(entry, options={CONF_MAT_MODEL: stored})
+    # Importing the module registers the handler that supports_options consults.
+    import_module("custom_components.navien_smarthome.config_flow")
+    assert entry.supports_options
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result.get("type") is FlowResultType.FORM
+    assert result.get("step_id") == "mat_model"
+    schema: Any = result.get("data_schema")
+    assert len(schema.schema) == 1
+    field = next(iter(schema.schema))
+    assert isinstance(field, vol.Optional)
+    assert str(field) == CONF_MAT_MODEL
+    assert field.description == {"suggested_value": stored}
+    assert schema({}) == {}
+    fields = serialize_form(result)
+    assert len(fields) == 1
+    assert fields[0]["name"] == CONF_MAT_MODEL
+    assert not fields[0].get("required", False)
+    assert "default" not in fields[0]
+    selector = fields[0]["selector"]["select"]
+    assert selector["mode"] == "dropdown"
+    assert not selector.get("multiple", False)
+    assert not selector.get("custom_value", False)
+    assert selector["options"] == [
+        "EQM565",
+        "EQM555",
+        "EQM553",
+        "EQM562",
+        "EQM561",
+        "EQM560",
+        "EQM552",
+        "EQM550",
+        "EQM551",
+        "EQM571",
+        "EQM570",
+        "EQM530",
+        "EQH40/20DN",
+    ]
+    for model in selector["options"]:
+        assert schema({CONF_MAT_MODEL: model}) == {CONF_MAT_MODEL: model}
+
+
+@pytest.mark.parametrize("invalid", ["", "SYNTHETIC_MODEL"])
+async def test_mat_model_selector_refuses_invalid_values(
+    hass: HomeAssistant, invalid: str
+) -> None:
+    entry = make_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    schema: Any = result.get("data_schema")
+
+    with pytest.raises(vol.Invalid):
+        schema({CONF_MAT_MODEL: invalid})
+    assert entry.options == {}
+
+
+@pytest.mark.parametrize("model", [None, "EQM560"])
+async def test_mat_device_registry_information(
+    hass: HomeAssistant, mat: FakeMat, model: str | None
+) -> None:
+    entry = make_entry(hass)
+    if model is not None:
+        hass.config_entries.async_update_entry(entry, options={CONF_MAT_MODEL: model})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+
+    device = mat_device(hass, entry)
+    assert device.name == "숙면매트"
+    assert device.manufacturer == "경동나비엔"
+    assert device.model == model
+    assert device.serial_number is None
+    assert device.identifiers == {(DOMAIN, ADDRESS)}
+    assert entry.title == "매트"
+    assert entry.unique_id == ADDRESS
+    entities = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    assert {entity.device_id for entity in entities} == {device.id}
+    assert {entity.unique_id for entity in entities} == {
+        f"{PREFIX}_{suffix}"
+        for suffix in (
+            "left_thermostat",
+            "right_thermostat",
+            "mode",
+            "link",
+            "water_level",
+            "error_detail",
+            "fast_heat_minutes",
+            "error",
+            "ion_care_running",
+            "enabled",
+            "power",
+            "lock",
+            "fast_heat",
+            "volume",
+            "ion_care_period",
+            "ion_care_run",
+            "left_match_temperature",
+            "right_match_temperature",
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    ("submitted", "model"),
+    [({CONF_MAT_MODEL: "EQM565"}, "EQM565"), ({}, None)],
+    ids=["saves", "omitted-clears"],
+)
+async def test_mat_model_save_reloads_and_updates_device(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    submitted: dict[str, Any],
+    model: str | None,
+) -> None:
+    entry = make_entry(hass)
+    hass.config_entries.async_update_entry(entry, options={CONF_MAT_MODEL: "EQM560"})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await until(lambda: entry.runtime_data.status is not None)
+    device = mat_device(hass, entry)
+    assert device.model == "EQM560"
+    entities_before = {
+        entity.unique_id: entity.entity_id
+        for entity in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    }
+    previous_connection = entry.runtime_data
+
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], submitted
+        )
+        await hass.async_block_till_done()
+        await until(lambda: entry.runtime_data.status is not None)
+        await hass.async_block_till_done()
+
+    assert result.get("type") is FlowResultType.CREATE_ENTRY
+    assert entry.options == submitted
+    reload.assert_called_once_with(entry.entry_id)
+    assert entry.runtime_data is not previous_connection
+    updated = mat_device(hass, entry)
+    assert updated.id == device.id
+    assert updated.name == "숙면매트"
+    assert updated.manufacturer == "경동나비엔"
+    if model is None:
+        assert updated.model is None
+    else:
+        assert updated.model == model
+    assert updated.serial_number is None
+    assert updated.identifiers == {(DOMAIN, ADDRESS)}
+    assert entry.title == "매트"
+    assert entry.unique_id == ADDRESS
+    assert entry.data == {CONF_ADDRESS: ADDRESS, CONF_MAT_ID: MAT_ID}
+    assert {
+        entity.unique_id: entity.entity_id
+        for entity in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    } == entities_before
 
 
 # Availability and state.
@@ -1721,9 +1916,26 @@ async def test_new_entities_wait_for_a_status(
 @pytest.mark.parametrize(
     ("byte9", "byte10", "expected"),
     [
-        (2, 5, "205: 물탱크 공급 온도센서 에러(Er 05)가 발생했습니다. 보일러를 점검해 주세요."),
+        (0, 2, "2: 물 부족 에러(Er 02): 물이 부족한 경우입니다. 물 보충 안내 방법에 따라 물을 보충해주세요."),
+        (3, 2, "302: 물 부족 에러(Er 02): 물이 부족한 경우입니다. 물 보충 안내 방법에 따라 물을 보충해주세요."),
+        (0, 5, "5: 물탱크 공급 온도 센서 에러(Er 05): 공급 온도에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (2, 5, "205: 물탱크 공급 온도 센서 에러(Er 05): 공급 온도에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (0, 11, "11: 수위 감지 에러(Er 11): 정상 수위 감지가 아닐 경우입니다. 1588-1144로 연락해주세요."),
+        (3, 11, "311: 수위 감지 에러(Er 11): 정상 수위 감지가 아닐 경우입니다. 1588-1144로 연락해주세요."),
+        (0, 15, "15: 이온 케어 에러(Er 15): 이온 케어 장치에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (0, 16, "16: 물탱크 과열 에러(Er 16): 물탱크의 온도가 과열되었을 경우입니다. 1588-1144로 연락해주세요."),
+        (
+            0,
+            17,
+            "17: 난방 이상 에러(Er 17): 난방과 관련된 부품(온도퓨즈, 전류퓨즈)에 이상이 생긴 경우입니다. 1588-1144로 연락해주세요.",
+        ),
+        (0, 18, "18: 환수 온도 센서 에러(Er 18): 환수 온도 센서에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (0, 19, "19: 환수 온도 센서 에러(Er 18): 환수 온도 센서에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (2, 18, "218: 환수 온도 센서 에러(Er 18): 환수 온도 센서에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (2, 19, "219: 환수 온도 센서 에러(Er 18): 환수 온도 센서에 이상이 발생된 경우입니다. 1588-1144로 연락해주세요."),
+        (0, 28, "28: 누수 에러(Er 28): 매트 내부 호스 파손에 의한 누수가 감지되었을 경우입니다. 1588-1144로 연락해주세요."),
+        (2, 28, "228: 누수 에러(Er 28): 매트 내부 호스 파손에 의한 누수가 감지되었을 경우입니다. 1588-1144로 연락해주세요."),
         (1, 1, "101: 에러가 발생했습니다. 보일러를 점검해 주세요."),
-        (0, 2, "2: 물이 부족합니다. 물을 보충해주세요.(Er 02)"),
     ],
 )
 async def test_error_detail_for_a_code(

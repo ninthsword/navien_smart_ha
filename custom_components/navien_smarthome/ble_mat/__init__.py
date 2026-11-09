@@ -9,6 +9,24 @@ from typing import Any
 
 from homeassistant.const import CONF_ADDRESS
 
+CONF_MAT_MODEL = "mat_model"
+# The app's DeviceAddMatFragment list; the mat does not report its product name.
+MAT_MODELS = [
+    "EQM565",
+    "EQM555",
+    "EQM553",
+    "EQM562",
+    "EQM561",
+    "EQM560",
+    "EQM552",
+    "EQM550",
+    "EQM551",
+    "EQM571",
+    "EQM570",
+    "EQM530",
+    "EQH40/20DN",
+]
+
 
 def is_mat_entry(entry: Any) -> bool:
     """Tell a Bluetooth mat entry from a cloud account entry."""

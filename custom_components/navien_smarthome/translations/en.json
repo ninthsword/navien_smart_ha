@@ -70,6 +70,13 @@
         "data_description": {
           "heating_entities": "The pump counts as running when any of these thermostats is heating. Leave empty and the estimated sensors are unknown."
         }
+      },
+      "mat_model": {
+        "title": "Sleep mat product name",
+        "description": "The mat does not report its product name. Choose it here to display it in the device information.",
+        "data": {
+          "mat_model": "Product name"
+        }
       }
     }
   },

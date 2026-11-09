@@ -249,7 +249,7 @@ class BoilerFaultProblem(BoilerEntity, BinarySensorEntity):  # pyright: ignore[r
 class BoilerHeatingPumpRunning(BoilerHeatingPumpEntity, BinarySensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
     """Whether the heating pump is estimated to run."""
 
-    _attr_name = "난방 펌프 가동(추정)"
+    _attr_name = "난방 펌프 가동"
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_icon = "mdi:pump"
 
