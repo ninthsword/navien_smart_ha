@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.24.0 — 2026-11-09
 
 - Boiler: the 난방 유량 sensor no longer divides its value by 10; it reads as litres per minute and so
   is ten times its previous figure, which shows as a step in long-term statistics.
