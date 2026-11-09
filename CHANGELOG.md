@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.26.0 — 2026-11-10
 
 - Bluetooth mat: reconnect on a fresh connectable advertisement after a 1-second floor, rising
   with consecutive failed attempts up to the 30-second retry delay. A missing device or
