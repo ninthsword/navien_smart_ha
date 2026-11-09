@@ -27,6 +27,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import NavienSmartConfigEntry
 from .airone import AironeDevice
+from .ble_mat import is_mat_entry
+from .ble_mat.entities import async_setup_mat_selects
 from .const import (
     AIRONE_OPTION_SLEEP,
     LEVEL_STANDBY,
@@ -45,6 +47,9 @@ async def async_setup_entry(
     entry: NavienSmartConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
+    if is_mat_entry(entry):
+        await async_setup_mat_selects(hass, entry, async_add_entities)
+        return
     coordinator = entry.runtime_data
     entities: list[SelectEntity] = []
     for device in (coordinator.data or {}).values():

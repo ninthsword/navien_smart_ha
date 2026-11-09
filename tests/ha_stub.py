@@ -146,12 +146,14 @@ stub(
     ),
 )
 stub("homeassistant.components.select", pkg=True, SelectEntity=Base)
+stub("homeassistant.components.button", pkg=True, ButtonEntity=Base)
 stub(
     "homeassistant.components.sensor",
     pkg=True,
     SensorEntity=Base,
     SensorDeviceClass=enum(
         ENUM="enum",
+        DURATION="duration",
         GAS="gas",
         TEMPERATURE="temperature",
         HUMIDITY="humidity",

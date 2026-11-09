@@ -60,6 +60,10 @@ def _import_integration_module(name: str) -> object:
         import navien_smarthome.boiler as boiler
 
         return boiler
+    if name == "button":
+        import navien_smarthome.button as button
+
+        return button
     if name == "climate":
         import navien_smarthome.climate as climate
 

@@ -15,6 +15,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.navien_smarthome import PLATFORMS as CLOUD_PLATFORMS
 from custom_components.navien_smarthome.ble_mat import connection, transport
 from custom_components.navien_smarthome.ble_mat.connection import (
     CONF_MAT_ID,
@@ -52,6 +53,11 @@ def status(**fields: int) -> bytes:
         "left": 10,
         "right": 11,
         "byte9": 9,
+        "byte12": 12,
+        "fast": 15,
+        "ion": 16,
+        "model": 17,
+        "range": 18,
     }
     for name, value in fields.items():
         raw[indexes[name]] = value
@@ -743,8 +749,6 @@ async def test_power_switch_state(hass: HomeAssistant, mat: FakeMat) -> None:
 async def test_power_switch_refusals(hass: HomeAssistant, mat: FakeMat) -> None:
     mat.first_status = OFF_STATUS
     await setup_mat(hass, mat)
-    with pytest.raises(ServiceValidationError):
-        await set_power(hass, "turn_on")  # no stored status
     await feed_and_settle(hass, mat, SLEEP)
     with pytest.raises(ServiceValidationError):
         await set_power(hass, "turn_on")
@@ -862,16 +866,75 @@ async def test_per_side_command_stops_when_the_mat_left_heating(
     assert len(mat.controls()) == 1
 
 
-async def test_only_side_on_cannot_be_turned_off(
-    hass: HomeAssistant, mat: FakeMat
+@pytest.mark.parametrize(("heat", "side"), [(3, "left"), (4, "right")])
+@pytest.mark.parametrize("through_temperature", [False, True])
+async def test_last_side_off_powers_the_mat_off(
+    hass: HomeAssistant, mat: FakeMat, heat: int, side: str, through_temperature: bool
 ) -> None:
     await setup_mat(hass, mat)
-    await feed_and_settle(hass, mat, status(heat=3))
-    for call in (set_mode(hass, "left", "off"), set_temp(hass, "left", 35, "off")):
-        with pytest.raises(ServiceValidationError) as raised:
-            await call
-        assert "전원" in str(raised.value)
-    assert mat.controls() == []
+    await feed_and_settle(hass, mat, status(heat=heat))
+    mat.respond = confirm_with(OFF_STATUS)
+    if through_temperature:
+        await set_temp(hass, side, 35, "off")
+    else:
+        await set_mode(hass, side, "off")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b280060000fe241e1cfe0000000000fefefefed8"
+    ]
+
+
+async def turn_last_side_off(
+    hass: HomeAssistant, side: str, through_temperature: bool
+) -> None:
+    if through_temperature:
+        await set_temp(hass, side, 35, "off")
+    else:
+        await set_mode(hass, side, "off")
+
+
+@pytest.mark.parametrize(("heat", "side"), [(3, "left"), (4, "right")])
+@pytest.mark.parametrize("through_temperature", [False, True])
+async def test_last_side_off_resend_and_final_error(
+    hass: HomeAssistant, mat: FakeMat, heat: int, side: str, through_temperature: bool
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(heat=heat))
+    answers = iter([None, OFF_STATUS])
+    mat.respond = lambda _frame: next(answers)
+    await turn_last_side_off(hass, side, through_temperature)
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b280060000fe241e1cfe0000000000fefefefed8"
+    ] * 2
+
+    await feed_and_settle(hass, mat, status(heat=heat))
+    mat.respond = None
+    with pytest.raises(HomeAssistantError) as raised:
+        await turn_last_side_off(hass, side, through_temperature)
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 4
+
+
+@pytest.mark.parametrize(("heat", "side"), [(3, "left"), (4, "right")])
+@pytest.mark.parametrize("through_temperature", [False, True])
+async def test_last_side_off_resend_stops_when_the_other_side_came_on(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    monkeypatch: pytest.MonkeyPatch,
+    heat: int,
+    side: str,
+    through_temperature: bool,
+) -> None:
+    monkeypatch.setattr(connection, "CONFIRM_TIMEOUT", 0.2)
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(heat=heat))
+    task = hass.async_create_task(turn_last_side_off(hass, side, through_temperature))
+    await until(lambda: len(mat.controls()) == 1)
+    mat.feed(HEATING)
+    with pytest.raises(HomeAssistantError) as raised:
+        await task
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 1
 
 
 async def test_off_on_a_side_already_off_sends_nothing(
@@ -900,17 +963,33 @@ async def test_heat_on_an_off_side_uses_the_remembered_target(
     assert len(mat.controls()) == 1  # already on
 
 
-async def test_heat_on_an_off_side_with_no_stored_status_is_refused(
+async def test_heat_on_an_off_side_after_a_one_side_first_status_uses_30(
     hass: HomeAssistant, mat: FakeMat
 ) -> None:
     mat.first_status = status(heat=3)
     await setup_mat(hass, mat)
-    with pytest.raises(ServiceValidationError):
-        await set_mode(hass, "right", "heat")
-    assert mat.controls() == []
+    mat.respond = confirm_with(status(right=30))
+    await set_mode(hass, "right", "heat")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001020002241e1c231e1efefefefefefefe34"
+    ]
 
 
-async def test_temperature_on_an_off_side_with_no_stored_status_is_sent(
+async def test_heat_on_an_off_side_with_nothing_stored_uses_30(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(heat=3, left=20)
+    entry = await setup_mat(hass, mat)
+    assert entry.runtime_data.stored_status is None
+    mat.respond = confirm_with(status(left=20, right=30))
+    await set_mode(hass, "right", "heat")
+    # The side already on keeps the byte the set_temperature path echoes.
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001020002241e1c23141efefefefefefefe2a"
+    ]
+
+
+async def test_temperature_on_an_off_side_after_a_one_side_first_status_is_sent(
     hass: HomeAssistant, mat: FakeMat
 ) -> None:
     mat.first_status = status(heat=3)
@@ -1017,7 +1096,7 @@ async def test_targets_remembered_across_side_off_cycle_and_reload(
     await set_mode(hass, "left", "off")
     await hass.async_block_till_done()
     await feed_and_settle(hass, mat, status(heat=4, left=28, right=36))
-    merged = bytes.fromhex("b20001020302241e1c232124fefefe006012043e")
+    merged = bytes.fromhex("b20001020304241e1c232124fefefe0060120440")
     assert entry.runtime_data.stored_status.raw == merged
 
     await feed_and_settle(hass, mat, OFF_STATUS)
@@ -1031,20 +1110,20 @@ async def test_targets_remembered_across_side_off_cycle_and_reload(
     assert hass_storage[key]["data"]["heating_status"] == merged.hex()
     assert entry.runtime_data.stored_status.raw == merged
 
-    mat.respond = confirm_with(status(left=33, right=36))
+    mat.respond = confirm_with(status(heat=4, left=0, right=36))
     await set_power(hass, "turn_on")
-    assert mat.controls()[-1].hex() == "b28001020002241e1c232124fefefefefefefe3d"
+    assert mat.controls()[-1].hex() == "b28001020004241e1c231c24fefefefefefefe3a"
 
 
-async def test_one_side_first_status_creates_no_store(
+async def test_one_side_first_status_creates_a_store(
     hass: HomeAssistant, mat: FakeMat
 ) -> None:
-    mat.first_status = status(heat=3)
+    mat.first_status = status(heat=3, left=33, right=0)
     entry = await setup_mat(hass, mat)
-    await feed_and_settle(hass, mat, status(heat=3, left=33))
-    assert entry.runtime_data.stored_status is None
+    stored = entry.runtime_data.stored_status
+    assert (stored.heat_type, stored.left_target, stored.right_target) == (3, 33, 30)
     await feed_and_settle(hass, mat, status(left=33, right=34))
-    assert entry.runtime_data.stored_status is not None
+    assert entry.runtime_data.stored_status.raw == status(left=33, right=34)
 
 
 async def test_out_of_range_active_side_leaves_the_store_unchanged(
@@ -1076,16 +1155,48 @@ async def test_power_on_mixes_latest_and_stored(
     assert mat.controls()[-1].hex() == "b28001061002241e1c21211cfefefefefefefe47"
 
 
-async def test_no_stored_status_refuses_power_on(
+async def test_no_stored_status_powers_on_at_30(
     hass: HomeAssistant, mat: FakeMat
 ) -> None:
     mat.first_status = OFF_STATUS
     await setup_mat(hass, mat)
-    with pytest.raises(ServiceValidationError):
-        await set_mode(hass, "left", "heat")
-    with pytest.raises(ServiceValidationError):
-        await set_temp(hass, "left", 33, "heat")
-    assert mat.controls() == []
+    mat.respond = confirm_with(status(left=30, right=30))
+    await set_power(hass, "turn_on")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001020002241e1cfe1e1efefefefefefefe0f"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("side", "value", "heat", "expected"),
+    [
+        ("left", None, 3, "b28001020003241e1cfe1e1cfefefefefefefe0e"),
+        ("left", 33, 3, "b28001020003241e1cfe211cfefefefefefefe11"),
+        ("right", None, 4, "b28001020004241e1cfe1c1efefefefefefefe0f"),
+        ("right", 33, 4, "b28001020004241e1cfe1c21fefefefefefefe12"),
+    ],
+)
+async def test_no_stored_status_thermostat_on_turns_on_only_that_side(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    side: str,
+    value: int | None,
+    heat: int,
+    expected: str,
+) -> None:
+    mat.first_status = OFF_STATUS
+    await setup_mat(hass, mat)
+    target = 30 if value is None else value
+    mat.respond = confirm_with(
+        status(heat=heat, left=target, right=0)
+        if side == "left"
+        else status(heat=heat, left=0, right=target)
+    )
+    if value is None:
+        await set_mode(hass, side, "heat")
+    else:
+        await set_temp(hass, side, value, "heat")
+    assert [frame.hex() for frame in mat.controls()] == [expected]
 
 
 async def test_stored_status_survives_reload_and_is_removed(
@@ -1144,9 +1255,11 @@ async def test_malformed_store_is_absent(
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.stored_status is None
-    with pytest.raises(ServiceValidationError):
-        await set_mode(hass, "left", "heat")
-    assert mat.controls() == []
+    mat.respond = confirm_with(status(heat=3, left=30, right=0))
+    await set_mode(hass, "left", "heat")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001020003241e1cfe1e1cfefefefefefefe0e"
+    ]
 
 
 async def test_store_holding_no_mapping_is_absent(
@@ -1348,7 +1461,7 @@ async def test_no_control_frame_before_authentication(
 # Platforms and diagnostics.
 
 
-async def test_forwards_only_its_four_platforms(
+async def test_forwards_only_its_six_platforms(
     hass: HomeAssistant, mat: FakeMat
 ) -> None:
     entry = make_entry(hass)
@@ -1358,11 +1471,20 @@ async def test_forwards_only_its_four_platforms(
         assert await hass.config_entries.async_setup(entry.entry_id)
     assert {str(p) for p in forward.call_args.args[1]} == {
         "binary_sensor",
+        "button",
         "climate",
+        "select",
         "sensor",
         "switch",
     }
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_cloud_entry_forwards_no_button_platform(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry
+) -> None:
+    assert "button" not in {str(platform) for platform in CLOUD_PLATFORMS}
+    assert "button" not in {entity.domain for entity in hass.states.async_all()}
 
 
 async def test_cloud_entry_still_loads_every_platform(
@@ -1381,6 +1503,780 @@ async def test_diagnostics_hold_no_address_or_id(
     assert ADDRESS.lower() not in text
     assert PREFIX not in text
     assert MAT_ID not in text
+
+
+# Status decoding and the reported range.
+
+
+def unique(hass: HomeAssistant, domain: str, suffix: str) -> str:
+    return entity_id_for_unique_id(hass, domain, f"{PREFIX}_{suffix}")
+
+
+async def turn(hass: HomeAssistant, service: str, entity_id: str) -> None:
+    await hass.services.async_call(
+        "switch", service, {"entity_id": entity_id}, blocking=True
+    )
+
+
+async def choose(hass: HomeAssistant, entity_id: str, option: str) -> None:
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": entity_id, "option": option},
+        blocking=True,
+    )
+
+
+async def press(hass: HomeAssistant, entity_id: str) -> None:
+    await hass.services.async_call(
+        "button", "press", {"entity_id": entity_id}, blocking=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "low", "high"),
+    [
+        (0, 25, 43),
+        (1, 25, 45),
+        (2, 25, 48),
+        (3, 25, 50),
+        (4, 28, 45),
+        (5, 28, 45),
+        (9, 28, 45),
+    ],
+)
+async def test_range_for_each_byte_18_code(
+    hass: HomeAssistant, mat: FakeMat, code: int, low: int, high: int
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(range=code))
+    attributes = state_of(hass, climate_id(hass, "left")).attributes
+    assert (attributes["min_temp"], attributes["max_temp"]) == (low, high)
+
+
+async def test_code_3_mat_accepts_50_and_code_4_refuses_46(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(range=3))
+    mat.respond = confirm_with(status(range=3, left=50))
+    await set_temp(hass, "left", 50)
+    assert mat.controls()[-1].hex() == "b28001020002241e1c23321cfefefefefefefe46"
+    assert state_of(hass, climate_id(hass, "left")).attributes["temperature"] == 50
+
+    sent = len(mat.controls())
+    await feed_and_settle(hass, mat, status(range=4))
+    with pytest.raises(ServiceValidationError):
+        await set_temp(hass, "left", 46)
+    assert len(mat.controls()) == sent
+
+
+async def test_turned_off_side_byte_follows_the_range_minimum(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(left=33, right=34, range=3)
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(status(heat=4, left=25, right=34, range=3))
+    await set_mode(hass, "left", "off")
+    assert mat.controls()[-1].hex() == "b28001020004241e1c231922fefefefefefefe35"
+
+
+async def test_stored_default_range_then_code_3_one_side_target_50_survives_reload(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any]
+) -> None:
+    entry = await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(heat=3, left=50, right=0, range=3))
+    merged = entry.runtime_data.stored_status
+    assert (merged.raw[18], merged.left_target, merged.right_target) == (3, 50, 28)
+
+    mat.first_status = OFF_STATUS
+    await hass.config_entries.async_reload(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+    assert hass_storage[key]["data"]["heating_status"] == merged.raw.hex()
+    assert entry.runtime_data.stored_status.raw == merged.raw
+
+    mat.respond = confirm_with(status(heat=3, left=50, right=0, range=3))
+    await set_power(hass, "turn_on")
+    assert mat.controls()[-1].hex() == "b28001020003241e1c233219fefefefefefefe44"
+
+
+async def test_remembered_target_invalid_in_a_later_range_reloads_as_30(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(left=50, right=48, range=3)
+    entry = await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(heat=3, left=33, right=0, range=4))
+    stored = entry.runtime_data.stored_status
+    assert (stored.raw[18], stored.left_target, stored.right_target) == (4, 33, 30)
+
+    mat.first_status = OFF_STATUS
+    await hass.config_entries.async_reload(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.stored_status.raw == stored.raw
+
+
+async def test_store_saves_a_change_of_byte_5_or_byte_18(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    entry = await setup_mat(hass, mat)
+    conn = entry.runtime_data
+    with patch.object(conn._store, "async_delay_save") as save:
+        await feed_and_settle(hass, mat, status(heat=3))
+        save.assert_called_once()
+        assert conn.stored_status.heat_type == 3
+        await feed_and_settle(hass, mat, status(heat=3, range=3))
+        assert save.call_count == 2
+        assert conn.stored_status.raw[18] == 3
+
+
+async def test_mode_7_status_names_discharge(hass: HomeAssistant, mat: FakeMat) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(mode=7))
+    assert state_of(hass, unique(hass, "sensor", "mode")).state == "물빼기"
+
+
+async def test_status_decoding_of_the_new_values(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(volume=0x71, fast=45, ion=0x51)
+    await setup_mat(hass, mat)
+    assert state_of(hass, unique(hass, "select", "volume")).state == "3단계"
+    assert state_of(hass, unique(hass, "sensor", "water_level")).state == "낮음"
+    assert state_of(hass, unique(hass, "sensor", "fast_heat_minutes")).state == "30"
+    assert state_of(hass, unique(hass, "switch", "fast_heat")).state == "on"
+    assert state_of(hass, unique(hass, "binary_sensor", "ion_care_running")).state == "on"
+    assert state_of(hass, unique(hass, "select", "ion_care_period")).state == "5시간"
+
+    await feed_and_settle(hass, mat, status(volume=0x07, fast=0, ion=0x60))
+    assert state_of(hass, unique(hass, "select", "volume")).state == "음소거"
+    assert state_of(hass, unique(hass, "sensor", "water_level")).state == "unknown"
+    assert state_of(hass, unique(hass, "switch", "fast_heat")).state == "off"
+    assert state_of(hass, unique(hass, "binary_sensor", "ion_care_running")).state == "off"
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (status(model=0xFE), "unavailable"),
+        (status(model=0x10), "unavailable"),
+        (status(model=0x13), "off"),
+        (status(model=0x12), "off"),
+        # A mode that carries no byte 17 reports the default model code.
+        (status(mode=8, model=0x12), "unavailable"),
+    ],
+)
+async def test_model_code_gates_fast_heat_and_ion_care(
+    hass: HomeAssistant, mat: FakeMat, frame: bytes, expected: str
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, frame)
+    assert state_of(hass, unique(hass, "switch", "fast_heat")).state == expected
+    available = expected != "unavailable"
+    for domain, suffix in (
+        ("sensor", "fast_heat_minutes"),
+        ("button", "ion_care_run"),
+        ("binary_sensor", "ion_care_running"),
+        ("select", "ion_care_period"),
+    ):
+        state = state_of(hass, unique(hass, domain, suffix)).state
+        assert (state != "unavailable") is available
+
+
+async def test_unavailable_model_gated_controls_send_nothing(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(model=0x10)
+    await setup_mat(hass, mat)
+    await turn(hass, "turn_on", unique(hass, "switch", "fast_heat"))
+    await press(hass, unique(hass, "button", "ion_care_run"))
+    assert mat.controls() == []
+
+
+async def test_new_entities_wait_for_a_status(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = None
+    entry = await setup_mat(hass, mat, wait_status=False)
+    await until(lambda: entry.runtime_data.authenticated)
+    await hass.async_block_till_done()
+    for domain, suffix in (
+        ("switch", "lock"),
+        ("switch", "fast_heat"),
+        ("select", "volume"),
+        ("select", "ion_care_period"),
+        ("sensor", "water_level"),
+        ("sensor", "error_detail"),
+        ("sensor", "fast_heat_minutes"),
+        ("binary_sensor", "ion_care_running"),
+        ("button", "ion_care_run"),
+        ("button", "left_match_temperature"),
+        ("button", "right_match_temperature"),
+    ):
+        assert state_of(hass, unique(hass, domain, suffix)).state == "unavailable"
+
+
+@pytest.mark.parametrize(
+    ("byte9", "byte10", "expected"),
+    [
+        (2, 5, "205: 물탱크 공급 온도센서 에러(Er 05)가 발생했습니다. 보일러를 점검해 주세요."),
+        (1, 1, "101: 에러가 발생했습니다. 보일러를 점검해 주세요."),
+        (0, 2, "2: 물이 부족합니다. 물을 보충해주세요.(Er 02)"),
+    ],
+)
+async def test_error_detail_for_a_code(
+    hass: HomeAssistant, mat: FakeMat, byte9: int, byte10: int, expected: str
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(mode=5, byte9=byte9, left=byte10))
+    assert state_of(hass, unique(hass, "sensor", "error_detail")).state == expected
+
+
+async def test_error_detail_empty_without_an_error(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    detail = unique(hass, "sensor", "error_detail")
+    assert state_of(hass, detail).state == "unknown"
+    await feed_and_settle(hass, mat, status(mode=5, byte9=0, left=0))
+    assert state_of(hass, detail).state == "unknown"
+
+
+# Lock, volume, fast heat, ion care and the same-temperature buttons.
+
+
+async def test_lock_heating_frame_confirmation_and_no_op(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    lock = unique(hass, "switch", "lock")
+    mat.respond = confirm_with(status(flags=0x06))
+    await turn(hass, "turn_on", lock)
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001060002241e1c231e1cfefefefefefefe36"
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, lock).state == "on"
+    await turn(hass, "turn_on", lock)
+    assert len(mat.controls()) == 1
+
+    mat.respond = confirm_with(HEATING)
+    await turn(hass, "turn_off", lock)
+    assert mat.controls()[-1].hex() == "b28001020002241e1c231e1cfefefefefefefe32"
+
+
+OFF_RESERVED = status(
+    mode=6, flags=0, heat=0, left=1, right=5, byte9=0xFE, byte12=7
+)
+
+
+async def test_lock_off_frame_echoes_the_reservation(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = OFF_RESERVED
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(
+        status(mode=6, flags=0x04, heat=0, left=1, right=5, byte9=0xFE, byte12=7)
+    )
+    await turn(hass, "turn_on", unique(hass, "switch", "lock"))
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b280060400fe241e1cfe0105070507fefefefef5"
+    ]
+
+
+@pytest.mark.parametrize("start", [HEATING, OFF_RESERVED])
+async def test_lock_resend_and_final_error(
+    hass: HomeAssistant, mat: FakeMat, start: bytes
+) -> None:
+    mat.first_status = start
+    await setup_mat(hass, mat)
+    with pytest.raises(HomeAssistantError) as raised:
+        await turn(hass, "turn_on", unique(hass, "switch", "lock"))
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 2
+    assert mat.controls()[0] == mat.controls()[1]
+
+
+@pytest.mark.parametrize("frame", [status(mode=2, flags=0), SLEEP])
+async def test_lock_refused_in_any_other_state(
+    hass: HomeAssistant, mat: FakeMat, frame: bytes
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, frame)
+    with pytest.raises(ServiceValidationError):
+        await turn(hass, "turn_on", unique(hass, "switch", "lock"))
+    assert mat.controls() == []
+
+
+async def test_volume_frame_confirmation_no_op_and_refusal(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    volume = unique(hass, "select", "volume")
+    await choose(hass, volume, "음소거")
+    assert mat.controls() == []
+
+    mat.respond = confirm_with(status(volume=0x23))
+    await choose(hass, volume, "2단계")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001022002fe1e1cfe1e1cfefefefefefefe07"
+    ]
+
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    with pytest.raises(ServiceValidationError):
+        await choose(hass, volume, "1단계")
+    assert len(mat.controls()) == 1
+
+
+async def test_volume_resend_and_final_error(hass: HomeAssistant, mat: FakeMat) -> None:
+    await setup_mat(hass, mat)
+    with pytest.raises(HomeAssistantError) as raised:
+        await choose(hass, unique(hass, "select", "volume"), "3단계")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001023002fe1e1cfe1e1cfefefefefefefe17"
+    ] * 2
+
+
+async def test_fast_heat_frames_no_op_and_refusal(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    fast = unique(hass, "switch", "fast_heat")
+    await turn(hass, "turn_off", fast)
+    assert mat.controls() == []
+
+    mat.respond = confirm_with(status(fast=10))
+    await turn(hass, "turn_on", fast)
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28007020002241e1c231e1c01fefefefefefe3b"
+    ]
+    await hass.async_block_till_done()
+    assert state_of(hass, unique(hass, "sensor", "fast_heat_minutes")).state == "10"
+    await turn(hass, "turn_on", fast)
+    assert len(mat.controls()) == 1
+
+    mat.respond = confirm_with(HEATING)
+    await turn(hass, "turn_off", fast)
+    assert mat.controls()[-1].hex() == "b28007020002241e1c231e1c00fefefefefefe3a"
+
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    with pytest.raises(ServiceValidationError):
+        await turn(hass, "turn_on", fast)
+
+
+async def test_fast_heat_resend_and_final_error(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    with pytest.raises(HomeAssistantError) as raised:
+        await turn(hass, "turn_on", unique(hass, "switch", "fast_heat"))
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 2
+
+
+@pytest.mark.parametrize(
+    ("first", "expected"),
+    [
+        (HEATING, "b28008020002241e1c231e1c01fefefe60fefe9e"),
+        (status(ion=0x00), "b28008020002241e1c231e1c01fefefefefefe3c"),
+    ],
+)
+async def test_ion_care_run_frame(
+    hass: HomeAssistant, mat: FakeMat, first: bytes, expected: str
+) -> None:
+    mat.first_status = first
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(status(ion=0x61))
+    await press(hass, unique(hass, "button", "ion_care_run"))
+    assert [frame.hex() for frame in mat.controls()] == [expected]
+
+
+async def test_ion_care_run_no_op_and_refusal(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(ion=0x61)
+    await setup_mat(hass, mat)
+    await press(hass, unique(hass, "button", "ion_care_run"))
+    assert mat.controls() == []
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    with pytest.raises(ServiceValidationError):
+        await press(hass, unique(hass, "button", "ion_care_run"))
+    assert mat.controls() == []
+
+
+async def test_ion_care_resend_and_final_error(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    with pytest.raises(HomeAssistantError) as raised:
+        await press(hass, unique(hass, "button", "ion_care_run"))
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 2
+
+
+@pytest.mark.parametrize(
+    ("first", "confirm", "expected"),
+    [
+        (
+            HEATING,
+            status(ion=0x30),
+            "b28008020002241e1c231e1c01fefefe30fefe6e",
+        ),
+        (
+            status(ion=0x61),
+            status(ion=0x31),
+            "b28008020002241e1c231e1c00fefefe30fefe6d",
+        ),
+    ],
+)
+async def test_ion_care_period_frame_idle_and_running(
+    hass: HomeAssistant, mat: FakeMat, first: bytes, confirm: bytes, expected: str
+) -> None:
+    mat.first_status = first
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(confirm)
+    await choose(hass, unique(hass, "select", "ion_care_period"), "3시간")
+    assert [frame.hex() for frame in mat.controls()] == [expected]
+
+
+async def test_ion_care_period_no_op_refusal_and_final_error(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    period = unique(hass, "select", "ion_care_period")
+    await choose(hass, period, "6시간")
+    assert mat.controls() == []
+
+    with pytest.raises(HomeAssistantError) as raised:
+        await choose(hass, period, "3시간")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert len(mat.controls()) == 2
+
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    with pytest.raises(ServiceValidationError):
+        await choose(hass, period, "3시간")
+    assert len(mat.controls()) == 2
+
+
+async def test_ion_care_period_keeps_byte_12_when_running_arrives(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(connection, "CONFIRM_TIMEOUT", 0.1)
+    await setup_mat(hass, mat)
+    task = hass.async_create_task(
+        choose(hass, unique(hass, "select", "ion_care_period"), "3시간")
+    )
+    await until(lambda: len(mat.controls()) == 1)
+    mat.feed(status(ion=0x61))
+    await until(lambda: len(mat.controls()) == 2)
+    mat.feed(status(ion=0x31))
+    await task
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28008020002241e1c231e1c01fefefe30fefe6e"
+    ] * 2
+
+
+@pytest.mark.parametrize(
+    ("side", "first", "confirm", "expected"),
+    [
+        (
+            "left",
+            status(left=33, right=30),
+            status(left=33, right=33),
+            "b28001020002241e1c232121fefefefefefefe3a",
+        ),
+        (
+            "right",
+            status(left=33, right=30),
+            status(left=30, right=30),
+            "b28001020002241e1c231e1efefefefefefefe34",
+        ),
+        (
+            "left",
+            status(left=31, right=31),
+            status(left=31, right=31),
+            "b28001020002241e1c231f1ffefefefefefefe36",
+        ),
+        (
+            "left",
+            status(heat=3, left=33, right=28),
+            status(left=33, right=33),
+            "b28001020002241e1c232121fefefefefefefe3a",
+        ),
+    ],
+)
+async def test_match_temperature_frame(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    side: str,
+    first: bytes,
+    confirm: bytes,
+    expected: str,
+) -> None:
+    mat.first_status = first
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(confirm)
+    await press(hass, unique(hass, "button", f"{side}_match_temperature"))
+    assert [frame.hex() for frame in mat.controls()] == [expected]
+
+
+async def test_match_temperature_unconfirmed_and_refusals(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(left=33, right=30)
+    await setup_mat(hass, mat)
+    button = unique(hass, "button", "left_match_temperature")
+    mat.respond = confirm_with(status(left=33, right=30))
+    with pytest.raises(HomeAssistantError) as raised:
+        await press(hass, button)
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert len(mat.controls()) == 2
+
+    mat.respond = None
+    await feed_and_settle(hass, mat, status(heat=4, left=28, right=30))
+    with pytest.raises(ServiceValidationError):
+        await press(hass, button)
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    with pytest.raises(ServiceValidationError):
+        await press(hass, button)
+    await feed_and_settle(hass, mat, SLEEP)
+    with pytest.raises(ServiceValidationError):
+        await press(hass, button)
+    assert len(mat.controls()) == 2
+
+
+MOVED_OFF = status(mode=6, flags=0, heat=0, left=0, right=0, byte9=0xFE, ion=0x00)
+
+
+@pytest.mark.parametrize(
+    ("start", "command", "moved"),
+    [
+        (HEATING, lambda hass: turn(hass, "turn_on", unique(hass, "switch", "lock")), MOVED_OFF),
+        (OFF_RESERVED, lambda hass: turn(hass, "turn_on", unique(hass, "switch", "lock")), HEATING),
+        (HEATING, lambda hass: choose(hass, unique(hass, "select", "volume"), "2단계"), MOVED_OFF),
+        (HEATING, lambda hass: turn(hass, "turn_on", unique(hass, "switch", "fast_heat")), MOVED_OFF),
+        (HEATING, lambda hass: press(hass, unique(hass, "button", "ion_care_run")), MOVED_OFF),
+        (HEATING, lambda hass: choose(hass, unique(hass, "select", "ion_care_period"), "3시간"), MOVED_OFF),
+        (
+            status(left=33, right=30),
+            lambda hass: press(hass, unique(hass, "button", "left_match_temperature")),
+            MOVED_OFF,
+        ),
+        (
+            status(left=33, right=30),
+            lambda hass: press(hass, unique(hass, "button", "left_match_temperature")),
+            status(heat=4, left=28, right=30),
+        ),
+    ],
+)
+async def test_new_command_stops_on_a_resend_after_the_state_changed(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    monkeypatch: pytest.MonkeyPatch,
+    start: bytes,
+    command: Callable[[HomeAssistant], Any],
+    moved: bytes,
+) -> None:
+    monkeypatch.setattr(connection, "CONFIRM_TIMEOUT", 0.2)
+    mat.first_status = start
+    await setup_mat(hass, mat)
+    task = hass.async_create_task(command(hass))
+    await until(lambda: len(mat.controls()) == 1)
+    mat.feed(moved)
+    with pytest.raises(HomeAssistantError) as raised:
+        await task
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 1
+
+
+# Powering on returns to the last state.
+
+
+LEFT_LAST = status(heat=3, left=33, right=28)
+RIGHT_LAST = status(heat=4, left=28, right=34)
+HALF_CONFIRM = {
+    3: status(heat=3, left=33, right=0),
+    4: status(heat=4, left=0, right=34),
+}
+
+
+async def one_side_last(
+    hass: HomeAssistant, mat: FakeMat, last: bytes
+) -> MockConfigEntry:
+    """Both sides seen at 33 and 34, then only one side left on, then off."""
+    mat.first_status = status(left=33, right=34)
+    entry = await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, last)
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    return entry
+
+
+@pytest.mark.parametrize(
+    ("last", "heat", "expected"),
+    [
+        (LEFT_LAST, 3, "b28001020003241e1c23211cfefefefefefefe36"),
+        (RIGHT_LAST, 4, "b28001020004241e1c231c22fefefefefefefe38"),
+    ],
+)
+async def test_power_on_after_one_side_exact_frame_resend_and_final_error(
+    hass: HomeAssistant, mat: FakeMat, last: bytes, heat: int, expected: str
+) -> None:
+    await one_side_last(hass, mat, last)
+    answers = iter([None, HALF_CONFIRM[heat]])
+    mat.respond = lambda _frame: next(answers)
+    await set_power(hass, "turn_on")
+    assert [frame.hex() for frame in mat.controls()] == [expected] * 2
+
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    mat.respond = None
+    with pytest.raises(HomeAssistantError) as raised:
+        await set_power(hass, "turn_on")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 4
+
+
+@pytest.mark.parametrize("last", [LEFT_LAST, RIGHT_LAST])
+async def test_power_on_one_side_fails_on_a_wrong_reply(
+    hass: HomeAssistant, mat: FakeMat, last: bytes
+) -> None:
+    await one_side_last(hass, mat, last)
+    mat.respond = confirm_with(status(heat=2, left=33, right=34))
+    with pytest.raises(HomeAssistantError) as raised:
+        await set_power(hass, "turn_on")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert len(mat.controls()) == 2
+
+
+async def test_power_on_after_both_sides_is_unchanged(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(left=33, right=34)
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    mat.respond = confirm_with(status(left=33, right=34))
+    await set_power(hass, "turn_on")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001020002241e1c232122fefefefefefefe3b"
+    ]
+
+
+async def test_heat_type_survives_a_reload(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    entry = await one_side_last(hass, mat, RIGHT_LAST)
+    mat.first_status = OFF_STATUS
+    await hass.config_entries.async_reload(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.stored_status.heat_type == 4
+    mat.respond = confirm_with(HALF_CONFIRM[4])
+    await set_power(hass, "turn_on")
+    assert mat.controls()[-1].hex() == "b28001020004241e1c231c22fefefefefefefe38"
+
+
+async def test_both_sides_frame_stored_before_this_change_powers_on_both(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any]
+) -> None:
+    mat.first_status = OFF_STATUS
+    entry = make_entry(hass)
+    hass_storage[f"{DOMAIN}.ble_mat.{entry.entry_id}"] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": f"{DOMAIN}.ble_mat.{entry.entry_id}",
+        "data": {"enabled": True, "heating_status": HEATING.hex()},
+    }
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    mat.respond = confirm_with(HEATING)
+    await set_power(hass, "turn_on")
+    assert [frame.hex() for frame in mat.controls()] == [
+        "b28001020002241e1c231e1cfefefefefefefe32"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("side", "value", "confirm", "expected"),
+    [
+        # Its side was on in the last state: that state, the target replaced when given.
+        ("left", None, HALF_CONFIRM[3], "b28001020003241e1c23211cfefefefefefefe36"),
+        (
+            "left",
+            35,
+            status(heat=3, left=35, right=0),
+            "b28001020003241e1c23231cfefefefefefefe38",
+        ),
+        # Its side was off in the last state: only that side, the remembered target or the given.
+        ("right", None, HALF_CONFIRM[4], "b28001020004241e1c231c22fefefefefefefe38"),
+        (
+            "right",
+            31,
+            status(heat=4, left=0, right=31),
+            "b28001020004241e1c231c1ffefefefefefefe35",
+        ),
+    ],
+)
+async def test_thermostat_on_while_off_follows_the_last_state(
+    hass: HomeAssistant,
+    mat: FakeMat,
+    side: str,
+    value: int | None,
+    confirm: bytes,
+    expected: str,
+) -> None:
+    await one_side_last(hass, mat, LEFT_LAST)
+    mat.respond = confirm_with(confirm)
+    if value is None:
+        await set_mode(hass, side, "heat")
+    else:
+        await set_temp(hass, side, value, "heat")
+    assert [frame.hex() for frame in mat.controls()] == [expected]
+
+
+async def test_other_sides_target_survives_the_whole_cycle(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(left=33, right=34)
+    await setup_mat(hass, mat)
+    mat.respond = confirm_with(RIGHT_LAST)
+    await set_mode(hass, "left", "off")
+    await hass.async_block_till_done()
+    mat.respond = confirm_with(OFF_STATUS)
+    await set_mode(hass, "right", "off")
+    await hass.async_block_till_done()
+    mat.respond = confirm_with(RIGHT_LAST)
+    await set_power(hass, "turn_on")
+    await hass.async_block_till_done()
+    mat.respond = confirm_with(status(left=33, right=34))
+    await set_mode(hass, "left", "heat")
+    assert mat.controls()[-1].hex() == "b28001020002241e1c232122fefefefefefefe3b"
+
+
+async def test_one_side_first_seen_goes_through_off_and_on_across_a_reload(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(heat=3, left=33, right=0)
+    entry = await setup_mat(hass, mat)
+    mat.respond = confirm_with(OFF_STATUS)
+    await set_mode(hass, "left", "off")
+    await hass.async_block_till_done()
+
+    mat.first_status = OFF_STATUS
+    await hass.config_entries.async_reload(entry.entry_id)
+    await until(lambda: entry.runtime_data.status is not None)
+    await hass.async_block_till_done()
+    mat.respond = confirm_with(HALF_CONFIRM[3])
+    await set_power(hass, "turn_on")
+    assert mat.controls()[-1].hex() == "b28001020003241e1c23211cfefefefefefefe36"
 
 
 # The Bluetooth config flow.

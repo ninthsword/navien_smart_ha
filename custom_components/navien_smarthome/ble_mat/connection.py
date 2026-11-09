@@ -25,7 +25,8 @@ from .protocol import (
     HEAT_BOTH,
     HEAT_LEFT_ONLY,
     HEAT_RIGHT_ONLY,
-    MIN_TARGET,
+    INITIAL_TARGET,
+    MODE_OFF,
     REPLY_AUTHENTICATED,
     REPLY_ISSUED,
     REPLY_REFUSED,
@@ -33,9 +34,13 @@ from .protocol import (
     MatState,
     MatStatus,
     build_authentication_frame,
+    build_fast_heat_frame,
     build_heating_frame,
+    build_ion_care_frame,
     build_off_frame,
+    build_off_lock_frame,
     build_registration_frame,
+    build_volume_frame,
     merge_one_side,
     parse_frame,
     parse_status,
@@ -72,9 +77,10 @@ ERROR_NO_LINK = "블루투스 매트와 연결되어 있지 않습니다."
 ERROR_OTHER_MODE = "매트가 다른 운전 모드(수면 등)일 때는 제어할 수 없습니다."
 ERROR_UNCONFIRMED = "매트가 명령을 확인해 주지 않았습니다."
 ERROR_OFF_TEMPERATURE = "매트가 꺼져 있을 때는 온도만 바꿀 수 없습니다. 먼저 매트를 켜 주세요."
-ERROR_NO_STORED = "저장된 온도가 없습니다. 매트 조절기에서 한 번 켜 주세요."
 ERROR_UNSUPPORTED_MODE = "이 매트는 '{mode}' 모드를 지원하지 않습니다."
-ERROR_LAST_SIDE = "마지막으로 켜져 있는 쪽은 끌 수 없습니다. 매트 전체는 전원 스위치로 꺼 주세요."
+ERROR_NOT_HEATING = "매트가 난방 중일 때만 사용할 수 있습니다."
+ERROR_LOCK_STATE = "지금 상태에서는 조작 잠금을 바꿀 수 없습니다."
+ERROR_SIDE_OFF = "이쪽이 켜져 있을 때만 사용할 수 있습니다."
 
 
 class RegistrationRefused(Exception):
@@ -112,8 +118,9 @@ class _Intent:
     """What a command decided on its first attempt; a resend builds the same frame anew."""
 
     send: Callable[[MatStatus], _Send]
-    # A per-side command must not turn a mat back on that left the heating state meanwhile.
-    while_heating: bool = False
+    # What must still be true for a resend; without it a command must not repeat itself on a mat
+    # that has moved on, such as turning back on one that left the heating state meanwhile.
+    holds: Callable[[MatStatus], bool] | None = None
 
 
 def _store_for(hass: HomeAssistant, entry_id: str) -> Store[dict[str, Any]]:
@@ -393,12 +400,7 @@ class MatConnection:
     @callback
     def _remember(self, status: MatStatus) -> None:
         stored = self.stored_status
-        if status.is_storable:
-            merged: MatStatus | None = status
-        elif stored is not None:
-            merged = merge_one_side(stored, status)
-        else:
-            merged = None
+        merged = status if status.is_storable else merge_one_side(stored, status)
         if merged is not None and (
             stored is None or _power_on_values(merged) != _power_on_values(stored)
         ):
@@ -444,7 +446,7 @@ class MatConnection:
                 raise ServiceValidationError(ERROR_UNSUPPORTED_MODE.format(mode=hvac_mode))
             if status.state is MatState.HEATING:
                 return _side_on_intent(status, stored, side)
-            return _power_on_intent(stored, None, None)
+            return _power_on_intent(stored, side, None)
 
         await self._async_command(decide)
 
@@ -460,6 +462,27 @@ class MatConnection:
 
         await self._async_command(decide)
 
+    async def async_set_lock(self, locked: bool) -> None:
+        await self._async_command(lambda status, _stored: _lock_intent(status, locked))
+
+    async def async_set_volume(self, volume: int) -> None:
+        await self._async_command(lambda status, _stored: _volume_intent(status, volume))
+
+    async def async_set_fast_heat(self, on: bool) -> None:
+        await self._async_command(lambda status, _stored: _fast_heat_intent(status, on))
+
+    async def async_run_ion_care(self) -> None:
+        await self._async_command(lambda status, _stored: _ion_care_run_intent(status))
+
+    async def async_set_ion_care_period(self, period: int) -> None:
+        await self._async_command(
+            lambda status, _stored: _ion_care_period_intent(status, period)
+        )
+
+    async def async_match_temperature(self, side: str) -> None:
+        """Set both sides to `side`'s target."""
+        await self._async_command(lambda status, _stored: _match_intent(status, side))
+
     async def _async_command(
         self, decide: Callable[[MatStatus, MatStatus | None], _Intent | None]
     ) -> None:
@@ -473,8 +496,8 @@ class MatConnection:
                     raise HomeAssistantError(ERROR_NO_LINK)
                 if (
                     intent is not None
-                    and intent.while_heating
-                    and status.state is not MatState.HEATING
+                    and intent.holds is not None
+                    and not intent.holds(status)
                 ):
                     raise HomeAssistantError(ERROR_UNCONFIRMED)
                 if status.state is MatState.OTHER:
@@ -527,12 +550,22 @@ def _parse_stored_status(value: Any) -> MatStatus | None:
         status = parse_status(bytes.fromhex(value))
     except (TypeError, ValueError):
         return None
-    return status if status is not None and status.is_storable else None
+    return status if status is not None and status.is_restorable else None
 
 
-def _power_on_values(status: MatStatus) -> tuple[int, int, int]:
-    """What a power-on frame takes from the stored status."""
-    return status.raw[9], status.left_target, status.right_target
+def _power_on_values(status: MatStatus) -> tuple[int, int, int, int, int]:
+    """What a power-on takes from the stored status, and the range that validates it."""
+    return (
+        status.raw[5],
+        status.raw[9],
+        status.raw[18],
+        status.left_target,
+        status.right_target,
+    )
+
+
+def _is_heating(status: MatStatus) -> bool:
+    return status.state is MatState.HEATING
 
 
 def _confirms_heating(left: int, right: int) -> Callable[[MatStatus], bool]:
@@ -575,7 +608,7 @@ def _side_intent(
             build_heating_frame(status, status, left, right, heat_type), confirmed
         )
 
-    return _Intent(send, while_heating=True)
+    return _Intent(send, _is_heating)
 
 
 def _confirms_heat_type(
@@ -592,14 +625,17 @@ def _confirms_heat_type(
 
 
 def _side_off_intent(status: MatStatus, side: str) -> _Intent | None:
-    """Turn off one side; the last side on is the 전원 switch's to turn off."""
+    """Turn off one side; the last side on takes the whole mat off with it."""
     if status.state is not MatState.HEATING or not _side_on(status, side):
         return None
     other = _other_side(side)
     if not _side_on(status, other):
-        raise ServiceValidationError(ERROR_LAST_SIDE)
+        heat_type = status.heat_type
+        return _off_intent(
+            status, lambda s: _is_heating(s) and s.heat_type == heat_type
+        )
     heat_type = HEAT_RIGHT_ONLY if side == SIDE_LEFT else HEAT_LEFT_ONLY
-    left, right = _targets(side, MIN_TARGET, _target_of(status, other))
+    left, right = _targets(side, status.min_target, _target_of(status, other))
     return _side_intent(heat_type, left, right, _confirms_heat_type(heat_type, None, None))
 
 
@@ -609,9 +645,8 @@ def _side_on_intent(
     """Turn on one side at its remembered target; nothing to do if it is already on."""
     if _side_on(status, side):
         return None
-    if stored is None:
-        raise ServiceValidationError(ERROR_NO_STORED)
-    return _side_temperature_intent(status, side, _target_of(stored, side))
+    target = INITIAL_TARGET if stored is None else _target_of(stored, side)
+    return _side_temperature_intent(status, side, target)
 
 
 def _side_temperature_intent(status: MatStatus, side: str, target: int) -> _Intent:
@@ -619,7 +654,7 @@ def _side_temperature_intent(status: MatStatus, side: str, target: int) -> _Inte
     other = _other_side(side)
     if _side_on(status, side) and not _side_on(status, other):
         heat_type = status.heat_type
-        other_target = MIN_TARGET
+        other_target = status.min_target
     else:
         heat_type = HEAT_BOTH
         other_target = _target_of(status, other)
@@ -627,27 +662,168 @@ def _side_temperature_intent(status: MatStatus, side: str, target: int) -> _Inte
     return _side_intent(heat_type, left, right, _confirms_heat_type(heat_type, side, target))
 
 
-def _off_intent(status: MatStatus) -> _Intent | None:
+def _off_intent(
+    status: MatStatus, holds: Callable[[MatStatus], bool] | None = None
+) -> _Intent | None:
     """Turn off the whole mat."""
     if status.state is MatState.OFF:
         return None
     return _Intent(
-        lambda latest: _Send(build_off_frame(latest), lambda s: s.state is MatState.OFF)
+        lambda latest: _Send(build_off_frame(latest), lambda s: s.state is MatState.OFF),
+        holds,
     )
+
+
+def _both_sides_on_intent(
+    stored: MatStatus | None, left: int, right: int
+) -> _Intent:
+    """Heat both sides; byte 9 comes from the stored status, else from the live one."""
+
+    def send(status: MatStatus) -> _Send:
+        source = status if stored is None else stored
+        return _Send(
+            build_heating_frame(status, source, left, right), _confirms_heating(left, right)
+        )
+
+    return _Intent(send)
+
+
+def _one_side_on_intent(stored: MatStatus | None, side: str, target: int) -> _Intent:
+    """Heat only `side`, the other side's byte at the minimum of the frame that supplies it."""
+    heat_type = HEAT_LEFT_ONLY if side == SIDE_LEFT else HEAT_RIGHT_ONLY
+    confirmed = _confirms_heat_type(heat_type, side, target)
+
+    def send(status: MatStatus) -> _Send:
+        source = status if stored is None else stored
+        left, right = _targets(side, target, source.min_target)
+        return _Send(build_heating_frame(status, source, left, right, heat_type), confirmed)
+
+    return _Intent(send)
 
 
 def _power_on_intent(
     stored: MatStatus | None, side: str | None, target: int | None
 ) -> _Intent:
-    """Power on the whole mat from the stored status, one side's target replaced if named."""
+    """Power on from off: the last state, or for a thermostat whose side was off, that side.
+
+    `side` is None for the 전원 switch. `target` replaces the side's remembered target.
+    """
     if stored is None:
-        raise ServiceValidationError(ERROR_NO_STORED)
-    left = target if side == SIDE_LEFT and target is not None else stored.left_target
-    right = target if side == SIDE_RIGHT and target is not None else stored.right_target
-
-    def send(status: MatStatus) -> _Send:
-        return _Send(
-            build_heating_frame(status, stored, left, right), _confirms_heating(left, right)
+        if side is None:
+            return _both_sides_on_intent(None, INITIAL_TARGET, INITIAL_TARGET)
+        return _one_side_on_intent(
+            None, side, INITIAL_TARGET if target is None else target
         )
+    if side is not None and not _side_on(stored, side):
+        return _one_side_on_intent(
+            stored, side, _target_of(stored, side) if target is None else target
+        )
+    if stored.heat_type == HEAT_BOTH:
+        left = target if side == SIDE_LEFT and target is not None else stored.left_target
+        right = target if side == SIDE_RIGHT and target is not None else stored.right_target
+        return _both_sides_on_intent(stored, left, right)
+    on_side = SIDE_LEFT if stored.heat_type == HEAT_LEFT_ONLY else SIDE_RIGHT
+    return _one_side_on_intent(
+        stored, on_side, _target_of(stored, on_side) if target is None else target
+    )
 
-    return _Intent(send)
+
+def _require_heating(status: MatStatus) -> None:
+    if status.state is not MatState.HEATING:
+        raise ServiceValidationError(ERROR_NOT_HEATING)
+
+
+def _lock_intent(status: MatStatus, locked: bool) -> _Intent | None:
+    """Change the lock bit in the frame of the state the mat is in."""
+    if status.state is not MatState.HEATING and status.mode != MODE_OFF:
+        raise ServiceValidationError(ERROR_LOCK_STATE)
+    if status.lock == locked:
+        return None
+
+    def confirmed(latest: MatStatus) -> bool:
+        return latest.lock == locked
+
+    if status.state is MatState.HEATING:
+        return _Intent(
+            lambda latest: _Send(
+                build_heating_frame(
+                    latest,
+                    latest,
+                    latest.left_target,
+                    latest.right_target,
+                    latest.heat_type,
+                    locked,
+                ),
+                confirmed,
+            ),
+            _is_heating,
+        )
+    return _Intent(
+        lambda latest: _Send(build_off_lock_frame(latest, locked), confirmed),
+        lambda latest: latest.mode == MODE_OFF,
+    )
+
+
+def _volume_intent(status: MatStatus, volume: int) -> _Intent | None:
+    _require_heating(status)
+    if status.volume == volume:
+        return None
+    return _Intent(
+        lambda latest: _Send(
+            build_volume_frame(latest, volume), lambda s: s.volume == volume
+        ),
+        _is_heating,
+    )
+
+
+def _fast_heat_intent(status: MatStatus, on: bool) -> _Intent | None:
+    _require_heating(status)
+    if status.fast_heat_running == on:
+        return None
+    return _Intent(
+        lambda latest: _Send(
+            build_fast_heat_frame(latest, on), lambda s: s.fast_heat_running == on
+        ),
+        _is_heating,
+    )
+
+
+def _ion_care_run_intent(status: MatStatus) -> _Intent | None:
+    _require_heating(status)
+    if status.ion_care_running:
+        return None
+    return _Intent(
+        lambda latest: _Send(
+            build_ion_care_frame(latest, latest.ion_care_period, True),
+            lambda s: s.ion_care_running,
+        ),
+        lambda latest: _is_heating(latest) and not latest.ion_care_running,
+    )
+
+
+def _ion_care_period_intent(status: MatStatus, period: int) -> _Intent | None:
+    _require_heating(status)
+    if status.ion_care_period == period:
+        return None
+    start = not status.ion_care_running
+    return _Intent(
+        lambda latest: _Send(
+            build_ion_care_frame(latest, period, start),
+            lambda s: s.ion_care_period == period,
+        ),
+        _is_heating,
+    )
+
+
+def _match_intent(status: MatStatus, side: str) -> _Intent:
+    """Set both sides to `side`'s target, whether or not they already match."""
+    if not _side_on(status, side):
+        raise ServiceValidationError(ERROR_SIDE_OFF)
+    target = _target_of(status, side)
+    confirmed = _confirms_heating(target, target)
+    return _Intent(
+        lambda latest: _Send(
+            build_heating_frame(latest, latest, target, target), confirmed
+        ),
+        lambda latest: _side_on(latest, side),
+    )
