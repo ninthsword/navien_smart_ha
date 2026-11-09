@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.26.0 — 2026-11-10
+
+- Bluetooth mat: reconnect on a fresh connectable advertisement after a 1-second floor, rising
+  with consecutive failed attempts up to the 30-second retry delay. A missing device or
+  successful authentication resets the floor; refusals keep the full delay and the three-refusal stop.
+- Bluetooth mat: resend the first custom sleep frame once if it received no confirmation while
+  the mat remains powered in an accepted start mode with all program sides selected. The second
+  half of a two-side start still requires powered custom sleep before sending or resending.
+- Bluetooth mat: add three custom sleep programs in the mat's configure menu, a stored program
+  select and a custom sleep switch on models with fast heat and ion care. Programs stay in Home
+  Assistant separately from the phone's programs. Each side sends up to five sections with one
+  confirmed resend; the two-side sequence holds the command lock and stops if the mat leaves
+  powered custom mode. A partial start follows live status; turn custom sleep off then on to
+  recover while it still runs. These app-derived commands have not been confirmed on a real mat.
+- Bluetooth mat: allow power off, an off reservation and starting sleep from powered custom sleep,
+  while keeping other controls refused. Product-name edits now preserve custom programs.
+- Bluetooth mat: add instant off/on reservation selects, a stored on-reservation temperature,
+  a sleep switch and stored hours per side. These follow the app and have not yet been confirmed
+  on a real mat. Reservations and sleep replace each other; canceling an on reservation may also
+  power the mat on. Changed reservation hours are confirmed only by the reservation staying active,
+  and the app's high-temperature warning for an on reservation is not shown.
+- Bluetooth mat: allow the whole-mat power switch to turn off during powered reservations and
+  sleep, while keeping the thermostats and other controls refused in those modes.
+
 ## v0.25.0 — 2026-11-09
 
 - Bluetooth mat: show the device as 숙면매트 and let its configure form select a product name

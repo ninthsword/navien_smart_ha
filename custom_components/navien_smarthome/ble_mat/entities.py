@@ -16,6 +16,7 @@ from homeassistant.components.climate.const import (
     HVACAction,
     HVACMode,
 )
+from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.components.switch import SwitchEntity
@@ -34,6 +35,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from ..const import DOMAIN
 from . import CONF_MAT_MODEL
 from .connection import LINK_STATES, SIDE_LEFT, SIDE_RIGHT, MatConnection
+from .programs import PROGRAM_OPTIONS
 from .protocol import (
     DEFAULT_HEAT_RANGE,
     HEAT_LEFT_ONLY,
@@ -57,6 +59,8 @@ MODE_NAMES = {
 WATER_LEVEL_NAMES = {1: "낮음", 2: "보통", 3: "가득"}
 VOLUME_OPTIONS = ["음소거", "1단계", "2단계", "3단계"]
 ION_CARE_PERIOD_OPTIONS = [f"{hours}시간" for hours in range(1, 13)]
+RESERVATION_CANCEL = "해제"
+SLEEP_HOURS_OPTIONS = [f"{hours}시간" for hours in range(5, 11)]
 
 ERROR_INSPECT = "보일러를 점검해 주세요."
 ERROR_CONTACT = "1588-1144로 연락해주세요."
@@ -376,6 +380,140 @@ class MatFastHeatSwitch(_MatEntity, SwitchEntity):
         await self._conn.async_set_fast_heat(False)
 
 
+class MatSleepSwitch(_MatEntity, SwitchEntity):
+    _attr_name = "수면 모드"
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "sleep")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.status
+        self._attr_is_on = None if status is None else status.sleep_running
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._conn.async_set_sleep(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._conn.async_set_sleep(False)
+
+
+class MatCustomSleepSwitch(_MatEntity, SwitchEntity):
+    _attr_name = "맞춤 수면"
+    _needs_extras = True
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "custom_sleep")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.status
+        self._attr_is_on = None if status is None else status.custom_sleep_running
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._conn.async_set_custom_sleep(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._conn.async_set_custom_sleep(False)
+
+
+class MatCustomProgramSelect(_MatEntity, SelectEntity):
+    """Choose a stored program without sending anything to the mat."""
+
+    _attr_name = "맞춤 수면 프로그램"
+    _attr_options = PROGRAM_OPTIONS
+    _needs_extras = True
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "custom_program")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        self._attr_current_option = PROGRAM_OPTIONS[self._conn.custom_program - 1]
+
+    async def async_select_option(self, option: str) -> None:
+        await self._conn.async_select_custom_program(PROGRAM_OPTIONS.index(option) + 1)
+
+
+class MatReservationSelect(_MatEntity, SelectEntity):
+    """Whole-mat reservations; only their active state confirms a changed value."""
+
+    def __init__(self, conn: MatConnection, on: bool) -> None:
+        self._on = on
+        self._attr_name = "켜짐 예약" if on else "꺼짐 예약"
+        super().__init__(conn, "on_reservation" if on else "off_reservation")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.status
+        hours_range = (
+            range(1, 15)
+            if not self._on and status is not None and status.model_code == 3
+            else range(3, 13)
+        )
+        self._attr_options = [RESERVATION_CANCEL, *[f"{h}시간" for h in hours_range]]
+        if status is None:
+            self._attr_current_option = None
+            return
+        hours = status.on_reservation_hours if self._on else status.off_reservation_hours
+        option = RESERVATION_CANCEL if hours is None else f"{hours}시간"
+        self._attr_current_option = option if option in self._attr_options else None
+
+    async def async_select_option(self, option: str) -> None:
+        hours = None if option == RESERVATION_CANCEL else int(option.removesuffix("시간"))
+        if self._on:
+            await self._conn.async_set_on_reservation(hours)
+        else:
+            await self._conn.async_set_off_reservation(hours)
+
+
+class MatSleepHoursSelect(_MatEntity, SelectEntity):
+    """A stored setting; changing it does not start or update sleep on the mat."""
+
+    _attr_options = SLEEP_HOURS_OPTIONS
+
+    def __init__(self, conn: MatConnection, side: str) -> None:
+        self._side = side
+        self._attr_name = "왼쪽 수면 시간" if side == SIDE_LEFT else "오른쪽 수면 시간"
+        super().__init__(conn, f"{side}_sleep_hours")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        hours = (
+            self._conn.left_sleep_hours
+            if self._side == SIDE_LEFT
+            else self._conn.right_sleep_hours
+        )
+        self._attr_current_option = f"{hours}시간"
+
+    async def async_select_option(self, option: str) -> None:
+        await self._conn.async_set_sleep_hours(
+            self._side, SLEEP_HOURS_OPTIONS.index(option) + 5
+        )
+
+
+class MatOnReservationTemperature(_MatEntity, NumberEntity):
+    _attr_name = "켜짐 예약 온도"
+    _attr_device_class = NumberDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "on_reservation_temperature")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.status
+        low, high = DEFAULT_HEAT_RANGE if status is None else status.heat_range
+        self._attr_native_min_value = low
+        self._attr_native_max_value = high
+        self._attr_native_value = self._conn.on_reservation_temperature
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._conn.async_set_on_reservation_temperature(value)
+
+
 class MatVolumeSelect(_MatEntity, SelectEntity):
     _attr_name = "조작음"
     _attr_options = VOLUME_OPTIONS
@@ -492,6 +630,8 @@ async def async_setup_mat_switches(
             MatPowerSwitch(conn),
             MatLockSwitch(conn),
             MatFastHeatSwitch(conn),
+            MatSleepSwitch(conn),
+            MatCustomSleepSwitch(conn),
         ]
     )
 
@@ -502,7 +642,26 @@ async def async_setup_mat_selects(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     conn: MatConnection = entry.runtime_data
-    async_add_entities([MatVolumeSelect(conn), MatIonCarePeriodSelect(conn)])
+    async_add_entities(
+        [
+            MatVolumeSelect(conn),
+            MatIonCarePeriodSelect(conn),
+            MatReservationSelect(conn, False),
+            MatReservationSelect(conn, True),
+            MatSleepHoursSelect(conn, SIDE_LEFT),
+            MatSleepHoursSelect(conn, SIDE_RIGHT),
+            MatCustomProgramSelect(conn),
+        ]
+    )
+
+
+async def async_setup_mat_numbers(
+    hass: HomeAssistant,
+    entry: ConfigEntry[Any],
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    conn: MatConnection = entry.runtime_data
+    async_add_entities([MatOnReservationTemperature(conn)])
 
 
 async def async_setup_mat_buttons(

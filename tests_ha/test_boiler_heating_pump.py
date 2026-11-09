@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib import import_module
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -155,8 +156,15 @@ async def test_bluetooth_mat_entry_offers_model_options(hass: HomeAssistant) -> 
     )
     entry.add_to_hass(hass)
 
+    import_module("custom_components.navien_smarthome.config_flow")
     assert entry.supports_options
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result.get("type") is FlowResultType.MENU
+    assert result.get("step_id") == "mat_menu"
+    assert result.get("menu_options") == ["mat_model", "custom_program"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "mat_model"}
+    )
     assert result.get("type") is FlowResultType.FORM
     assert result.get("step_id") == "mat_model"
     assert str(form_field(result)) == CONF_MAT_MODEL

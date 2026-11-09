@@ -36,6 +36,10 @@ def _import_integration_module(name: str) -> object:
         import navien_smarthome.ble_mat.protocol as protocol
 
         return protocol
+    if name == "ble_mat.programs":
+        import navien_smarthome.ble_mat.programs as programs
+
+        return programs
     if name == "ble_mat.setup":
         import navien_smarthome.ble_mat.setup as setup
 
@@ -133,6 +137,7 @@ modules = [
     "ble_mat.connection",
     "ble_mat.entities",
     "ble_mat.protocol",
+    "ble_mat.programs",
     "ble_mat.setup",
     "ble_mat.transport",
 ]
