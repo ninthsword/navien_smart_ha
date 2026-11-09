@@ -59,6 +59,20 @@
       "bluetooth_reauth_unsupported": "다시 로그인할 수 없는 블루투스 매트입니다. 연결에 문제가 있으면 매트를 삭제한 뒤 다시 등록해 주세요."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "난방 펌프 추정",
+        "description": "보일러는 펌프 상태를 보내지 않으므로, 여기서 고른 온도조절기의 동작 상태로 난방 펌프 가동을 추정합니다.",
+        "data": {
+          "heating_entities": "난방 가동 엔티티"
+        },
+        "data_description": {
+          "heating_entities": "이 온도조절기 중 하나라도 난방 중이면 난방 펌프가 도는 것으로 봅니다. 비워 두면 추정 센서는 알 수 없음이 됩니다."
+        }
+      }
+    }
+  },
   "entity": {
     "switch": {
       "power": {

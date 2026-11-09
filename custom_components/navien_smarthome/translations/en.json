@@ -59,6 +59,20 @@
       "bluetooth_reauth_unsupported": "A Bluetooth mat has no account to log in to. If it cannot connect, remove the mat and register it again."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Heating pump estimate",
+        "description": "The boiler reports no pump state, so the heating pump is estimated from the action of the thermostats selected here.",
+        "data": {
+          "heating_entities": "Heating entities"
+        },
+        "data_description": {
+          "heating_entities": "The pump counts as running when any of these thermostats is heating. Leave empty and the estimated sensors are unknown."
+        }
+      }
+    }
+  },
   "entity": {
     "switch": {
       "power": {
