@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bluetooth mat: the 오류 내용 sensor uses the mat manual's name and description for each error code,
+  and now names Er 15 (ion care error).
 - Boiler: the 난방 순환 유량(추정), 난방 펌프 가동(추정) and 온수 최저작동유량(추정) sensors drop the (추정)
   mark from their names. An existing entity id and the values are unchanged, and the values remain
   estimates.

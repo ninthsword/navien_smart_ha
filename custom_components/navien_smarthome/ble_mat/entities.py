@@ -58,11 +58,20 @@ VOLUME_OPTIONS = ["음소거", "1단계", "2단계", "3단계"]
 ION_CARE_PERIOD_OPTIONS = [f"{hours}시간" for hours in range(1, 13)]
 
 ERROR_INSPECT = "보일러를 점검해 주세요."
-ERROR_WATER_LOW = "물이 부족합니다. 물을 보충해주세요.(Er 02)"
-ERROR_TANK_SENSOR = f"물탱크 공급 온도센서 에러(Er 05)가 발생했습니다. {ERROR_INSPECT}"
-ERROR_WATER_LEVEL = f"수위감지 에러(Er 11)가 발생했습니다. {ERROR_INSPECT}"
-ERROR_RETURN_SENSOR = f"환수온도센서 에러(Er 18)가 발생했습니다. {ERROR_INSPECT}"
-ERROR_LEAK = f"누수 에러(Er 28)가 발생했습니다. {ERROR_INSPECT}"
+# The wording of each named error comes from the mat's manual ("에러코드 안내").
+ERROR_WATER_LOW = "물 부족 에러(Er 02): 물이 부족한 경우입니다. 물을 보충해주세요."
+ERROR_TANK_SENSOR = (
+    f"물탱크 공급 온도 센서 에러(Er 05): 공급 온도에 이상이 발생된 경우입니다. {ERROR_INSPECT}"
+)
+ERROR_WATER_LEVEL = f"수위 감지 에러(Er 11): 정상 수위 감지가 아닐 경우입니다. {ERROR_INSPECT}"
+ERROR_ION_CARE = f"이온 케어 에러(Er 15): 이온 케어 장치에 이상이 발생된 경우입니다. {ERROR_INSPECT}"
+ERROR_TANK_OVERHEAT = f"물탱크 과열 에러(Er 16): 물탱크의 온도가 과열되었을 경우입니다. {ERROR_INSPECT}"
+ERROR_HEATING = (
+    "난방 이상 에러(Er 17): 난방과 관련된 부품(온도퓨즈, 전류퓨즈)에 이상이 생긴 경우입니다. "
+    f"{ERROR_INSPECT}"
+)
+ERROR_RETURN_SENSOR = f"환수 온도 센서 에러(Er 18): 환수 온도 센서에 이상이 발생된 경우입니다. {ERROR_INSPECT}"
+ERROR_LEAK = f"누수 에러(Er 28): 매트 내부 호스 파손에 의한 누수가 감지되었을 경우입니다. {ERROR_INSPECT}"
 ERROR_GENERIC = f"에러가 발생했습니다. {ERROR_INSPECT}"
 ERROR_MESSAGES = {
     2: ERROR_WATER_LOW,
@@ -71,8 +80,9 @@ ERROR_MESSAGES = {
     205: ERROR_TANK_SENSOR,
     11: ERROR_WATER_LEVEL,
     311: ERROR_WATER_LEVEL,
-    16: f"물탱크 과열 에러(Er 16)가 발생했습니다. {ERROR_INSPECT}",
-    17: f"난방 이상 에러(Er 17)가 발생했습니다. {ERROR_INSPECT}",
+    15: ERROR_ION_CARE,
+    16: ERROR_TANK_OVERHEAT,
+    17: ERROR_HEATING,
     18: ERROR_RETURN_SENSOR,
     19: ERROR_RETURN_SENSOR,
     218: ERROR_RETURN_SENSOR,
