@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.23.0 — 2026-11-09
 
 - Bluetooth mat: add the 조작 잠금 switch, 조작음 select, 빠른 난방 switch and its minutes sensor,
   이온케어 button, running sensor and period select, the 왼쪽/오른쪽 온도로 맞추기 buttons, and the 수위
