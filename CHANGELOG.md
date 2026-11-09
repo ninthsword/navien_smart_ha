@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Boiler: the 난방 순환 유량(추정) sensor is renamed 난방 순환 유량. An existing entity id and the value are
+  unchanged, and the value remains an estimate.
+
 ## v0.24.0 — 2026-11-09
 
 - Boiler: the 난방 유량 sensor no longer divides its value by 10; it reads as litres per minute and so
