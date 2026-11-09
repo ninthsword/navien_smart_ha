@@ -168,6 +168,7 @@ stub(
     SensorEntity=Base,
     SensorDeviceClass=enum(
         ENUM="enum",
+        TIMESTAMP="timestamp",
         DURATION="duration",
         GAS="gas",
         TEMPERATURE="temperature",

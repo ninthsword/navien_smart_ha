@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Bluetooth mat: after confirming cancellation of an on reservation, turn the mat off again
+  under the same command lock. The mat and phone app power it on when canceling, so it may
+  briefly turn on before Home Assistant confirms power off.
+- Bluetooth mat: distinguish off and on reservations in the operating-mode sensor, retain
+  the initially reported hours in reservation selects through a countdown, and show 설정됨
+  for unknown or unselectable initial hours without sending a command when selected.
+- Bluetooth mat: add 예약 실행 시각, a timestamp estimated from reported remaining hours
+  and retained across reconnects and reloads. It only moves earlier until a new reservation
+  is observed or a set from Home Assistant is confirmed. A countdown first observed in
+  progress may initially appear up to an hour late.
+
 ## v0.26.0 — 2026-11-10
 
 - Bluetooth mat: reconnect on a fresh connectable advertisement after a 1-second floor, rising

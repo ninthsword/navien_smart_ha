@@ -12,8 +12,9 @@ import math
 from asyncio import sleep
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
@@ -136,9 +137,20 @@ class Registration:
 
 
 @dataclass(frozen=True)
+class Reservation:
+    """The active reservation, retained across gaps in live status."""
+
+    kind: Literal["off", "on"]
+    set_hours: int | None
+    last_reported_hours: int | None
+    run_time: datetime | None
+
+
+@dataclass(frozen=True)
 class _Send:
     frame: bytes
     confirmed: Callable[[MatStatus], bool]
+    reservation_kind: Literal["off", "on"] | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +242,7 @@ class MatConnection:
         self.enabled = True
         self.status: MatStatus | None = None
         self.stored_status: MatStatus | None = None
+        self.reservation: Reservation | None = None
         self.on_reservation_temperature = INITIAL_TARGET
         self.left_sleep_hours = INITIAL_SLEEP_HOURS
         self.right_sleep_hours = INITIAL_SLEEP_HOURS
@@ -244,6 +257,7 @@ class MatConnection:
         self._activity = asyncio.Event()
         self._changed = asyncio.Event()
         self._since_send: list[MatStatus] | None = None
+        self._reservation_set_kind: Literal["off", "on"] | None = None
         self._reply: asyncio.Future[HandshakeReply | None] | None = None
         self._command_lock = asyncio.Lock()
         self._refusals = 0
@@ -265,6 +279,7 @@ class MatConnection:
             data = {}
         self.enabled = data.get("enabled", True)
         self.stored_status = _parse_stored_status(data.get("heating_status"))
+        self.reservation = _parse_reservation(data.get("reservation"))
         self.on_reservation_temperature = _stored_integer(
             data.get("on_reservation_temperature"), 25, 50, INITIAL_TARGET
         )
@@ -278,6 +293,7 @@ class MatConnection:
 
     def _payload(self) -> dict[str, Any]:
         stored = self.stored_status
+        reservation = self.reservation
         return {
             "enabled": self.enabled,
             "heating_status": None if stored is None else stored.raw.hex(),
@@ -285,6 +301,14 @@ class MatConnection:
             "left_sleep_hours": self.left_sleep_hours,
             "right_sleep_hours": self.right_sleep_hours,
             "custom_program": self.custom_program,
+            "reservation": None if reservation is None else {
+                "kind": reservation.kind,
+                "set_hours": reservation.set_hours,
+                "last_reported_hours": reservation.last_reported_hours,
+                "run_time": (
+                    None if reservation.run_time is None else reservation.run_time.isoformat()
+                ),
+            },
         }
 
     @callback
@@ -473,11 +497,59 @@ class MatConnection:
         if self._since_send is not None:
             self._since_send.append(frame)
             self._changed.set()
+        reset_reservation = (
+            self._reservation_set_kind == "off" and frame.off_reservation_active
+        ) or (self._reservation_set_kind == "on" and frame.on_reservation_active)
+        if reset_reservation:
+            self._reservation_set_kind = None
+        reservation_changed = self._remember_reservation(frame, reset=reset_reservation)
         if self.status is not None and frame.raw == self.status.raw:
+            if reservation_changed:
+                self._publish()
             return
         self.status = frame
         self._remember(frame)
         self._publish()
+
+    @callback
+    def _remember_reservation(self, status: MatStatus, *, reset: bool = False) -> bool:
+        previous = self.reservation
+        kind: Literal["off", "on"] | None = (
+            "off" if status.off_reservation_active
+            else "on" if status.on_reservation_active else None
+        )
+        if kind is None:
+            reservation = None
+        else:
+            hours = _reservation_hours(
+                status.off_reservation_hours if kind == "off" else status.on_reservation_hours
+            )
+            now = datetime.now(UTC)
+            run_time = None if hours is None else now + timedelta(hours=hours)
+            if (
+                previous is None or previous.kind != kind or reset
+                or (
+                    hours is not None and previous.last_reported_hours is not None
+                    and hours > previous.last_reported_hours
+                )
+            ):
+                reservation = Reservation(kind, hours, hours, run_time)
+            else:
+                if previous.run_time is not None:
+                    run_time = (
+                        previous.run_time if run_time is None
+                        else min(previous.run_time, run_time)
+                    )
+                reservation = Reservation(
+                    kind, previous.set_hours,
+                    previous.last_reported_hours if hours is None else hours,
+                    run_time,
+                )
+        if reservation == previous:
+            return False
+        self.reservation = reservation
+        self._store.async_delay_save(self._payload, 1)
+        return True
 
     @callback
     def _remember(self, status: MatStatus) -> None:
@@ -572,12 +644,54 @@ class MatConnection:
         )
 
     async def async_set_on_reservation(self, hours: int | None) -> None:
+        if hours is None:
+            await self._async_cancel_on_reservation()
+            return
         await self._async_command(
             lambda status, _stored: _on_reservation_intent(
                 status, hours, self.on_reservation_temperature
             ),
             allow_other=True,
         )
+
+    async def _async_cancel_on_reservation(self) -> None:
+        """Keep cancellation receipts through writes and retries, then turn the mat off."""
+        async with self._command_lock:
+            status = self.status
+            if status is None:
+                raise HomeAssistantError(ERROR_NO_LINK)
+            intent = _on_reservation_intent(status, None, 0)
+            if intent is None:
+                return
+            received: list[MatStatus] = []
+            self._since_send = received
+            try:
+                for _ in range(SEND_ATTEMPTS):
+                    status = self.status
+                    if status is None:
+                        raise HomeAssistantError(ERROR_NO_LINK)
+                    if await self._async_send_and_confirm(intent.send(status), received):
+                        break
+                else:
+                    raise HomeAssistantError(ERROR_UNCONFIRMED)
+            finally:
+                self._since_send = None
+
+            status = self.status
+            if status is None or not _can_power_off(status):
+                return
+            off = _off_intent(status)
+            if off is None:
+                return
+            for _ in range(SEND_ATTEMPTS):
+                status = self.status
+                if status is None:
+                    raise HomeAssistantError(ERROR_NO_LINK)
+                if off.holds is not None and not off.holds(status):
+                    raise HomeAssistantError(ERROR_UNCONFIRMED)
+                if await self._async_send_and_confirm(off.send(status)):
+                    return
+            raise HomeAssistantError(ERROR_UNCONFIRMED)
 
     async def async_set_sleep(self, on: bool) -> None:
         await self._async_command(
@@ -659,20 +773,31 @@ class MatConnection:
                 else:
                     raise HomeAssistantError(ERROR_UNCONFIRMED)
 
-    async def _async_send_and_confirm(self, send: _Send) -> bool:
+    async def _async_send_and_confirm(
+        self, send: _Send, cancel_received: list[MatStatus] | None = None
+    ) -> bool:
+        if cancel_received is not None and any(send.confirmed(s) for s in cancel_received):
+            return True
         try:
             async with asyncio.timeout(SEND_TIMEOUT):
                 await transport.async_write(self._client, send.frame)
         except Exception as err:
             _LOGGER.debug("블루투스 매트 전송 실패: %s", type(err).__name__)
-            return False
+            return cancel_received is not None and any(
+                send.confirmed(s) for s in cancel_received
+            )
+        if cancel_received is not None:
+            confirmed = await self._async_confirmed(send, cancel_received)
+            return confirmed or any(send.confirmed(s) for s in cancel_received)
         # Only a status received from here on can confirm this send.
         received: list[MatStatus] = []
         self._since_send = received
+        self._reservation_set_kind = send.reservation_kind
         try:
             return await self._async_confirmed(send, received)
         finally:
             self._since_send = None
+            self._reservation_set_kind = None
 
     async def _async_confirmed(self, send: _Send, received: list[MatStatus]) -> bool:
         loop = self.hass.loop
@@ -700,6 +825,38 @@ def _parse_stored_status(value: Any) -> MatStatus | None:
     except (TypeError, ValueError):
         return None
     return status if status is not None and status.is_restorable else None
+
+
+def _reservation_hours(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 14:
+        return value
+    return None
+
+
+def _parse_reservation(value: Any) -> Reservation | None:
+    """Older and malformed records count as absent; timestamps must have a time zone."""
+    if not isinstance(value, dict) or not {
+        "kind", "set_hours", "last_reported_hours", "run_time"
+    } <= value.keys():
+        return None
+    kind = value["kind"]
+    if kind not in ("off", "on"):
+        return None
+    set_hours, last_hours = value["set_hours"], value["last_reported_hours"]
+    if any(h is not None and _reservation_hours(h) is None for h in (set_hours, last_hours)):
+        return None
+    run_time = value["run_time"]
+    if run_time is not None:
+        if not isinstance(run_time, str):
+            return None
+        try:
+            run_time = datetime.fromisoformat(run_time)
+            if run_time.tzinfo is None or run_time.utcoffset() is None:
+                return None
+            run_time = run_time.astimezone(UTC)
+        except (ValueError, OverflowError):
+            return None
+    return Reservation(kind, set_hours, last_hours, run_time)
 
 
 def _stored_integer(value: Any, low: int, high: int, default: int) -> int:
@@ -862,7 +1019,8 @@ def _off_reservation_intent(status: MatStatus, hours: int | None) -> _Intent | N
         raise ServiceValidationError(ERROR_RESERVATION_STATE)
     return _Intent(
         lambda latest: _Send(
-            build_off_reservation_frame(latest, hours), lambda s: s.off_reservation_active
+            build_off_reservation_frame(latest, hours), lambda s: s.off_reservation_active,
+            "off",
         ),
         lambda s: _can_set_off_reservation(s, hours),
     )
@@ -889,6 +1047,7 @@ def _on_reservation_intent(
         lambda latest: _Send(
             build_on_reservation_frame(latest, hours, temperature),
             lambda s: s.on_reservation_active,
+            "on",
         ),
         lambda s: s.mode == MODE_OFF and s.is_valid_target(temperature),
     )
