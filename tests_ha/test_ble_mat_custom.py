@@ -75,12 +75,32 @@ async def configure(hass: HomeAssistant, result: dict[str, Any], data: dict[str,
     return dict(await hass.config_entries.options.async_configure(result["flow_id"], data))
 
 
-def side_input(enabled: bool = True, **fields: Any) -> dict[str, Any]:
-    result: dict[str, Any] = {"enabled": enabled}
-    for i in range(1, 6):
-        result[f"hours_{i}"] = 0
-        result[f"temperature_{i}"] = 30
-    return {**result, **fields}
+async def menu_choice(
+    hass: HomeAssistant, result: dict[str, Any], choice: str
+) -> dict[str, Any]:
+    assert result.get("type") is FlowResultType.MENU
+    assert choice in result.get("menu_options", [])
+    return await configure(hass, result, {"next_step_id": choice})
+
+
+async def add_section(
+    hass: HomeAssistant, result: dict[str, Any], side: str, hours: int, temperature: int
+) -> dict[str, Any]:
+    result = await menu_choice(hass, result, f"custom_{side}_add")
+    assert result.get("step_id") == f"custom_{side}_add"
+    return await configure(hass, result, {"hours": str(hours), "temperature": str(temperature)})
+
+
+def assert_menu(
+    result: dict[str, Any], side: str, options: list[str], sections: str, total: int,
+    warning: str = "",
+) -> None:
+    assert result.get("type") is FlowResultType.MENU
+    assert result.get("step_id") == f"custom_{side}"
+    assert result.get("menu_options") == options
+    assert result.get("description_placeholders") == {
+        "sections": sections, "total": str(total), "remaining": str(12 - total), "warning": warning,
+    }
 
 
 async def program_form(
@@ -95,27 +115,266 @@ async def program_form(
 
 
 @pytest.mark.parametrize(
-    ("stored", "expected_left", "expected_right"),
+    ("stored", "left_summary", "left_hours", "right_summary", "right_hours"),
     [
-        (None, side_input(), side_input()),
-        ({"left": LEFT, "right": []}, side_input(hours_1=2, hours_2=3, temperature_2=31), side_input(False)),
-        ({"left": [], "right": RIGHT}, side_input(False), side_input(hours_1=4, temperature_1=32)),
+        (None, "구간이 없어 사용하지 않습니다.", 0, "구간이 없어 사용하지 않습니다.", 0),
+        ({"left": LEFT, "right": []}, "1구간 2시간 30도, 2구간 3시간 31도", 5, "구간이 없어 사용하지 않습니다.", 0),
+        ({"left": [], "right": RIGHT}, "구간이 없어 사용하지 않습니다.", 0, "1구간 4시간 32도", 4),
     ],
 )
-async def test_custom_form_prefills_each_side_and_unused_rows(
-    hass: HomeAssistant, stored: Any, expected_left: dict[str, Any], expected_right: dict[str, Any]
+async def test_custom_program_choice_loads_each_side_into_menus(
+    hass: HomeAssistant, stored: Any, left_summary: str, left_hours: int,
+    right_summary: str, right_hours: int,
 ) -> None:
     entry = make_entry(hass)
     if stored is not None:
         hass.config_entries.async_update_entry(entry, options={CONF_CUSTOM_PROGRAMS: {"2": stored}})
     result = await program_form(hass, entry, "2")
-    assert result.get("step_id") == "custom_left"
-    defaults = {field["name"]: field.get("default") for field in serialize_form(result)}
-    assert defaults == expected_left
-    result = await configure(hass, result, side_input(hours_1=2))
-    assert result.get("step_id") == "custom_right"
-    defaults = {field["name"]: field.get("default") for field in serialize_form(result)}
-    assert defaults == {**expected_right, "copy_left": False}
+    left_options = ["custom_left_add"]
+    if left_hours:
+        left_options += ["custom_left_remove", "custom_left_clear"]
+    assert_menu(result, "left", [*left_options, "custom_right"], left_summary, left_hours)
+    result = await menu_choice(hass, result, "custom_right")
+    right_options = ["custom_right_add"]
+    if right_hours:
+        right_options += ["custom_right_remove", "custom_right_clear"]
+    if left_hours:
+        right_options.append("custom_copy_left")
+    right_options.append("custom_left")
+    if left_hours or right_hours:
+        right_options.append("custom_save")
+    assert_menu(result, "right", right_options, right_summary, right_hours)
+    result = await menu_choice(hass, result, "custom_left")
+    assert_menu(result, "left", [*left_options, "custom_right"], left_summary, left_hours)
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize(
+    ("rows", "actions", "summary", "total"),
+    [
+        ([], ["add"], "구간이 없어 사용하지 않습니다.", 0),
+        ([{"hours": 1, "temperature": 30}], ["add", "remove", "clear"], "1구간 1시간 30도", 1),
+        (RIGHT_FIVE, ["remove", "clear"], "1구간 1시간 29도, 2구간 1시간 30도, 3구간 1시간 31도, 4구간 1시간 32도, 5구간 1시간 33도", 5),
+        ([{"hours": 12, "temperature": 30}], ["remove", "clear"], "1구간 12시간 30도", 12),
+    ],
+)
+async def test_custom_menu_options_at_empty_partial_section_and_hour_limits(
+    hass: HomeAssistant, side: str, rows: Any, actions: list[str], summary: str, total: int
+) -> None:
+    entry = make_entry(hass)
+    program = {"left": rows if side == "left" else LEFT, "right": rows if side == "right" else []}
+    hass.config_entries.async_update_entry(entry, options={CONF_CUSTOM_PROGRAMS: {"1": program}})
+    result = await program_form(hass, entry)
+    options = [f"custom_{side}_{action}" for action in actions]
+    if side == "left":
+        options += ["custom_right"]
+    else:
+        result = await menu_choice(hass, result, "custom_right")
+        options += ["custom_copy_left", "custom_left", "custom_save"]
+    assert_menu(result, side, options, summary, total)
+    assert entry.options[CONF_CUSTOM_PROGRAMS] == {"1": program}
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+async def test_custom_hours_shrink_and_dropdown_defaults_follow_the_previous_section(
+    hass: HomeAssistant, side: str
+) -> None:
+    entry = make_entry(hass)
+    result = await program_form(hass, entry)
+    if side == "right":
+        result = await menu_choice(hass, result, "custom_right")
+    for section_number, remaining, hours, temperature, default in ((1, 12, 1, 31, 30), (2, 11, 11, 32, 31)):
+        result = await menu_choice(hass, result, f"custom_{side}_add")
+        assert result.get("description_placeholders") == {"section": str(section_number), "remaining": str(remaining)}
+        fields = {field["name"]: field for field in serialize_form(result)}
+        assert set(fields) == {"hours", "temperature"}
+        assert fields["hours"]["default"] == "1"
+        assert fields["temperature"]["default"] == str(default)
+        hours_selector = fields["hours"]["selector"]["select"]
+        assert hours_selector["options"] == [
+            {"value": str(hour), "label": f"{hour}시간"} for hour in range(1, remaining + 1)
+        ]
+        assert hours_selector["mode"] == "dropdown"
+        assert not hours_selector.get("multiple", False)
+        assert not hours_selector.get("custom_value", False)
+        assert fields["temperature"]["selector"]["select"]["mode"] == "dropdown"
+        result = await configure(hass, result, {"hours": str(hours), "temperature": str(temperature)})
+        assert result.get("step_id") == f"custom_{side}"
+        assert entry.options == {}
+    options = [f"custom_{side}_remove", f"custom_{side}_clear"]
+    options += ["custom_right"] if side == "left" else ["custom_left", "custom_save"]
+    assert_menu(result, side, options, "1구간 1시간 31도, 2구간 11시간 32도", 12)
+
+
+@pytest.mark.parametrize(
+    ("live", "stored", "expected"),
+    [
+        (status(range=0), HEATING, (25, 43)),
+        (status(mode=2, range=2), HEATING, (25, 48)),
+        (status(mode=3, range=3), HEATING, (25, 50)),
+        (status(mode=6, flags=0, range=4), status(range=3), (28, 45)),
+        (custom_status(0, range=4), status(range=3), (28, 45)),
+        (status(mode=4, range=3), HEATING, (28, 45)),
+        (status(mode=5, range=0), status(range=2), (25, 48)),
+        (status(mode=7, range=0), None, (25, 50)),
+        (status(mode=8, range=0), None, (25, 50)),
+        (None, HEATING, (28, 45)),
+        (None, None, (25, 50)),
+    ],
+)
+async def test_custom_temperature_dropdown_uses_live_capabilities_then_stored_then_fallback(
+    hass: HomeAssistant, mat: FakeMat, hass_storage: dict[str, Any],
+    live: bytes | None, stored: bytes | None, expected: tuple[int, int],
+) -> None:
+    entry = make_entry(hass)
+    if stored is not None:
+        key = f"{DOMAIN}.ble_mat.{entry.entry_id}"
+        hass_storage[key] = {"version": 1, "minor_version": 1, "key": key, "data": {"heating_status": stored.hex()}}
+    mat.first_status = live
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await until(lambda: entry.runtime_data.authenticated)
+    if live is not None:
+        await until(lambda: entry.runtime_data.status is not None)
+    result = await program_form(hass, entry)
+    result = await menu_choice(hass, result, "custom_left_add")
+    fields = {field["name"]: field for field in serialize_form(result)}
+    low, high = expected
+    assert fields["temperature"]["selector"]["select"]["options"] == [
+        {"value": str(degree), "label": f"{degree}도"} for degree in range(low, high + 1)
+    ]
+    assert fields["temperature"]["default"] == "30"
+    assert fields["hours"]["default"] == "1"
+    assert entry.options == {}
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize("temperature", [25, 34, 50])
+async def test_custom_stored_temperature_is_marked_preserved_and_defaults_within_the_range(
+    hass: HomeAssistant, mat: FakeMat, side: str, temperature: int
+) -> None:
+    rows = [{"hours": 1, "temperature": temperature}]
+    program = {"left": rows if side == "left" else [], "right": rows if side == "right" else []}
+    entry = await setup_custom(hass, mat, program)
+    result = await program_form(hass, entry)
+    if side == "right":
+        result = await menu_choice(hass, result, "custom_right")
+    outside = temperature in (25, 50)
+    placeholders = result.get("description_placeholders", {})
+    assert placeholders.get("sections") == f"1구간 1시간 {temperature}도" + (" (범위 밖)" if outside else "")
+    assert placeholders.get("warning") == ("온도 범위 밖의 구간이 있어 이 프로그램을 시작할 수 없습니다." if outside else "")
+    result = await menu_choice(hass, result, f"custom_{side}_add")
+    fields = {field["name"]: field for field in serialize_form(result)}
+    assert fields["temperature"]["default"] == str(30 if outside else temperature)
+    result = await configure(hass, result, {"hours": "1", "temperature": "30"})
+    if side == "left":
+        result = await menu_choice(hass, result, "custom_right")
+    assert "custom_save" in result.get("menu_options", [])
+    result = await menu_choice(hass, result, "custom_save")
+    assert result.get("type") is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_CUSTOM_PROGRAMS]["1"][side] == [*rows, {"hours": 1, "temperature": 30}]
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize(
+    ("fields", "refused"),
+    [
+        ({"hours": "0"}, "hours"),
+        ({"hours": "12"}, "hours"),
+        ({"hours": "1.5"}, "hours"),
+        ({"temperature": "27"}, "temperature"),
+        ({"temperature": "46"}, "temperature"),
+        ({"temperature": "30.5"}, "temperature"),
+    ],
+)
+async def test_custom_add_outside_offered_options_is_refused_without_leaving_the_form(
+    hass: HomeAssistant, mat: FakeMat, side: str, fields: dict[str, Any], refused: str
+) -> None:
+    entry = await setup_mat(hass, mat)
+    result = await program_form(hass, entry)
+    if side == "right":
+        result = await menu_choice(hass, result, "custom_right")
+    result = await add_section(hass, result, side, 1, 30)
+    result = await menu_choice(hass, result, f"custom_{side}_add")
+    with pytest.raises(InvalidData) as refusal:
+        await configure(hass, result, {"hours": "1", "temperature": "30", **fields})
+    assert set(refusal.value.schema_errors) == {refused}
+    assert hass.config_entries.options.async_get(result["flow_id"]).get("step_id") == f"custom_{side}_add"
+    assert entry.options == {}
+    result = await configure(hass, result, {"hours": "1", "temperature": "30"})
+    assert result.get("description_placeholders", {}).get("total") == "2"
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize("action", ["remove", "clear"])
+async def test_custom_delete_last_or_clear_side_keeps_the_other_side(
+    hass: HomeAssistant, side: str, action: str
+) -> None:
+    entry = make_entry(hass)
+    hass.config_entries.async_update_entry(entry, options={CONF_CUSTOM_PROGRAMS: {"1": {"left": LEFT, "right": LEFT}}})
+    result = await program_form(hass, entry)
+    if side == "right":
+        result = await menu_choice(hass, result, "custom_right")
+    result = await menu_choice(hass, result, f"custom_{side}_{action}")
+    expected = LEFT[:1] if action == "remove" else []
+    assert result.get("description_placeholders", {}).get("sections") == ("1구간 2시간 30도" if expected else "구간이 없어 사용하지 않습니다.")
+    if not expected:
+        assert f"custom_{side}_remove" not in result.get("menu_options", [])
+        assert f"custom_{side}_clear" not in result.get("menu_options", [])
+    if side == "left":
+        result = await menu_choice(hass, result, "custom_right")
+    result = await menu_choice(hass, result, "custom_save")
+    assert result.get("type") is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_CUSTOM_PROGRAMS] == {"1": {
+        "left": expected if side == "left" else LEFT,
+        "right": expected if side == "right" else LEFT,
+    }}
+
+
+async def test_custom_copy_replaces_right_and_going_back_preserves_independent_sides(
+    hass: HomeAssistant,
+) -> None:
+    entry = make_entry(hass)
+    result = await program_form(hass, entry)
+    result = await add_section(hass, result, "left", 2, 31)
+    result = await menu_choice(hass, result, "custom_right")
+    assert result.get("menu_options") == ["custom_right_add", "custom_copy_left", "custom_left", "custom_save"]
+    result = await add_section(hass, result, "right", 4, 40)
+    result = await menu_choice(hass, result, "custom_left")
+    assert result.get("description_placeholders", {}).get("sections") == "1구간 2시간 31도"
+    result = await menu_choice(hass, result, "custom_right")
+    assert result.get("description_placeholders", {}).get("sections") == "1구간 4시간 40도"
+    result = await menu_choice(hass, result, "custom_copy_left")
+    assert result.get("description_placeholders", {}).get("sections") == "1구간 2시간 31도"
+    assert entry.options == {}
+    result = await menu_choice(hass, result, "custom_left")
+    result = await menu_choice(hass, result, "custom_left_clear")
+    result = await menu_choice(hass, result, "custom_right")
+    assert_menu(result, "right", ["custom_right_add", "custom_right_remove", "custom_right_clear", "custom_left", "custom_save"], "1구간 2시간 31도", 2)
+    result = await menu_choice(hass, result, "custom_save")
+    assert result.get("type") is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_CUSTOM_PROGRAMS] == {"1": {"left": [], "right": [{"hours": 2, "temperature": 31}]}}
+
+
+async def test_custom_unsaved_edits_and_abandoning_a_flow_do_not_change_stored_programs(
+    hass: HomeAssistant,
+) -> None:
+    entry = make_entry(hass)
+    original = {CONF_MAT_MODEL: "EQM560", CONF_CUSTOM_PROGRAMS: {"1": {"left": LEFT, "right": RIGHT}}}
+    hass.config_entries.async_update_entry(entry, options=original)
+    result = await program_form(hass, entry)
+    result = await menu_choice(hass, result, "custom_left_clear")
+    result = await add_section(hass, result, "left", 1, 35)
+    result = await menu_choice(hass, result, "custom_right")
+    result = await menu_choice(hass, result, "custom_copy_left")
+    assert entry.options == original
+    hass.config_entries.options.async_abort(result["flow_id"])
+    result = await program_form(hass, entry)
+    assert result.get("description_placeholders", {}).get("sections") == "1구간 2시간 30도, 2구간 3시간 31도"
+    result = await menu_choice(hass, result, "custom_right")
+    assert result.get("description_placeholders", {}).get("sections") == "1구간 4시간 32도"
+    assert entry.options == original
 
 
 async def test_custom_save_preserves_other_programs_and_name_and_reloads(
@@ -130,17 +389,20 @@ async def test_custom_save_preserves_other_programs_and_name_and_reloads(
     await until(lambda: entry.runtime_data.status is not None)
     previous = entry.runtime_data
     result = await program_form(hass, entry, "2")
-    result = await configure(hass, result, side_input(hours_1=1, temperature_1=25))
+    result = await add_section(hass, result, "left", 1, 28)
+    result = await menu_choice(hass, result, "custom_right")
+    result = await add_section(hass, result, "right", 12, 45)
+    assert entry.options == {CONF_MAT_MODEL: "EQM560", CONF_CUSTOM_PROGRAMS: programs}
     with patch.object(hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload) as reload:
-        result = await configure(hass, result, side_input(hours_1=12, temperature_1=50))
+        result = await menu_choice(hass, result, "custom_save")
         await hass.async_block_till_done()
         await until(lambda: entry.runtime_data.status is not None)
     assert result.get("type") is FlowResultType.CREATE_ENTRY
     assert entry.options == {
         CONF_MAT_MODEL: "EQM560",
         CONF_CUSTOM_PROGRAMS: {**programs, "2": {
-            "left": [{"hours": 1, "temperature": 25}],
-            "right": [{"hours": 12, "temperature": 50}],
+            "left": [{"hours": 1, "temperature": 28}],
+            "right": [{"hours": 12, "temperature": 45}],
         }},
     }
     reload.assert_called_once_with(entry.entry_id)
@@ -164,92 +426,6 @@ async def test_custom_reset_removes_only_the_chosen_program(
     assert entry.options == {
         CONF_MAT_MODEL: "EQM560",
         CONF_CUSTOM_PROGRAMS: {key: value for key, value in programs.items() if key != number},
-    }
-
-
-@pytest.mark.parametrize("side", ["left", "right"])
-@pytest.mark.parametrize(
-    ("fields", "error"),
-    [
-        ({}, "custom_hours"),
-        ({"hours_1": 12, "hours_2": 1}, "custom_hours"),
-        ({"hours_2": 1}, "custom_contiguous"),
-        ({"hours_1": 1, "hours_3": 1}, "custom_contiguous"),
-        ({"hours_1": 1.5}, "custom_rows"),
-        ({"hours_1": 1, "temperature_1": 30.5}, "custom_rows"),
-    ],
-)
-async def test_custom_validation_keeps_the_side_form_open(
-    hass: HomeAssistant, side: str, fields: dict[str, Any], error: str
-) -> None:
-    entry = make_entry(hass)
-    result = await program_form(hass, entry)
-    if side == "right":
-        result = await configure(hass, result, side_input(hours_1=1))
-    result = await configure(hass, result, side_input(**fields))
-    assert result.get("type") is FlowResultType.FORM
-    assert result.get("step_id") == f"custom_{side}"
-    assert result.get("errors") == {"base": error}
-    assert entry.options == {}
-
-
-@pytest.mark.parametrize("side", ["left", "right"])
-@pytest.mark.parametrize(
-    ("fields", "refused"),
-    [
-        ({"hours_1": -1}, "hours_1"),
-        ({"hours_1": 13}, "hours_1"),
-        ({"hours_1": 1, "temperature_1": 24}, "temperature_1"),
-        ({"hours_1": 1, "temperature_1": 51}, "temperature_1"),
-    ],
-)
-async def test_custom_row_outside_its_range_is_refused_by_the_form_schema(
-    hass: HomeAssistant, side: str, fields: dict[str, Any], refused: str
-) -> None:
-    entry = make_entry(hass)
-    result = await program_form(hass, entry)
-    if side == "right":
-        result = await configure(hass, result, side_input(hours_1=1))
-    with pytest.raises(InvalidData) as refusal:
-        await configure(hass, result, side_input(**fields))
-    assert set(refusal.value.schema_errors) == {refused}
-    assert hass.config_entries.options.async_get(result["flow_id"]).get("step_id") == f"custom_{side}"
-    assert entry.options == {}
-
-
-@pytest.mark.parametrize(
-    ("left", "right", "expected", "error"),
-    [
-        (True, True, {"left": [{"hours": 2, "temperature": 31}], "right": [{"hours": 2, "temperature": 31}]}, None),
-        (True, False, {"left": [{"hours": 2, "temperature": 31}], "right": []}, None),
-        (False, True, None, "custom_copy_left"),
-        (False, False, None, "custom_side_required"),
-    ],
-)
-async def test_custom_copy_only_applies_to_an_enabled_right_side(
-    hass: HomeAssistant, left: bool, right: bool, expected: Any, error: str | None
-) -> None:
-    entry = make_entry(hass)
-    result = await program_form(hass, entry)
-    result = await configure(hass, result, side_input(left, hours_1=2, temperature_1=31))
-    result = await configure(hass, result, side_input(right, copy_left=True, hours_1=4, temperature_1=40))
-    if error:
-        assert result.get("errors") == {"base": error}
-        assert result.get("step_id") == "custom_right"
-        assert entry.options == {}
-    else:
-        assert result.get("type") is FlowResultType.CREATE_ENTRY
-        assert entry.options[CONF_CUSTOM_PROGRAMS] == {"1": expected}
-
-
-async def test_custom_disabled_left_stores_no_rows(hass: HomeAssistant) -> None:
-    entry = make_entry(hass)
-    result = await program_form(hass, entry)
-    result = await configure(hass, result, side_input(False, hours_1=2))
-    result = await configure(hass, result, side_input(hours_1=3))
-    assert result.get("type") is FlowResultType.CREATE_ENTRY
-    assert entry.options[CONF_CUSTOM_PROGRAMS] == {
-        "1": {"left": [], "right": [{"hours": 3, "temperature": 30}]}
     }
 
 
@@ -294,7 +470,7 @@ async def test_malformed_program_prefills_as_absent_and_cannot_start(
 ) -> None:
     entry = await setup_custom(hass, mat, program)
     result = await program_form(hass, entry)
-    assert {field["name"]: field.get("default") for field in serialize_form(result)} == side_input()
+    assert_menu(result, "left", ["custom_left_add", "custom_right"], "구간이 없어 사용하지 않습니다.", 0)
     with pytest.raises(ServiceValidationError, match=connection.ERROR_CUSTOM_PROGRAM):
         await custom_switch(hass, True)
     assert mat.controls() == []

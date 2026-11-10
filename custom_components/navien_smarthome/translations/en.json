@@ -95,47 +95,43 @@
         }
       },
       "custom_left": {
-        "title": "Custom sleep: left side",
-        "description": "Enable this side and enter consecutive sections starting at row 1, totaling 1 to 12 hours. Zero hours leaves a row unused; temperatures are whole degrees from 25 to 50.",
-        "data": {
-          "enabled": "Use the left side",
-          "hours_1": "Section 1 hours",
-          "temperature_1": "Section 1 temperature",
-          "hours_2": "Section 2 hours",
-          "temperature_2": "Section 2 temperature",
-          "hours_3": "Section 3 hours",
-          "temperature_3": "Section 3 temperature",
-          "hours_4": "Section 4 hours",
-          "temperature_4": "Section 4 temperature",
-          "hours_5": "Section 5 hours",
-          "temperature_5": "Section 5 temperature"
+        "title": "Custom sleep left settings",
+        "description": "{sections}\n\nTotal: {total} hours. Remaining: {remaining} hours.\n\n{warning}",
+        "menu_options": {
+          "custom_left_add": "Add section",
+          "custom_left_remove": "Delete last section",
+          "custom_left_clear": "Do not use left side",
+          "custom_right": "Next: right settings"
         }
       },
       "custom_right": {
-        "title": "Custom sleep: right side",
-        "description": "Set the right side, or copy the left side while the right side is enabled. At least one side must be enabled. Zero hours leaves a row unused; use consecutive rows totaling 1 to 12 hours at 25 to 50 whole degrees.",
+        "title": "Custom sleep right settings",
+        "description": "{sections}\n\nTotal: {total} hours. Remaining: {remaining} hours.\n\n{warning}",
+        "menu_options": {
+          "custom_right_add": "Add section",
+          "custom_right_remove": "Delete last section",
+          "custom_right_clear": "Do not use right side",
+          "custom_copy_left": "Same as left",
+          "custom_left": "Back: left settings",
+          "custom_save": "Save"
+        }
+      },
+      "custom_left_add": {
+        "title": "Custom sleep left: section {section}",
+        "description": "Each side can have up to 5 sections over 12 hours. Remaining: {remaining} hours.",
         "data": {
-          "enabled": "Use the right side",
-          "copy_left": "Apply the left side's hours and temperatures",
-          "hours_1": "Section 1 hours",
-          "temperature_1": "Section 1 temperature",
-          "hours_2": "Section 2 hours",
-          "temperature_2": "Section 2 temperature",
-          "hours_3": "Section 3 hours",
-          "temperature_3": "Section 3 temperature",
-          "hours_4": "Section 4 hours",
-          "temperature_4": "Section 4 temperature",
-          "hours_5": "Section 5 hours",
-          "temperature_5": "Section 5 temperature"
+          "hours": "Time",
+          "temperature": "Temperature"
+        }
+      },
+      "custom_right_add": {
+        "title": "Custom sleep right: section {section}",
+        "description": "Each side can have up to 5 sections over 12 hours. Remaining: {remaining} hours.",
+        "data": {
+          "hours": "Time",
+          "temperature": "Temperature"
         }
       }
-    },
-    "error": {
-      "custom_rows": "Enter whole hours from 0 to 12 and whole temperatures from 25 to 50.",
-      "custom_contiguous": "Use consecutive sections starting at section 1.",
-      "custom_hours": "An enabled side needs a total of 1 to 12 hours.",
-      "custom_copy_left": "Enable and configure the left side before copying it.",
-      "custom_side_required": "Enable at least one side."
     },
     "abort": {
       "custom_sleep_running": "Stop the active custom sleep program before editing it."

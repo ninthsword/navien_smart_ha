@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from harness import Report
+from harness import SRC, Report
 from navien_smarthome.ble_mat import connection
 from navien_smarthome.ble_mat.programs import CONF_CUSTOM_PROGRAMS, read_program
 from navien_smarthome.ble_mat.protocol import MatStatus
-from navien_smarthome.config_flow import _custom_sections
 
 r = Report()
 LEFT = [{"hours": 2, "temperature": 30}, {"hours": 3, "temperature": 31}]
@@ -53,19 +53,24 @@ for invalid in (
 ):
     r.ok(read_program({CONF_CUSTOM_PROGRAMS: {"1": invalid}}, "1") is None, "malformed program is absent")
 
-r.section("form row validation")
-for fields, error in (
-    ({"enabled": False, "hours_1": 2}, None),
-    ({"enabled": True, "hours_1": 2}, None),
-    ({"enabled": True}, "custom_hours"),
-    ({"enabled": True, "hours_1": 12, "hours_2": 1}, "custom_hours"),
-    ({"enabled": True, "hours_2": 2}, "custom_contiguous"),
-    ({"enabled": True, "hours_1": 1, "hours_3": 2}, "custom_contiguous"),
-    ({"enabled": True, "hours_1": 1.5}, "custom_rows"),
-    ({"enabled": True, "hours_1": 1, "temperature_1": 30.5}, "custom_rows"),
-):
-    _, actual = _custom_sections(fields)
-    r.ok(actual == error, f"form validation: {error}")
+r.section("custom editor translations")
+for path in (SRC / "strings.json", SRC / "translations/ko.json", SRC / "translations/en.json"):
+    content = path.read_text("utf-8")
+    r.ok("~" not in content, f"{path.name}: no Markdown strikethrough ranges")
+    options = json.loads(content)["options"]
+    r.ok("error" not in options, f"{path.name}: retired row errors removed")
+    steps = options["step"]
+    for side in ("left", "right"):
+        menu = steps[f"custom_{side}"]
+        r.ok("data" not in menu, f"{path.name}: {side} uses a menu")
+        r.ok(all("{" + key + "}" in menu["description"] for key in ("sections", "total", "remaining", "warning")),
+             f"{path.name}: {side} describes sections, totals and range warnings")
+        choices = {f"custom_{side}_{action}" for action in ("add", "remove", "clear")}
+        choices |= {"custom_right"} if side == "left" else {"custom_copy_left", "custom_left", "custom_save"}
+        r.ok(set(menu["menu_options"]) == choices, f"{path.name}: {side} menu labels")
+        form = steps[f"custom_{side}_add"]
+        r.ok(set(form["data"]) == {"hours", "temperature"}, f"{path.name}: section dropdown labels")
+        r.ok("{section}" in form["title"], f"{path.name}: section number in form title")
 
 r.section("custom status")
 for mode, state, readback, running in (

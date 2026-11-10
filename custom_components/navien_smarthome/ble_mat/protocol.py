@@ -169,6 +169,11 @@ class MatStatus:
         return self.mode in (MODE_HEAT, 2, 3, MODE_OFF)
 
     @property
+    def reads_capabilities(self) -> bool:
+        """Whether the live frame supplies its own capability bytes."""
+        return self._reads_capabilities
+
+    @property
     def model_code(self) -> int:
         if not self._reads_capabilities or self.raw[17] == FILL:
             return 0

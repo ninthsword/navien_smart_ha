@@ -7,7 +7,9 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
+from ..const import DOMAIN
 from .connection import MatConnection, async_remove_store
 
 PLATFORMS: list[Platform] = [
@@ -26,6 +28,15 @@ async def async_setup_mat_entry(hass: HomeAssistant, entry: ConfigEntry[Any]) ->
     conn = MatConnection(hass, entry)
     await conn.async_load()
     entry.runtime_data = conn
+    registry = er.async_get(hass)
+    retired_unique_id = f"{conn.address.replace(':', '').lower()}_reservation_time"
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if (
+            entity.domain == "sensor"
+            and entity.platform == DOMAIN
+            and entity.unique_id == retired_unique_id
+        ):
+            registry.async_remove(entity.entity_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     conn.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))

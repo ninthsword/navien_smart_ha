@@ -61,8 +61,10 @@ def check_record(
     r.ok((record.set_hours, record.last_reported_hours, record.run_time) == (
         set_hours, last, run_time,
     ), "retained record matches the controlled clock")
-    sensor = MatReservationTimeSensor(conn)
-    r.ok(sensor._attr_native_value == run_time, "timestamp reads the retained time")
+    sensor = MatReservationTimeSensor(conn, record.kind == "on")
+    r.ok(sensor._attr_native_value == run_time, "the matching timestamp reads the retained time")
+    other = MatReservationTimeSensor(conn, record.kind != "on")
+    r.ok(other._attr_native_value is None, "the other reservation timestamp has no value")
 
 
 async def records() -> None:
@@ -86,8 +88,9 @@ async def records() -> None:
             conn._handle_frame(status(2, 2, power=power))
             check_record(conn, 3, 2, exact)
             conn._link_lost()
-            r.ok(MatReservationTimeSensor(conn)._attr_native_value is None,
-                 "a disconnected timestamp has no value")
+            for on in (False, True):
+                r.ok(MatReservationTimeSensor(conn, on)._attr_native_value is None,
+                     "a disconnected timestamp has no value")
             conn.authenticated = True
             conn._handle_frame(status(2, 1, power=power))
             check_record(conn, 3, 1, exact)
@@ -96,12 +99,16 @@ async def records() -> None:
             restored._store = Mock(async_load=AsyncMock(return_value=saved))
             await restored.async_load()
             r.ok(restored.reservation == conn.reservation, "the whole record reloads")
-            r.ok(MatReservationTimeSensor(restored)._attr_native_value is None,
-                 "a reloaded record waits for a live status")
+            for on in (False, True):
+                r.ok(MatReservationTimeSensor(restored, on)._attr_native_value is None,
+                     "a reloaded record waits for a live status")
             restored._handle_frame(status(2, 1, power=power))
             check_record(restored, 3, 1, exact)
             restored._handle_frame(HEATING)
             r.ok(restored.reservation is None, "a non-reservation status clears the record")
+            for on in (False, True):
+                r.ok(MatReservationTimeSensor(restored, on)._attr_native_value is None,
+                     "neither timestamp has a value without a reservation")
             clock.now.return_value = START
 
         for unknown in (0, 99, 0xFE):
