@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.26.1 — 2026-11-10
 
 - Bluetooth mat: after confirming cancellation of an on reservation, turn the mat off again
   under the same command lock. The mat and phone app power it on when canceling, so it may
