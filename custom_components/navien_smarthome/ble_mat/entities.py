@@ -46,7 +46,7 @@ from .protocol import (
 
 MODE_NAMES = {
     1: "난방",
-    2: "예약",
+    2: "꺼짐 예약",
     3: "수면",
     4: "살균",
     5: "오류",
@@ -60,6 +60,7 @@ WATER_LEVEL_NAMES = {1: "낮음", 2: "보통", 3: "가득"}
 VOLUME_OPTIONS = ["음소거", "1단계", "2단계", "3단계"]
 ION_CARE_PERIOD_OPTIONS = [f"{hours}시간" for hours in range(1, 13)]
 RESERVATION_CANCEL = "해제"
+RESERVATION_SET = "설정됨"
 SLEEP_HOURS_OPTIONS = [f"{hours}시간" for hours in range(5, 11)]
 
 ERROR_INSPECT = "보일러를 점검해 주세요."
@@ -205,7 +206,10 @@ class MatThermostat(_MatEntity, ClimateEntity):
 class MatModeSensor(_MatEntity, SensorEntity):
     _attr_name = "운전 모드"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = list(MODE_NAMES.values())
+    _attr_options = [
+        MODE_NAMES[1], MODE_NAMES[2], "켜짐 예약",
+        *[MODE_NAMES[mode] for mode in range(3, 10)],
+    ]
 
     def __init__(self, conn: MatConnection) -> None:
         super().__init__(conn, "mode")
@@ -213,8 +217,26 @@ class MatModeSensor(_MatEntity, SensorEntity):
     def _refresh(self) -> None:
         super()._refresh()
         status = self._conn.status
+        if status is None:
+            self._attr_native_value = None
+        elif status.on_reservation_active:
+            self._attr_native_value = "켜짐 예약"
+        else:
+            self._attr_native_value = MODE_NAMES.get(status.mode)
+
+
+class MatReservationTimeSensor(_MatEntity, SensorEntity):
+    _attr_name = "예약 실행 시각"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "reservation_time")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        reservation = self._conn.reservation
         self._attr_native_value = (
-            None if status is None else MODE_NAMES.get(status.mode)
+            None if self._conn.status is None or reservation is None else reservation.run_time
         )
 
 
@@ -455,11 +477,21 @@ class MatReservationSelect(_MatEntity, SelectEntity):
         if status is None:
             self._attr_current_option = None
             return
-        hours = status.on_reservation_hours if self._on else status.off_reservation_hours
-        option = RESERVATION_CANCEL if hours is None else f"{hours}시간"
-        self._attr_current_option = option if option in self._attr_options else None
+        active = status.on_reservation_active if self._on else status.off_reservation_active
+        if not active:
+            self._attr_current_option = RESERVATION_CANCEL
+            return
+        reservation = self._conn.reservation
+        hours = None if reservation is None else reservation.set_hours
+        if hours in hours_range:
+            self._attr_current_option = f"{hours}시간"
+        else:
+            self._attr_options.append(RESERVATION_SET)
+            self._attr_current_option = RESERVATION_SET
 
     async def async_select_option(self, option: str) -> None:
+        if option == RESERVATION_SET:
+            return
         hours = None if option == RESERVATION_CANCEL else int(option.removesuffix("시간"))
         if self._on:
             await self._conn.async_set_on_reservation(hours)
@@ -601,6 +633,7 @@ async def async_setup_mat_sensors(
     async_add_entities(
         [
             MatModeSensor(conn),
+            MatReservationTimeSensor(conn),
             MatLinkSensor(conn),
             MatWaterLevelSensor(conn),
             MatErrorDetailSensor(conn),

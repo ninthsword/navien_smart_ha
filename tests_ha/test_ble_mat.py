@@ -421,6 +421,7 @@ async def test_mat_device_registry_information(
             "left_thermostat",
             "right_thermostat",
             "mode",
+            "reservation_time",
             "link",
             "water_level",
             "error_detail",
@@ -2793,13 +2794,16 @@ async def test_on_reservation_cancel_echoes_its_value_and_may_power_on(
         mode=mode, flags=0x0C, volume=0x23, left=1, right=5, byte13=5
     )
     await setup_mat(hass, mat)
-    mat.respond = confirm_with(HEATING)
+    answers = iter([HEATING, OFF_STATUS])
+    mat.respond = lambda _frame: next(answers)
     await schedule_command(hass, "on_cancel")
     assert mat.controls() == [
-        bytes.fromhex("b280060620fe241e1cfe0105fefefe00fefefe00")
+        bytes.fromhex("b280060620fe241e1cfe0105fefefe00fefefe00"),
+        bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8"),
     ]
     await hass.async_block_till_done()
     assert state_of(hass, unique(hass, "select", "on_reservation")).state == "해제"
+    assert state_of(hass, unique(hass, "switch", "power")).state == "off"
 
 
 @pytest.mark.parametrize("mode", [1, 2, 9])
@@ -2862,7 +2866,7 @@ SCHEDULE_COMMANDS = [
     ("off_set", HEATING, status(mode=2, byte12=9), "b28002020002241e1c231e1c05fefefefefefe3a"),
     ("off_cancel", OFF_RESERVATION, HEATING, "b28001020002241e1c231e1cfefefefefefefe32"),
     ("on_set", OFF_STATUS, OFF_RESERVED, "b280060000fe241e1cfe010500fefe1efefefefa"),
-    ("on_cancel", OFF_RESERVED, HEATING, "b280060200fe241e1cfe0105fefefe00fefefedc"),
+    ("on_cancel", OFF_RESERVED, OFF_STATUS, "b280060200fe241e1cfe0105fefefe00fefefedc"),
     ("sleep_start", SLEEP_READY, SLEEP_RUNNING, "b28003020002241e1c231f200008080101fefe55"),
     ("sleep_stop", SLEEP_RUNNING, HEATING, "b28003020002241e1c231f200000000000fefe43"),
 ]
@@ -2920,7 +2924,7 @@ async def test_schedule_commands_resend_confirm_and_report_final_error(
         (
             "on_cancel", OFF_RESERVED,
             status(mode=2, flags=4, volume=0x23, byte13=9),
-            HEATING,
+            OFF_STATUS,
             "b280060200fe241e1cfe0105fefefe00fefefedc",
             "b280060620fe241e1cfe0109fefefe00fefefe04",
         ),
@@ -2968,7 +2972,6 @@ async def test_schedule_resends_rebuild_echoes_without_changing_the_action(
         ("off_cancel", OFF_RESERVATION, HEATING),
         ("on_set", OFF_STATUS, HEATING),
         ("on_set", OFF_STATUS, status(mode=2, flags=0, byte13=5)),
-        ("on_cancel", OFF_RESERVED, HEATING),
         ("sleep_start", SLEEP_READY, status(heat=3, left=31, right=32)),
         ("sleep_start", SLEEP_READY, status(left=34, right=32)),
         ("sleep_start", SLEEP_READY, status(model=0x22, left=31, right=32)),
@@ -3106,12 +3109,12 @@ async def test_power_off_stays_refused_in_unaccepted_modes(
     ("suffix", "frame", "expected"),
     [
         ("off_reservation", OFF_RESERVATION, "5시간"),
-        ("off_reservation", status(mode=2, byte12=99), "unknown"),
+        ("off_reservation", status(mode=2, byte12=99), "설정됨"),
         ("off_reservation", HEATING, "해제"),
         ("on_reservation", OFF_RESERVED, "5시간"),
-        ("on_reservation", status(mode=6, left=1, right=99), "unknown"),
+        ("on_reservation", status(mode=6, left=1, right=99), "설정됨"),
         ("on_reservation", status(mode=2, flags=0, byte13=7), "7시간"),
-        ("on_reservation", status(mode=2, flags=0, byte13=99), "unknown"),
+        ("on_reservation", status(mode=2, flags=0, byte13=99), "설정됨"),
         ("on_reservation", OFF_STATUS, "해제"),
     ],
 )
