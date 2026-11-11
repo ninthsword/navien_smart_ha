@@ -13,6 +13,7 @@ Every identifier is redacted, nicknames included — those often carry a person'
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -48,6 +49,7 @@ TO_REDACT = {
     "deviceId",
     "deviceSeq",
     "eventId",
+    "homeSeq",
     "localIp",
     "mac",
     "macAddress",
@@ -55,6 +57,7 @@ TO_REDACT = {
     "nickName",
     "regionCode",
     "roomContorllerSeq",
+    "roomControllerSeq",
     "sessionId",
     "sessionID",
     "ssid",
@@ -66,7 +69,16 @@ TO_REDACT = {
     "thingName",
     "userId",
     "userInfo",
+    "userSeq",
 }
+
+_MQTT_CLIENT_ID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:-U\d+)?"
+)
+_MQTT_HOME_NUMBER = re.compile(
+    r"\b\d+(?=/(?:smarttok|mate|airone|scada|homeauto)(?:/|\Z))"
+)
 
 
 async def async_get_config_entry_diagnostics(
@@ -185,6 +197,10 @@ async def async_get_config_entry_diagnostics(
     # too.** The identifier values are collected first, then those strings are scrubbed from
     # the whole result. The topic shape (`dt/rc/7/**REDACTED**/did`) survives, so no evidence
     # for widening support is lost.
+    # MQTT UUID client ids (including -U member suffixes) and home numbers before known
+    # topic prefixes are scrubbed even when no identifier was collected. All literal and
+    # shape spans are found in the original text, then overlapping or touching spans are
+    # merged before replacement so neither rule can leave a fragment of another match.
     return cast(
         dict[str, Any], _scrub(payload, _identifiers(coordinator.raw_devices))
     )
@@ -218,18 +234,42 @@ def _identifiers(raw_devices: list[dict[str, Any]]) -> list[str]:
 
 
 def _scrub(value: Any, secrets: list[str]) -> Any:
-    """Walk the whole result and scrub the identifier strings."""
-    if not secrets:
-        return value
+    """Scrub identifiers, MQTT client ids and home numbers before known topic prefixes.
+
+    Shape rules run even without collected identifiers to protect future string fields.
+    Find all spans in the original text and merge them before replacing any matches.
+    """
     if isinstance(value, dict):
         return {key: _scrub(inner, secrets) for key, inner in value.items()}
     if isinstance(value, list):
         return [_scrub(inner, secrets) for inner in value]
     if isinstance(value, str):
+        spans: list[tuple[int, int]] = []
         for secret in secrets:
-            if secret in value:
-                value = value.replace(secret, "**REDACTED**")
-        return value
+            start = value.find(secret)
+            while start != -1:
+                spans.append((start, start + len(secret)))
+                start = value.find(secret, start + 1)
+        for pattern in (_MQTT_CLIENT_ID, _MQTT_HOME_NUMBER):
+            match = pattern.search(value)
+            while match is not None:
+                spans.append(match.span())
+                match = pattern.search(value, match.start() + 1)
+        if not spans:
+            return value
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        parts: list[str] = []
+        previous_end = 0
+        for start, end in merged:
+            parts.extend((value[previous_end:start], "**REDACTED**"))
+            previous_end = end
+        parts.append(value[previous_end:])
+        return "".join(parts)
     return value
 
 

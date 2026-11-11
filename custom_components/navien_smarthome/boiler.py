@@ -178,6 +178,7 @@ _SENSITIVE_KEYS = {
     "clientid",
     "deviceid",
     "deviceseq",
+    "homeseq",
     "mac",
     "macaddress",
     "mqtttopickey",
@@ -186,10 +187,12 @@ _SENSITIVE_KEYS = {
     "requesttopic",
     "responsetopic",
     "roomcontorllerseq",
+    "roomcontrollerseq",
     "sessionid",
     "ssid",
     "token",
     "userid",
+    "userseq",
 }
 
 
