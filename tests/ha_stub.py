@@ -111,6 +111,11 @@ stub(
     EntityCategory=enum(CONFIG="config", DIAGNOSTIC="diagnostic"),
 )
 stub("homeassistant.helpers.device_registry", DeviceInfo=dict, format_mac=lambda x: x)
+stub(
+    "homeassistant.helpers.entity_registry",
+    async_get=lambda hass: None,
+    async_entries_for_config_entry=lambda *a: [],
+)
 stub("homeassistant.helpers.storage", Store=Base)
 stub("homeassistant.helpers.recorder", get_instance=lambda hass: None)
 stub("homeassistant.helpers.debounce", Debouncer=Base)
@@ -138,6 +143,7 @@ stub(
     "homeassistant.helpers.selector",
     TextSelector=Base,
     SelectSelector=Base,
+    SelectOptionDict=dict,
     SelectSelectorConfig=dict,
     SelectSelectorMode=enum(DROPDOWN="dropdown"),
     EntitySelector=Base,

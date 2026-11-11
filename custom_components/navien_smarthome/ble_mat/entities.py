@@ -226,17 +226,22 @@ class MatModeSensor(_MatEntity, SensorEntity):
 
 
 class MatReservationTimeSensor(_MatEntity, SensorEntity):
-    _attr_name = "예약 실행 시각"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
-    def __init__(self, conn: MatConnection) -> None:
-        super().__init__(conn, "reservation_time")
+    def __init__(self, conn: MatConnection, on: bool) -> None:
+        self._kind = "on" if on else "off"
+        self._attr_name = "켜짐 예약 실행 시각" if on else "꺼짐 예약 실행 시각"
+        super().__init__(conn, f"{self._kind}_reservation_time")
 
     def _refresh(self) -> None:
         super()._refresh()
         reservation = self._conn.reservation
         self._attr_native_value = (
-            None if self._conn.status is None or reservation is None else reservation.run_time
+            reservation.run_time
+            if self._conn.status is not None
+            and reservation is not None
+            and reservation.kind == self._kind
+            else None
         )
 
 
@@ -633,7 +638,8 @@ async def async_setup_mat_sensors(
     async_add_entities(
         [
             MatModeSensor(conn),
-            MatReservationTimeSensor(conn),
+            MatReservationTimeSensor(conn, False),
+            MatReservationTimeSensor(conn, True),
             MatLinkSensor(conn),
             MatWaterLevelSensor(conn),
             MatErrorDetailSensor(conn),

@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.navien_smarthome.ble_mat import connection, transport
@@ -19,6 +20,7 @@ from .test_ble_mat import (
     HEATING,
     OFF_RESERVED,
     OFF_STATUS,
+    PREFIX,
     FakeMat,
     choose,
     confirm_with,
@@ -63,8 +65,8 @@ def reservation_status(kind: str, hours: int) -> bytes:
     return status(mode=6, flags=0, left=1, right=hours)
 
 
-def time_state(hass: HomeAssistant) -> Any:
-    return state_of(hass, unique(hass, "sensor", "reservation_time"))
+def time_state(hass: HomeAssistant, kind: str) -> Any:
+    return state_of(hass, unique(hass, "sensor", f"{kind}_reservation_time"))
 
 
 def assert_record(
@@ -76,8 +78,42 @@ def assert_record(
     assert (record.kind, record.set_hours, record.last_reported_hours, record.run_time) == (
         kind, set_hours, last_hours, run_time,
     )
-    assert time_state(hass).state == ("unknown" if run_time is None else run_time.isoformat())
-    assert time_state(hass).attributes["device_class"] == "timestamp"
+    for sensor_kind in ("off", "on"):
+        expected = run_time.isoformat() if sensor_kind == kind and run_time is not None else "unknown"
+        assert time_state(hass, sensor_kind).state == expected
+        assert time_state(hass, sensor_kind).attributes["device_class"] == "timestamp"
+
+
+@pytest.mark.parametrize("retired_on_this_entry", [False, True])
+async def test_setup_removes_only_its_own_retired_reservation_timestamp(
+    hass: HomeAssistant, mat: FakeMat, retired_on_this_entry: bool,
+) -> None:
+    entry = make_entry(hass)
+    other = MockConfigEntry(domain=DOMAIN, title="다른 테스트 매트", unique_id="synthetic-other", data={})
+    other.add_to_hass(hass)
+    registry = er.async_get(hass)
+    retired = registry.async_get_or_create(
+        "sensor", DOMAIN, f"{PREFIX}_reservation_time",
+        config_entry=entry if retired_on_this_entry else other,
+    )
+    preserved = [
+        registry.async_get_or_create("sensor", DOMAIN, f"{PREFIX}_mode", config_entry=entry),
+        registry.async_get_or_create("sensor", DOMAIN, f"{PREFIX}_other_reservation_time", config_entry=entry),
+        registry.async_get_or_create("binary_sensor", DOMAIN, f"{PREFIX}_reservation_time", config_entry=entry),
+        registry.async_get_or_create("sensor", DOMAIN, "synthetic_other_reservation_time", config_entry=other),
+    ]
+    assert registry.async_get(retired.entity_id) is not None
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert (registry.async_get(retired.entity_id) is None) == retired_on_this_entry
+    assert all(registry.async_get(entity.entity_id) is not None for entity in preserved)
+    for kind, name in (("off", "꺼짐 예약 실행 시각"), ("on", "켜짐 예약 실행 시각")):
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{PREFIX}_{kind}_reservation_time")
+        assert entity_id is not None
+        entity = registry.async_get(entity_id)
+        assert entity is not None
+        assert entity.config_entry_id == entry.entry_id
+        assert entity.original_name == name
 
 
 @pytest.mark.parametrize("confirmed", [OFF_STATUS, status(mode=4), status(mode=5), status(heat=0)])
@@ -242,7 +278,8 @@ async def test_first_decrement_after_a_reconnect_keeps_the_known_time(
     mat.first_status = reservation_status(kind, 3)
     entry = await setup_mat(hass, mat)
     await turn(hass, "turn_off", unique(hass, "switch", "enabled"))
-    assert time_state(hass).state == "unavailable"
+    for sensor_kind in ("off", "on"):
+        assert time_state(hass, sensor_kind).state == "unavailable"
     reservation_clock.advance(hours=1, minutes=10)
     mat.first_status = reservation_status(kind, 2)
     await turn(hass, "turn_on", unique(hass, "switch", "enabled"))
@@ -297,7 +334,8 @@ async def test_kind_change_starts_a_record_and_no_reservation_clears_it(
     assert_record(hass, entry, "on", 3, 3, START + timedelta(hours=3, minutes=30))
     await feed_and_settle(hass, mat, OFF_STATUS)
     assert entry.runtime_data.reservation is None
-    assert time_state(hass).state == "unknown"
+    for sensor_kind in ("off", "on"):
+        assert time_state(hass, sensor_kind).state == "unknown"
     for kind in ("off", "on"):
         select = state_of(hass, unique(hass, "select", f"{kind}_reservation"))
         assert select.state == "해제"
@@ -394,7 +432,8 @@ async def test_whole_record_survives_reload_until_the_first_status_applies_the_r
     await settle()
     assert entry.runtime_data.status is None
     assert entry.runtime_data.reservation.run_time == exact
-    assert time_state(hass).state == "unavailable"
+    for sensor_kind in ("off", "on"):
+        assert time_state(hass, sensor_kind).state == "unavailable"
     await feed_and_settle(hass, mat, reservation_status(kind, hours))
     same = kind == "on" and hours == 2
     assert_record(
@@ -429,6 +468,7 @@ async def test_absent_or_malformed_reservation_is_ignored_before_first_status(
     await hass.async_block_till_done()
     await settle()
     assert entry.runtime_data.reservation is None
-    assert time_state(hass).state == "unavailable"
+    for sensor_kind in ("off", "on"):
+        assert time_state(hass, sensor_kind).state == "unavailable"
     await feed_and_settle(hass, mat, reservation_status("on", 3))
     assert_record(hass, entry, "on", 3, 3, START + timedelta(hours=3))

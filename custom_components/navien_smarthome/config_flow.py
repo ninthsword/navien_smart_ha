@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import voluptuous as vol
 from homeassistant.config_entries import (
@@ -23,9 +23,7 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -35,16 +33,12 @@ from .api import NavienSmartApi, NavienSmartAuthError, NavienSmartError
 from .ble_mat import CONF_MAT_MODEL, MAT_MODELS, is_mat_entry, transport
 from .ble_mat.connection import (
     CONF_MAT_ID,
+    MatConnection,
     RegistrationNoStatus,
     RegistrationRefused,
     async_register_mat,
 )
-from .ble_mat.programs import (
-    CONF_CUSTOM_PROGRAMS,
-    CustomProgram,
-    Section,
-    read_program,
-)
+from .ble_mat.programs import CONF_CUSTOM_PROGRAMS, CustomProgram, read_program
 from .const import CONF_HEATING_ENTITIES, CONF_HOME_SEQ, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -282,8 +276,7 @@ class NavienSmartOptionsFlow(OptionsFlow):
     def __init__(self) -> None:
         super().__init__()
         self._program_number = "1"
-        self._program: CustomProgram | None = None
-        self._custom_left: list[Section] = []
+        self._program: CustomProgram = {"left": [], "right": []}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -365,7 +358,9 @@ class NavienSmartOptionsFlow(OptionsFlow):
             self._program_number = user_input["program"]
             if user_input.get("reset", False):
                 return self._save_custom_program(None)
-            self._program = read_program(self.config_entry.options, self._program_number)
+            self._program = read_program(
+                self.config_entry.options, self._program_number
+            ) or {"left": [], "right": []}
             return await self.async_step_custom_left()
         return self.async_show_form(
             step_id="custom_program",
@@ -388,68 +383,147 @@ class NavienSmartOptionsFlow(OptionsFlow):
     async def async_step_custom_left(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            sections, error = _custom_sections(user_input)
-            if error is None:
-                self._custom_left = sections
-                return await self.async_step_custom_right()
-            errors["base"] = error
-        return self._custom_side_form("left", user_input, errors)
+        return self._custom_side_menu("left")
 
     async def async_step_custom_right(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            if user_input.get("enabled") and user_input.get("copy_left"):
-                sections = [section.copy() for section in self._custom_left]
-                error = None if sections else "custom_copy_left"
-            else:
-                sections, error = _custom_sections(user_input)
-            if error is None and not self._custom_left and not sections:
-                error = "custom_side_required"
-            if error is None:
-                return self._save_custom_program(
-                    {"left": self._custom_left, "right": sections}
-                )
-            errors["base"] = error
-        return self._custom_side_form("right", user_input, errors)
+        return self._custom_side_menu("right")
 
-    def _custom_side_form(
-        self, side: str, user_input: dict[str, Any] | None, errors: dict[str, str]
+    async def async_step_custom_left_add(
+        self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        rows = (
-            [] if self._program is None
-            else self._program["left"] if side == "left" else self._program["right"]
+        return self._custom_section_form("left", user_input)
+
+    async def async_step_custom_right_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self._custom_section_form("right", user_input)
+
+    async def async_step_custom_left_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._program["left"].pop()
+        return self._custom_side_menu("left")
+
+    async def async_step_custom_right_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._program["right"].pop()
+        return self._custom_side_menu("right")
+
+    async def async_step_custom_left_clear(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._program["left"].clear()
+        return self._custom_side_menu("left")
+
+    async def async_step_custom_right_clear(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._program["right"].clear()
+        return self._custom_side_menu("right")
+
+    async def async_step_custom_copy_left(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._program["right"] = [section.copy() for section in self._program["left"]]
+        return self._custom_side_menu("right")
+
+    async def async_step_custom_save(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self._save_custom_program(self._program)
+
+    def _custom_temperature_range(self) -> tuple[int, int]:
+        conn: MatConnection | None = getattr(self.config_entry, "runtime_data", None)
+        if conn is not None:
+            if conn.status is not None and conn.status.reads_capabilities:
+                return conn.status.heat_range
+            if conn.stored_status is not None:
+                return conn.stored_status.heat_range
+        return (25, 50)
+
+    def _custom_side_menu(self, side: Literal["left", "right"]) -> ConfigFlowResult:
+        rows = self._program[side]
+        total = sum(section["hours"] for section in rows)
+        low, high = self._custom_temperature_range()
+        sections = ", ".join(
+            f"{index}구간 {section['hours']}시간 {section['temperature']}도"
+            + (" (범위 밖)" if not low <= section["temperature"] <= high else "")
+            for index, section in enumerate(rows, 1)
+        ) or "구간이 없어 사용하지 않습니다."
+        outside_range = any(
+            not low <= section["temperature"] <= high
+            for side_sections in (self._program["left"], self._program["right"])
+            for section in side_sections
         )
-        defaults: dict[str, Any] = {"enabled": self._program is None or bool(rows)}
-        for index in range(1, 6):
-            section = rows[index - 1] if index <= len(rows) else None
-            defaults[f"hours_{index}"] = 0 if section is None else section["hours"]
-            defaults[f"temperature_{index}"] = (
-                30 if section is None else section["temperature"]
-            )
-        defaults["copy_left"] = False
-        if user_input is not None:
-            defaults.update(user_input)
-        fields: dict[Any, Any] = {
-            vol.Required("enabled", default=defaults["enabled"]): bool,
-        }
-        if side == "right":
-            fields[vol.Required("copy_left", default=defaults["copy_left"])] = bool
-        for index in range(1, 6):
-            for key, low, high in (("hours", 0, 12), ("temperature", 25, 50)):
-                name = f"{key}_{index}"
-                fields[vol.Required(name, default=defaults[name])] = NumberSelector(
-                    NumberSelectorConfig(
-                        min=low, max=high, step=1, mode=NumberSelectorMode.BOX
-                    )
-                )
-        return self.async_show_form(
+        menu_options = []
+        if len(rows) < 5 and total < 12:
+            menu_options.append(f"custom_{side}_add")
+        if rows:
+            menu_options.extend([f"custom_{side}_remove", f"custom_{side}_clear"])
+        if side == "left":
+            menu_options.append("custom_right")
+        else:
+            if self._program["left"]:
+                menu_options.append("custom_copy_left")
+            menu_options.append("custom_left")
+            if self._program["left"] or rows:
+                menu_options.append("custom_save")
+        return self.async_show_menu(
             step_id=f"custom_{side}",
+            menu_options=menu_options,
+            description_placeholders={
+                "sections": sections,
+                "total": str(total),
+                "remaining": str(12 - total),
+                "warning": (
+                    "온도 범위 밖의 구간이 있어 이 프로그램을 시작할 수 없습니다."
+                    if outside_range else ""
+                ),
+            },
+        )
+
+    def _custom_section_form(
+        self, side: Literal["left", "right"], user_input: dict[str, Any] | None
+    ) -> ConfigFlowResult:
+        rows = self._program[side]
+        if user_input is not None:
+            rows.append({
+                "hours": int(user_input["hours"]),
+                "temperature": int(user_input["temperature"]),
+            })
+            return self._custom_side_menu(side)
+        remaining = 12 - sum(section["hours"] for section in rows)
+        low, high = self._custom_temperature_range()
+        temperature = rows[-1]["temperature"] if rows else 30
+        if not low <= temperature <= high:
+            temperature = 30 if low <= 30 <= high else low
+        fields = {
+            vol.Required("hours", default="1"): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=str(hour), label=f"{hour}시간")
+                        for hour in range(1, remaining + 1)
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required("temperature", default=str(temperature)): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=str(degree), label=f"{degree}도")
+                        for degree in range(low, high + 1)
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        }
+        return self.async_show_form(
+            step_id=f"custom_{side}_add",
             data_schema=_form_schema(vol.Schema(fields)),
-            errors=errors,
+            description_placeholders={"section": str(len(rows) + 1), "remaining": str(remaining)},
         )
 
     def _save_custom_program(self, program: CustomProgram | None) -> ConfigFlowResult:
@@ -462,31 +536,3 @@ class NavienSmartOptionsFlow(OptionsFlow):
             programs[self._program_number] = program
         options[CONF_CUSTOM_PROGRAMS] = programs
         return self.async_create_entry(data=options)
-
-
-def _custom_sections(user_input: dict[str, Any]) -> tuple[list[Section], str | None]:
-    """Zero-hour rows end a side's contiguous list; disabled sides store no rows."""
-    if not user_input.get("enabled", False):
-        return [], None
-    sections: list[Section] = []
-    gap = False
-    for index in range(1, 6):
-        hours = user_input.get(f"hours_{index}", 0)
-        temperature = user_input.get(f"temperature_{index}", 30)
-        if any(
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not low <= value <= high
-            or int(value) != value
-            for value, low, high in ((hours, 0, 12), (temperature, 25, 50))
-        ):
-            return [], "custom_rows"
-        if hours == 0:
-            gap = True
-        elif gap:
-            return [], "custom_contiguous"
-        else:
-            sections.append({"hours": int(hours), "temperature": int(temperature)})
-    if not 1 <= sum(section["hours"] for section in sections) <= 12:
-        return [], "custom_hours"
-    return sections, None

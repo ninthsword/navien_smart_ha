@@ -96,46 +96,42 @@
       },
       "custom_left": {
         "title": "맞춤 수면 왼쪽 설정",
-        "description": "왼쪽을 사용하려면 1구간부터 연속으로 입력하고 총 1~12시간으로 설정해 주세요. 시간 0은 사용하지 않는 구간이며, 온도는 25~50도의 정수입니다.",
-        "data": {
-          "enabled": "왼쪽 사용",
-          "hours_1": "1구간 시간",
-          "temperature_1": "1구간 온도",
-          "hours_2": "2구간 시간",
-          "temperature_2": "2구간 온도",
-          "hours_3": "3구간 시간",
-          "temperature_3": "3구간 온도",
-          "hours_4": "4구간 시간",
-          "temperature_4": "4구간 온도",
-          "hours_5": "5구간 시간",
-          "temperature_5": "5구간 온도"
+        "description": "{sections}\n\n합계 {total}시간, 남은 시간 {remaining}시간\n\n{warning}",
+        "menu_options": {
+          "custom_left_add": "구간 추가",
+          "custom_left_remove": "마지막 구간 삭제",
+          "custom_left_clear": "왼쪽 사용 안 함",
+          "custom_right": "다음: 오른쪽 설정"
         }
       },
       "custom_right": {
         "title": "맞춤 수면 오른쪽 설정",
-        "description": "오른쪽을 설정하거나 오른쪽 사용을 켠 상태에서 왼쪽 시간과 온도를 복사해 주세요. 한쪽 이상 사용해야 합니다. 시간 0은 사용하지 않는 구간이며, 1구간부터 연속으로 총 1~12시간, 온도는 25~50도의 정수로 입력해 주세요.",
+        "description": "{sections}\n\n합계 {total}시간, 남은 시간 {remaining}시간\n\n{warning}",
+        "menu_options": {
+          "custom_right_add": "구간 추가",
+          "custom_right_remove": "마지막 구간 삭제",
+          "custom_right_clear": "오른쪽 사용 안 함",
+          "custom_copy_left": "왼쪽과 같게",
+          "custom_left": "이전: 왼쪽 설정",
+          "custom_save": "저장"
+        }
+      },
+      "custom_left_add": {
+        "title": "맞춤 수면 왼쪽 {section}구간 입력",
+        "description": "한쪽당 최대 12시간 동안 5개 구간별 온도를 설정할 수 있습니다. 남은 시간은 {remaining}시간입니다.",
         "data": {
-          "enabled": "오른쪽 사용",
-          "copy_left": "왼쪽 시간과 온도 적용",
-          "hours_1": "1구간 시간",
-          "temperature_1": "1구간 온도",
-          "hours_2": "2구간 시간",
-          "temperature_2": "2구간 온도",
-          "hours_3": "3구간 시간",
-          "temperature_3": "3구간 온도",
-          "hours_4": "4구간 시간",
-          "temperature_4": "4구간 온도",
-          "hours_5": "5구간 시간",
-          "temperature_5": "5구간 온도"
+          "hours": "시간",
+          "temperature": "온도"
+        }
+      },
+      "custom_right_add": {
+        "title": "맞춤 수면 오른쪽 {section}구간 입력",
+        "description": "한쪽당 최대 12시간 동안 5개 구간별 온도를 설정할 수 있습니다. 남은 시간은 {remaining}시간입니다.",
+        "data": {
+          "hours": "시간",
+          "temperature": "온도"
         }
       }
-    },
-    "error": {
-      "custom_rows": "시간은 0~12의 정수, 온도는 25~50도의 정수로 입력해 주세요.",
-      "custom_contiguous": "1구간부터 빈 구간 없이 연속으로 입력해 주세요.",
-      "custom_hours": "사용하는 쪽의 합계 시간을 1~12시간으로 설정해 주세요.",
-      "custom_copy_left": "왼쪽 사용을 켜고 구간을 설정한 뒤 복사해 주세요.",
-      "custom_side_required": "모드를 적용할 위치를 하나 이상 선택해 주세요."
     },
     "abort": {
       "custom_sleep_running": "활성화 중인 맞춤모드를 중지하셔야 설정이 가능합니다."

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.26.2 — 2026-11-11
+
+- Bluetooth mat: replace the reservation timestamp with separate off/on reservation timestamps
+  and remove only the entry's retired timestamp entity at setup. Dashboards and automations
+  using the retired entity must switch to the new sensors.
+- Bluetooth mat: edit custom sleep sections through left/right menus and hour/temperature
+  dropdowns limited by the remaining hours and the mat's heat range. Keep edits local until
+  saved, support deleting the last section, clearing a side and copying the left side, and
+  mark stored temperatures outside the offered range without changing them.
+- Bluetooth mat: remove tilde ranges from configure descriptions to prevent Markdown
+  strikethrough rendering.
+
 ## v0.26.1 — 2026-11-10
 
 - Bluetooth mat: after confirming cancellation of an on reservation, turn the mat off again
