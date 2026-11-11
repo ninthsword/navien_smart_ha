@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.26.3 — 2026-11-11
 
 - Diagnostics: redact home, member and room-controller sequence numbers in device lists
   and boiler observations. Scrub MQTT client IDs and topic home numbers throughout the
