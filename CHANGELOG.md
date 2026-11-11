@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Diagnostics: redact home, member and room-controller sequence numbers in device lists
+  and boiler observations. Scrub MQTT client IDs and topic home numbers throughout the
+  export even without collected identifiers, merging overlapping or touching matches
+  before replacement to avoid exposing identifier fragments.
+
 ## v0.26.2 — 2026-11-11
 
 - Bluetooth mat: replace the reservation timestamp with separate off/on reservation timestamps

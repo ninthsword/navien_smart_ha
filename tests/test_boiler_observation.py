@@ -404,13 +404,19 @@ identity_shape = observe_boiler_message(
                 "deviceSeq": 987654,
                 "roomContorllerSeq": 123456,
                 "additionalValue": "7391",
+                "homeSeq": 12,
+                "userSeq": "34",
+                "roomControllerSeq": 56,
                 "mode": 2,
             }
         }
     ).encode(),
     "12345/smarttok/DEVICE-SECRET-1234/status",
 )["shape"]["payload"]
-for key in ("deviceSeq", "roomContorllerSeq", "additionalValue"):
+for key in (
+    "deviceSeq", "roomContorllerSeq", "additionalValue",
+    "homeSeq", "userSeq", "roomControllerSeq",
+):
     r.ok(identity_shape[key] == {"kind": "redacted"}, f"the observation redacts {key}")
 r.ok(identity_shape["mode"] == 2, "the keys beside them stay as they were")
 
