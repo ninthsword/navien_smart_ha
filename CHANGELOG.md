@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.26.2 — 2026-11-11
 
 - Bluetooth mat: replace the reservation timestamp with separate off/on reservation timestamps
   and remove only the entry's retired timestamp entity at setup. Dashboards and automations
