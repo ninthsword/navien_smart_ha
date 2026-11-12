@@ -748,3 +748,8 @@ devtools/pyright/node_modules/.bin/pyright --project pyrightconfig.json --python
 이름(`temperature_unit`, `current_temperature`, `target_temperature`)과 새 `native_`
 이름으로 함께 제공합니다. 2026.8~2026.10은 기존 이름을, 2026.11은 새 이름을 읽으므로
 2026.11에서 이 통합구성요소의 지원 중단 경고가 나타나지 않고 표시 값은 같습니다.
+
+## 개발용 동작 지도
+
+[핵심 동작 지도](docs/behavior-map.md)에서 기능별 코드·테스트와 확인 범위를 찾을 수 있습니다.
+지도는 배포 상태나 실제 장치·서비스의 정상 동작을 보장하지 않습니다.

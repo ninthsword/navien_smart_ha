@@ -1,0 +1,32 @@
+# Behavior map: Navien cloud and Bluetooth integration
+
+This map connects the integration's main behavior to its implementation and relevant tests.
+For installation, supported devices and user controls, start with [README.md](../README.md).
+
+- **SOURCE**: inspected code at `de018c32d4c8786b47bedee02dc3881c85ca8baf` (v0.26.3) on 2026-11-11.
+- **TEST LINK**: relevant executable checks; this map records no test execution results.
+- **UNKNOWN**: runtime behavior that needs separate device or service observations.
+
+| Scenario | Input, decision and effect | Evidence navigation |
+|---|---|---|
+| Setup and authentication | The config flow selects cloud login or Bluetooth mat registration. Entry setup dispatches to the cloud coordinator or the mat connection. | **SOURCE**: [config_flow.py](../custom_components/navien_smarthome/config_flow.py), [__init__.py](../custom_components/navien_smarthome/__init__.py), [ble_mat/setup.py](../custom_components/navien_smarthome/ble_mat/setup.py); **TEST LINK**: [test_config_flow.py](../tests_ha/test_config_flow.py), [test_ble_mat.py](../tests_ha/test_ble_mat.py) |
+| Cloud polling and MQTT state | REST polling rebuilds device objects; subscribed reported-state messages update live fields. Follow retained state and freshness through the next poll. Unload stops MQTT callbacks and scheduled work. | **SOURCE**: [coordinator.py](../custom_components/navien_smarthome/coordinator.py), [mqtt.py](../custom_components/navien_smarthome/mqtt.py); **TEST LINK**: [test_poll_and_diagnostics.py](../tests_ha/test_poll_and_diagnostics.py), [test_airone_air_kinds.py](../tests/test_airone_air_kinds.py), [test_mqtt_stop.py](../tests_ha/test_mqtt_stop.py) |
+| Cloud device commands | Commands use REST; MQTT is subscribe-only telemetry. Cloud mat zone controls retain the other zone's target and last known state across power changes. | **SOURCE**: [api.py](../custom_components/navien_smarthome/api.py), [models.py](../custom_components/navien_smarthome/models.py), [climate.py](../custom_components/navien_smarthome/climate.py); **TEST LINK**: [test_zone_onoff.py](../tests/test_zone_onoff.py), [test_mat_port.py](../tests_ha/test_mat_port.py), [test_boiler_climate.py](../tests_ha/test_boiler_climate.py) |
+| Boiler status and estimated pump operation | Boiler parsing supplies reported values. Pump operation is estimated from the selected thermostat entities and hot-water use; the circulation-flow sensor applies that estimate to the reported heating flow. | **SOURCE**: [boiler.py](../custom_components/navien_smarthome/boiler.py), [entity.py](../custom_components/navien_smarthome/entity.py), [binary_sensor.py](../custom_components/navien_smarthome/binary_sensor.py), [sensor.py](../custom_components/navien_smarthome/sensor.py); **TEST LINK**: [test_boiler_feature.py](../tests_ha/test_boiler_feature.py), [test_boiler_heating_pump.py](../tests_ha/test_boiler_heating_pump.py) |
+| Bluetooth mat connection and controls | The local BLE connection authenticates, parses status notifications, sends protocol frames and waits for confirmation. Link loss clears current status and triggers the reconnect loop. | **SOURCE**: [ble_mat/connection.py](../custom_components/navien_smarthome/ble_mat/connection.py), [ble_mat/transport.py](../custom_components/navien_smarthome/ble_mat/transport.py), [ble_mat/protocol.py](../custom_components/navien_smarthome/ble_mat/protocol.py); **TEST LINK**: [test_ble_mat_protocol.py](../tests/test_ble_mat_protocol.py), [test_ble_mat.py](../tests_ha/test_ble_mat.py), [test_ble_mat_reconnect.py](../tests_ha/test_ble_mat_reconnect.py) |
+| Bluetooth mat reservations | On/off reservations have separate execution-time sensors. Cancelling an on reservation sends the cancellation followed by power-off when the confirmed state requires it. | **SOURCE**: [ble_mat/connection.py](../custom_components/navien_smarthome/ble_mat/connection.py), [ble_mat/entities.py](../custom_components/navien_smarthome/ble_mat/entities.py), [ble_mat/setup.py](../custom_components/navien_smarthome/ble_mat/setup.py); **TEST LINK**: [test_ble_mat_reservation.py](../tests/test_ble_mat_reservation.py), [test_ble_mat_reservation.py (HA)](../tests_ha/test_ble_mat_reservation.py), [test_ble_mat.py](../tests_ha/test_ble_mat.py) |
+| Bluetooth mat custom sleep | The options menu edits per-side hour/temperature sections and saves programs in entry options. Starting custom sleep validates the selected program before sending its sections. | **SOURCE**: [config_flow.py](../custom_components/navien_smarthome/config_flow.py), [ble_mat/programs.py](../custom_components/navien_smarthome/ble_mat/programs.py), [ble_mat/connection.py](../custom_components/navien_smarthome/ble_mat/connection.py); **TEST LINK**: [test_ble_mat_custom.py](../tests/test_ble_mat_custom.py), [test_ble_mat_custom.py (HA)](../tests_ha/test_ble_mat_custom.py) |
+| Gas statistics | Historical import uses a prior cumulative baseline and timestamped daily/monthly spans. Review baseline continuity before changing accounting. | **SOURCE**: [gas_statistics.py](../custom_components/navien_smarthome/gas_statistics.py); **TEST LINK**: [test_gas_statistics.py](../tests/test_gas_statistics.py), [test_gas_statistics.py (HA)](../tests_ha/test_gas_statistics.py) |
+| Diagnostics and privacy | Cloud diagnostics redact identifiers in structured data and embedded text, including sequence numbers and MQTT identifiers. Bluetooth diagnostics use their separate mat view. | **SOURCE**: [diagnostics.py](../custom_components/navien_smarthome/diagnostics.py), [ble_mat/setup.py](../custom_components/navien_smarthome/ble_mat/setup.py), [ble_mat/connection.py](../custom_components/navien_smarthome/ble_mat/connection.py); **TEST LINK**: [test_review_fixes.py](../tests/test_review_fixes.py), [test_poll_and_diagnostics.py](../tests_ha/test_poll_and_diagnostics.py), [test_ble_mat.py](../tests_ha/test_ble_mat.py) |
+
+## Boundaries and unknowns
+
+The poll/diagnostics tests cover state and redaction. Live REST commands, Bluetooth radio
+reliability, physical pump operation and current HA statistics need separate observations.
+The cause of a Bluetooth disconnect remains **UNKNOWN** from these source links alone.
+
+## Freshness and reconsideration
+
+Revisit the affected row when changing setup, poll/MQTT precedence, retained fields, report
+parsing, BLE frames or reconnect handling, reservation/custom-program state, diagnostics or
+statistics timestamps. Review the linked tests and update the source revision after inspection.
