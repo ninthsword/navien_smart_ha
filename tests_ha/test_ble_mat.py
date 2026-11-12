@@ -2788,20 +2788,98 @@ async def test_on_reservation_fractional_temperature_frame_and_confirmation(
 
 
 @pytest.mark.parametrize("mode", [2, 6])
+@pytest.mark.parametrize("scenario", ["normal", "lost_cancel", "lost_off", "late_off"])
 async def test_on_reservation_cancel_echoes_its_value_and_may_power_on(
-    hass: HomeAssistant, mat: FakeMat, mode: int
+    hass: HomeAssistant, mat: FakeMat, mode: int, scenario: str
 ) -> None:
     mat.first_status = status(
         mode=mode, flags=0x0C, volume=0x23, left=1, right=5, byte13=5
     )
-    await setup_mat(hass, mat)
-    answers = iter([HEATING, OFF_STATUS])
-    mat.respond = lambda _frame: next(answers)
-    await schedule_command(hass, "on_cancel")
-    assert mat.controls() == [
-        bytes.fromhex("b280060620fe241e1cfe0105fefefe00fefefe00"),
-        bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8"),
-    ]
+    entry = await setup_mat(hass, mat)
+    cancel_frame = bytes.fromhex("b280060620fe241e1cfe0105fefefe00fefefe00")
+    off_frame = bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8")
+    unexpected_commands: list[bytes] = []
+
+    def command_response(frame: bytes) -> bytes | None:
+        if frame == cancel_frame:
+            return HEATING
+        if frame == off_frame:
+            return OFF_STATUS
+        return None
+
+    response_for_command = command_response
+    suppressed_frame = {
+        "lost_cancel": cancel_frame,
+        "lost_off": off_frame,
+        "late_off": off_frame,
+    }.get(scenario)
+    reply_suppressed = False
+    held_off_reply: bytes | None = None
+
+    def respond(frame: bytes) -> bytes | None:
+        nonlocal reply_suppressed, held_off_reply
+        if frame not in (cancel_frame, off_frame):
+            unexpected_commands.append(frame)
+        answer = response_for_command(frame)
+        if frame == suppressed_frame and not reply_suppressed:
+            reply_suppressed = True
+            if scenario == "late_off":
+                held_off_reply = answer
+            return None
+        return answer
+
+    mat.respond = respond
+    late_off_results: list[bool] = []
+    late_off_feeds: list[bytes] = []
+    if scenario == "late_off":
+        send_and_confirm = entry.runtime_data._async_send_and_confirm
+
+        async def send_and_confirm_with_late_off(
+            send: connection._Send,
+            cancel_received: list[connection.MatStatus] | None = None,
+        ) -> bool:
+            nonlocal held_off_reply
+            confirmed = await send_and_confirm(send, cancel_received)
+            if (
+                send.frame == off_frame
+                and cancel_received is None
+                and held_off_reply is not None
+            ):
+                late_off_results.append(confirmed)
+                mat.feed(held_off_reply)
+                late_off_feeds.append(held_off_reply)
+                held_off_reply = None
+            return confirmed
+
+        with patch.object(
+            entry.runtime_data,
+            "_async_send_and_confirm",
+            send_and_confirm_with_late_off,
+        ):
+            await schedule_command(hass, "on_cancel")
+    else:
+        await schedule_command(hass, "on_cancel")
+
+    assert not unexpected_commands, unexpected_commands
+    controls = mat.controls()
+    cancel_count = controls.count(cancel_frame)
+    off_count = controls.count(off_frame)
+    assert 1 <= cancel_count <= connection.SEND_ATTEMPTS, (
+        "cancel/off stage-group: cancellation group missing or exceeds SEND_ATTEMPTS"
+    )
+    assert 1 <= off_count <= connection.SEND_ATTEMPTS, (
+        "cancel/off stage-group: power-off group missing or exceeds SEND_ATTEMPTS"
+    )
+    assert controls == [cancel_frame] * cancel_count + [off_frame] * off_count, (
+        "cancel/off stage-group: expected exact cancellation frames before power-off frames"
+    )
+    assert reply_suppressed == (scenario != "normal")
+    if suppressed_frame is not None:
+        assert controls.count(suppressed_frame) >= 2
+    if scenario == "late_off":
+        assert late_off_results == [False]
+        assert late_off_feeds == [OFF_STATUS]
+        assert held_off_reply is None
     await hass.async_block_till_done()
     assert state_of(hass, unique(hass, "select", "on_reservation")).state == "해제"
     assert state_of(hass, unique(hass, "switch", "power")).state == "off"
