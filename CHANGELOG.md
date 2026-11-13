@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.26.4 — 2026-11-13
+
+- Bluetooth mat: make one immediate reconnect attempt when an authenticated link with live
+  telemetry drops; replenish its budget only after 60 seconds of stable ordinary telemetry.
+- Bluetooth mat: keep the last confirmed display state for at most three seconds from link
+  loss while connection indicators and controls continue to follow live status.
+- Bluetooth mat: reject stale queued writes, confirmations and resend/cancel-off stages
+  across connection generations; clear recovery timers and snapshots on unload.
+
 ## v0.26.3 — 2026-11-11
 
 - Diagnostics: redact home, member and room-controller sequence numbers in device lists
