@@ -67,6 +67,8 @@ RETRY_DELAY = 30.0
 RETRY_FLOOR = 1.0
 ADVERTISEMENT_POLL_INTERVAL = 0.5
 SILENCE_TIMEOUT = 60.0
+DISPLAY_GRACE = 3.0
+STABLE_STATUS_TIME = 60.0
 REPLY_TIMEOUT = 15.0
 FIRST_STATUS_TIMEOUT = 15.0
 CONFIRM_TIMEOUT = 3.0
@@ -241,6 +243,12 @@ class MatConnection:
         self._store = _store_for(hass, entry.entry_id)
         self.enabled = True
         self.status: MatStatus | None = None
+        self._display_snapshot: MatStatus | None = None
+        self._display_deadline: float | None = None
+        self._display_expiry: asyncio.TimerHandle | None = None
+        self._immediate_retry_available = True
+        self._retry_immediately = False
+        self._stable_since: float | None = None
         self.stored_status: MatStatus | None = None
         self.reservation: Reservation | None = None
         self.on_reservation_temperature = INITIAL_TARGET
@@ -263,6 +271,44 @@ class MatConnection:
         self._refusals = 0
         self._cache_cleared = False
         self._attempt_authenticated = False
+
+    @property
+    def display_status(self) -> MatStatus | None:
+        """Expose confirmed values briefly without making them live command state."""
+        if self.status is not None:
+            return self.status
+        if self._display_deadline is not None and monotonic() < self._display_deadline:
+            return self._display_snapshot
+        return None
+
+    @callback
+    def _clear_display(self) -> None:
+        if self._display_expiry is not None:
+            self._display_expiry.cancel()
+            self._display_expiry = None
+        self._display_snapshot = None
+        self._display_deadline = None
+
+    @callback
+    def _retain_display(self, status: MatStatus) -> None:
+        self._clear_display()
+        self._display_snapshot = status
+        deadline = self._display_deadline = monotonic() + DISPLAY_GRACE
+
+        @callback
+        def expire() -> None:
+            if self._display_snapshot is not status or self._display_deadline != deadline:
+                return
+            remaining = deadline - monotonic()
+            if remaining > 0:
+                self._display_expiry = self.hass.loop.call_later(remaining, expire)
+                return
+            self._clear_display()
+            self._publish()
+
+        self._display_expiry = self.hass.loop.call_later(
+            max(0.0, deadline - monotonic()), expire
+        )
 
     @property
     def link_state(self) -> str:
@@ -341,6 +387,10 @@ class MatConnection:
         await self._store.async_save(self._payload())
 
     async def _async_cancel_loop(self) -> None:
+        self._generation += 1
+        self._retry_immediately = False
+        self._clear_display()
+        self._link_lost()
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
@@ -380,6 +430,9 @@ class MatConnection:
                 else:
                     retry_floor = min(retry_floor * 2, RETRY_DELAY)
                 _LOGGER.debug("블루투스 매트 연결 실패: %s", type(err).__name__)
+            if self._retry_immediately:
+                self._retry_immediately = False
+                continue
             await self._async_wait_retry(retry_floor)
 
     async def _async_wait_retry(self, floor: float) -> None:
@@ -417,7 +470,7 @@ class MatConnection:
         def on_disconnect() -> None:
             if generation == self._generation:
                 self._generation += 1
-                self._link_lost()
+                self._link_lost(unexpected=True)
 
         @callback
         def on_frame(data: bytes) -> None:
@@ -466,12 +519,24 @@ class MatConnection:
             if self._lost.is_set():
                 raise _LinkError("link lost")
             self._activity.clear()
-            async with asyncio.timeout(SILENCE_TIMEOUT):
-                await self._activity.wait()
+            try:
+                async with asyncio.timeout(SILENCE_TIMEOUT):
+                    await self._activity.wait()
+            except TimeoutError:
+                self._clear_display()
+                raise
 
     @callback
-    def _link_lost(self) -> None:
-        """Discard everything that was only true of this connection."""
+    def _link_lost(self, *, unexpected: bool = False) -> None:
+        """Discard live state and receipts before a replacement session can report."""
+        if unexpected and self.enabled and self.authenticated and self.status is not None:
+            self._retain_display(self.status)
+            if self._immediate_retry_available:
+                self._immediate_retry_available = False
+                self._retry_immediately = True
+        self._stable_since = None
+        self._since_send = None
+        self._reservation_set_kind = None
         self._lost.set()
         self._activity.set()
         if self._reply is not None and not self._reply.done():
@@ -487,6 +552,9 @@ class MatConnection:
             if self._reply is not None and not self._reply.done():
                 # Set here, not when the loop resumes: a status can follow in the same tick.
                 self.authenticated = frame.code == REPLY_AUTHENTICATED
+                if frame.code == REPLY_REFUSED:
+                    self._clear_display()
+                    self._publish()
                 self._reply.set_result(frame)
             return
         if frame is None or not self.authenticated:
@@ -494,6 +562,12 @@ class MatConnection:
         self._activity.set()
         if frame.custom_readback:
             return
+        now = monotonic()
+        if self._stable_since is None:
+            self._stable_since = now
+        elif now - self._stable_since >= STABLE_STATUS_TIME:
+            self._immediate_retry_available = True
+        self._clear_display()
         if self._since_send is not None:
             self._since_send.append(frame)
             self._changed.set()
@@ -656,7 +730,9 @@ class MatConnection:
 
     async def _async_cancel_on_reservation(self) -> None:
         """Keep cancellation receipts through writes and retries, then turn the mat off."""
+        generation = self._generation
         async with self._command_lock:
+            self._require_generation(generation)
             status = self.status
             if status is None:
                 raise HomeAssistantError(ERROR_NO_LINK)
@@ -670,13 +746,16 @@ class MatConnection:
                     status = self.status
                     if status is None:
                         raise HomeAssistantError(ERROR_NO_LINK)
-                    if await self._async_send_and_confirm(intent.send(status), received):
+                    if await self._async_send_and_confirm(
+                        intent.send(status), received, generation=generation
+                    ):
                         break
                 else:
                     raise HomeAssistantError(ERROR_UNCONFIRMED)
             finally:
                 self._since_send = None
 
+            self._require_generation(generation)
             status = self.status
             if status is None or not _can_power_off(status):
                 return
@@ -689,7 +768,7 @@ class MatConnection:
                     raise HomeAssistantError(ERROR_NO_LINK)
                 if off.holds is not None and not off.holds(status):
                     raise HomeAssistantError(ERROR_UNCONFIRMED)
-                if await self._async_send_and_confirm(off.send(status)):
+                if await self._async_send_and_confirm(off.send(status), generation=generation):
                     return
             raise HomeAssistantError(ERROR_UNCONFIRMED)
 
@@ -709,6 +788,8 @@ class MatConnection:
 
     async def async_set_custom_sleep(self, on: bool) -> None:
         if not on and self.status is None:
+            if self.display_status is not None:
+                raise HomeAssistantError(ERROR_NO_LINK)
             return
         await self._async_command(
             lambda status, _stored: _custom_sleep_intent(
@@ -718,7 +799,9 @@ class MatConnection:
         )
 
     async def async_set_on_reservation_temperature(self, value: float) -> None:
+        generation = self._generation
         async with self._command_lock:
+            self._require_generation(generation)
             status = self.status
             if status is None:
                 raise HomeAssistantError(ERROR_NO_LINK)
@@ -744,7 +827,9 @@ class MatConnection:
         *,
         allow_other: bool = False,
     ) -> None:
+        generation = self._generation
         async with self._command_lock:
+            self._require_generation(generation)
             # Read once: a reply to the first send can replace the stored status.
             stored = self.stored_status
             intent: _Intent | None = None
@@ -765,7 +850,9 @@ class MatConnection:
                         intent = decide(status, stored)
                         if intent is None:
                             return
-                    if await self._async_send_and_confirm(intent.send(status)):
+                    if await self._async_send_and_confirm(
+                        intent.send(status), generation=generation
+                    ):
                         if intent.following is None:
                             return
                         intent = intent.following
@@ -773,38 +860,50 @@ class MatConnection:
                 else:
                     raise HomeAssistantError(ERROR_UNCONFIRMED)
 
+    def _require_generation(self, generation: int) -> None:
+        if generation != self._generation:
+            raise HomeAssistantError(ERROR_NO_LINK)
+
     async def _async_send_and_confirm(
-        self, send: _Send, cancel_received: list[MatStatus] | None = None
+        self, send: _Send, cancel_received: list[MatStatus] | None = None,
+        *, generation: int,
     ) -> bool:
+        self._require_generation(generation)
         if cancel_received is not None and any(send.confirmed(s) for s in cancel_received):
             return True
         try:
             async with asyncio.timeout(SEND_TIMEOUT):
                 await transport.async_write(self._client, send.frame)
         except Exception as err:
+            self._require_generation(generation)
             _LOGGER.debug("블루투스 매트 전송 실패: %s", type(err).__name__)
             return cancel_received is not None and any(
                 send.confirmed(s) for s in cancel_received
             )
+        self._require_generation(generation)
         if cancel_received is not None:
             confirmed = await self._async_confirmed(send, cancel_received)
+            self._require_generation(generation)
             return confirmed or any(send.confirmed(s) for s in cancel_received)
         # Only a status received from here on can confirm this send.
         received: list[MatStatus] = []
         self._since_send = received
         self._reservation_set_kind = send.reservation_kind
         try:
-            return await self._async_confirmed(send, received)
+            confirmed = await self._async_confirmed(send, received)
+            self._require_generation(generation)
+            return confirmed
         finally:
             self._since_send = None
             self._reservation_set_kind = None
 
     async def _async_confirmed(self, send: _Send, received: list[MatStatus]) -> bool:
+        generation = self._generation
         loop = self.hass.loop
         deadline = loop.time() + CONFIRM_TIMEOUT
         while True:
             self._changed.clear()
-            if self.status is None:
+            if generation != self._generation or self.status is None:
                 return False
             if any(send.confirmed(status) for status in received):
                 return True

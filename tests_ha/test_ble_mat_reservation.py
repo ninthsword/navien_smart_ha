@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,6 +34,7 @@ from .test_ble_mat import (
     status,
     turn,
     unique,
+    until,
 )
 from .test_ble_mat import mat as mat
 
@@ -472,3 +474,34 @@ async def test_absent_or_malformed_reservation_is_ignored_before_first_status(
         assert time_state(hass, sensor_kind).state == "unavailable"
     await feed_and_settle(hass, mat, reservation_status("on", 3))
     assert_record(hass, entry, "on", 3, 3, START + timedelta(hours=3))
+
+
+@pytest.mark.parametrize("scenario", ["reservation_inflight_then_new_session_same_active_reservation"])
+async def test_recovery_loss_detaches_command_receipts(
+    hass: HomeAssistant, mat: FakeMat, reservation_clock: ReservationClock, scenario: str,
+) -> None:
+    mat.first_status = reservation_status("off", 5)
+    entry = await setup_mat(hass, mat)
+    conn = entry.runtime_data
+    original = conn.reservation
+    assert original is not None
+    task = hass.async_create_task(conn.async_set_off_reservation(6))
+    await until(lambda: conn._reservation_set_kind == "off")
+    received = conn._since_send
+    assert received is not None and received == []
+    reservation_clock.advance(minutes=30)
+    mat.lose_link()
+    assert conn._since_send is None
+    assert conn._reservation_set_kind is None
+    assert conn._changed.is_set()
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+        await task
+    await until(lambda: mat.connect_calls == 2 and conn.status is not None)
+    assert received == []
+    assert conn.reservation == original
+    assert len(mat.controls()) == 1
+    # Fresh ordinary telemetry remains enabled after the stale receipt was detached.
+    mat.feed(reservation_status("off", 4))
+    await asyncio.sleep(0)
+    assert conn.reservation.last_reported_hours == 4
+    assert conn.reservation.run_time <= original.run_time
