@@ -14,15 +14,24 @@ from custom_components.navien_smarthome.ble_mat import connection, transport
 
 from .test_ble_mat import (
     ADDRESS,
+    HEATING,
     FakeMat,
     reply,
     settle,
     setup_mat,
+    status,
     turn,
     unique,
     until,
 )
 from .test_ble_mat import mat as mat
+
+
+async def spend_immediate_retry(entry, mat: FakeMat) -> None:
+    """Exercise ordinary fallback only after consuming the one-shot on a real loss."""
+    connects = mat.connect_calls
+    mat.lose_link()
+    await until(lambda: mat.connect_calls == connects + 1 and entry.runtime_data.status is not None)
 
 
 class RetryWaits:
@@ -86,21 +95,22 @@ async def test_lost_link_waits_for_floor_then_new_advertisement(
     hass: HomeAssistant, mat: FakeMat, retry_waits: RetryWaits
 ) -> None:
     entry = await setup_mat(hass, mat)
+    await spend_immediate_retry(entry, mat)
     mat.lose_link()
     floor = await retry_waits.next(1.0)
     mat.last_advertisement = 2.0
     await settle()
-    assert mat.connect_calls == 1
+    assert mat.connect_calls == 2
     assert mat.advertisement_reads == 0
 
     floor.set_result(None)
     poll = await retry_waits.next(0.5)
-    assert mat.connect_calls == 1
+    assert mat.connect_calls == 2
     assert mat.advertisement_reads == 1
     mat.last_advertisement = 3.0
     poll.set_result(None)
     await until(lambda: entry.runtime_data.status is not None)
-    assert mat.connect_calls == 2
+    assert mat.connect_calls == 3
     assert retry_waits.now == 1.5
     assert connection.RETRY_DELAY == 30.0
 
@@ -111,15 +121,16 @@ async def test_retry_deadline_with_absent_unchanged_or_failing_history(
     seen: float | Exception | None,
 ) -> None:
     entry = await setup_mat(hass, mat)
+    await spend_immediate_retry(entry, mat)
     mat.last_advertisement = seen
     mat.lose_link()
     (await retry_waits.next(1.0)).set_result(None)
     for _ in range(58):
         poll = await retry_waits.next(0.5)
-        assert mat.connect_calls == 1
+        assert mat.connect_calls == 2
         poll.set_result(None)
     await until(lambda: entry.runtime_data.status is not None)
-    assert mat.connect_calls == 2
+    assert mat.connect_calls == 3
     assert retry_waits.now == 30.0
 
 
@@ -133,12 +144,13 @@ async def test_consecutive_failure_floors_and_retry_delay_limit(
 ) -> None:
     monkeypatch.setattr(connection, "RETRY_DELAY", delay)
     entry = await setup_mat(hass, mat)
+    await spend_immediate_retry(entry, mat)
     mat.connect_error = OSError("connect failed")
     mat.lose_link()
-    for attempts, floor in enumerate(floors, start=1):
+    for attempts, floor in enumerate(floors, start=2):
         done = await retry_waits.next(floor)
         assert mat.connect_calls == attempts
-        if attempts == len(floors):
+        if attempts == len(floors) + 1:
             break
         reads = mat.advertisement_reads
         done.set_result(None)
@@ -162,9 +174,10 @@ async def test_authentication_resets_the_failure_floor(
     mat.connect_error = None
     await retry_waits.advertise(mat, 4.0)
     await until(lambda: entry.runtime_data.status is not None)
+    await spend_immediate_retry(entry, mat)
     mat.lose_link()
     floor = await retry_waits.next(1.0)
-    assert mat.connect_calls == 3
+    assert mat.connect_calls == 4
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert floor.cancelled()
 
@@ -220,6 +233,7 @@ async def test_failed_read_uses_the_first_successful_baseline(
     hass: HomeAssistant, mat: FakeMat, retry_waits: RetryWaits, failed_baseline: bool
 ) -> None:
     entry = await setup_mat(hass, mat)
+    await spend_immediate_retry(entry, mat)
     mat.last_advertisement = RuntimeError("history unavailable") if failed_baseline else 1.0
     mat.lose_link()
     (await retry_waits.next(1.0)).set_result(None)
@@ -227,15 +241,15 @@ async def test_failed_read_uses_the_first_successful_baseline(
     mat.last_advertisement = 1.0 if failed_baseline else RuntimeError("history unavailable")
     poll.set_result(None)
     poll = await retry_waits.next(0.5)
-    assert mat.connect_calls == 1
+    assert mat.connect_calls == 2
     mat.last_advertisement = 1.0
     poll.set_result(None)
     poll = await retry_waits.next(0.5)
-    assert mat.connect_calls == 1
+    assert mat.connect_calls == 2
     mat.last_advertisement = 2.0
     poll.set_result(None)
     await until(lambda: entry.runtime_data.status is not None)
-    assert mat.connect_calls == 2
+    assert mat.connect_calls == 3
 
 
 @pytest.mark.parametrize("phase", ["floor", "advertisement", "refusal"])
@@ -249,6 +263,7 @@ async def test_stop_cancels_retry_wait(
     if phase == "refusal":
         pending = await retry_waits.next(30.0)
     else:
+        await spend_immediate_retry(entry, mat)
         mat.lose_link()
         pending = await retry_waits.next(1.0)
         if phase == "advertisement":
@@ -262,5 +277,101 @@ async def test_stop_cancels_retry_wait(
     assert pending.cancelled()
     mat.last_advertisement = 20.0
     await settle()
-    assert mat.connect_calls == 1
+    assert mat.connect_calls == (1 if phase == "refusal" else 2)
     assert mat.disconnected == mat.clients
+
+
+@pytest.mark.parametrize("scenario", [
+    "failed_immediate_attempt", "next_authenticated_flap", "initial_failure",
+    "auth_only_loss", "silence_timeout", "cleanup_only",
+])
+async def test_recovery_retry_fallback(
+    hass: HomeAssistant, mat: FakeMat, retry_waits: RetryWaits,
+    monkeypatch: pytest.MonkeyPatch, scenario: str,
+) -> None:
+    if scenario == "initial_failure":
+        mat.connect_error = OSError("synthetic failure")
+    if scenario == "auth_only_loss":
+        mat.first_status = None
+    if scenario == "silence_timeout":
+        monkeypatch.setattr(connection, "SILENCE_TIMEOUT", 0.02)
+    entry = await setup_mat(hass, mat, wait_status=scenario not in ("initial_failure", "auth_only_loss"))
+    conn = entry.runtime_data
+    if scenario == "failed_immediate_attempt":
+        mat.connect_error = OSError("synthetic immediate failure")
+        mat.lose_link()
+        await retry_waits.next(2.0)
+        assert mat.connect_calls == 2
+    elif scenario == "next_authenticated_flap":
+        await spend_immediate_retry(entry, mat)
+        mat.lose_link()
+        await retry_waits.next(1.0)
+        assert mat.connect_calls == 2
+        assert conn.display_status is not None
+    elif scenario == "initial_failure":
+        await retry_waits.next(2.0)
+        assert mat.connect_calls == 1
+    else:
+        if scenario == "auth_only_loss":
+            await until(lambda: conn.authenticated)
+            mat.lose_link()
+        elif scenario == "cleanup_only":
+            conn._link_lost()
+        await retry_waits.next(1.0)
+        assert mat.connect_calls == 1
+        assert conn.display_status is None
+    if scenario not in ("failed_immediate_attempt", "next_authenticated_flap"):
+        assert conn._immediate_retry_available
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("scenario", [
+    "at_59_999", "at_60", "duplicate_ordinary_status", "auth_only",
+    "elapsed_without_status", "advertisement", "invalid_frame", "custom_readback",
+    "loss_resets_origin", "disable_enable_no_reset",
+])
+async def test_recovery_budget_requires_stable_status(
+    hass: HomeAssistant, mat: FakeMat, retry_waits: RetryWaits, scenario: str,
+) -> None:
+    entry = await setup_mat(hass, mat)
+    await spend_immediate_retry(entry, mat)
+    conn = entry.runtime_data
+    assert not conn._immediate_retry_available
+    retry_waits.now = 59.999 if scenario == "at_59_999" else 60.0
+    if scenario in ("at_59_999", "at_60", "duplicate_ordinary_status"):
+        mat.feed(status(left=31) if scenario != "duplicate_ordinary_status" else HEATING)
+    elif scenario == "auth_only":
+        mat.first_status = None
+        mat.lose_link()
+        await retry_waits.advertise(mat, 1.0)
+        await until(lambda: conn.authenticated)
+        assert conn.status is None
+        retry_waits.now += 60.0
+        mat.feed(reply(2))
+    elif scenario == "advertisement":
+        mat.last_advertisement = 20.0
+    elif scenario == "invalid_frame":
+        mat.feed(b"invalid")
+    elif scenario == "custom_readback":
+        mat.feed(status(mode=9, range=0xFF))
+    elif scenario == "loss_resets_origin":
+        retry_waits.now = 59.0
+        mat.lose_link()
+        await retry_waits.advertise(mat, 1.0)
+        await until(lambda: conn.status is not None)
+        retry_waits.now = 61.0
+        mat.feed(HEATING)
+    elif scenario == "disable_enable_no_reset":
+        await turn(hass, "turn_off", unique(hass, "switch", "enabled"))
+        await turn(hass, "turn_on", unique(hass, "switch", "enabled"))
+        await until(lambda: conn.status is not None)
+        mat.feed(HEATING)
+    connects = mat.connect_calls
+    mat.lose_link()
+    if scenario in ("at_60", "duplicate_ordinary_status"):
+        await until(lambda: mat.connect_calls == connects + 1 and conn.status is not None)
+        assert retry_waits.waits.empty()
+    else:
+        await retry_waits.next(1.0)
+        assert mat.connect_calls == connects
+    assert await hass.config_entries.async_unload(entry.entry_id)

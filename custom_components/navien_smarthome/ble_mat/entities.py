@@ -122,7 +122,7 @@ class _MatEntity(Entity):
 
     def _refresh(self) -> None:
         """Copy the connection's state into this entity's attributes."""
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_available = status is not None and (
             status.has_extras or not self._needs_extras
         )
@@ -155,7 +155,7 @@ class MatThermostat(_MatEntity, ClimateEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         low, high = DEFAULT_HEAT_RANGE if status is None else status.heat_range
         self._attr_min_temp = low
         self._attr_max_temp = high
@@ -169,13 +169,13 @@ class MatThermostat(_MatEntity, ClimateEntity):
         self._attr_hvac_action = HVACAction.OFF if off else HVACAction.HEATING
 
     def _current_temperature(self) -> float | None:
-        status = self._conn.status
+        status = self._conn.display_status
         if status is None:
             return None
         return status.left_current if self._side == SIDE_LEFT else status.right_current
 
     def _target_temperature(self) -> float | None:
-        status = self._conn.status
+        status = self._conn.display_status
         if status is None:
             return None
         target = status.left_target if self._side == SIDE_LEFT else status.right_target
@@ -216,7 +216,7 @@ class MatModeSensor(_MatEntity, SensorEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         if status is None:
             self._attr_native_value = None
         elif status.on_reservation_active:
@@ -238,7 +238,7 @@ class MatReservationTimeSensor(_MatEntity, SensorEntity):
         reservation = self._conn.reservation
         self._attr_native_value = (
             reservation.run_time
-            if self._conn.status is not None
+            if self._conn.display_status is not None
             and reservation is not None
             and reservation.kind == self._kind
             else None
@@ -269,7 +269,7 @@ class MatErrorSensor(_MatEntity, BinarySensorEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.mode == MODE_ERROR
 
 
@@ -283,7 +283,7 @@ class MatWaterLevelSensor(_MatEntity, SensorEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         level = None if status is None else status.water_level
         self._attr_native_value = None if level is None else WATER_LEVEL_NAMES[level]
 
@@ -296,7 +296,7 @@ class MatErrorDetailSensor(_MatEntity, SensorEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         code = 0 if status is None else status.error_code
         self._attr_native_value = (
             f"{code}: {ERROR_MESSAGES.get(code, ERROR_GENERIC)}" if code else None
@@ -314,7 +314,7 @@ class MatFastHeatMinutesSensor(_MatEntity, SensorEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_native_value = None if status is None else status.fast_heat_minutes
 
 
@@ -327,7 +327,7 @@ class MatIonCareRunningSensor(_MatEntity, BinarySensorEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.ion_care_running
 
 
@@ -360,7 +360,7 @@ class MatPowerSwitch(_MatEntity, SwitchEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.state is not MatState.OFF
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -378,7 +378,7 @@ class MatLockSwitch(_MatEntity, SwitchEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.lock
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -397,7 +397,7 @@ class MatFastHeatSwitch(_MatEntity, SwitchEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.fast_heat_running
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -415,7 +415,7 @@ class MatSleepSwitch(_MatEntity, SwitchEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.sleep_running
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -434,7 +434,7 @@ class MatCustomSleepSwitch(_MatEntity, SwitchEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_is_on = None if status is None else status.custom_sleep_running
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -472,7 +472,7 @@ class MatReservationSelect(_MatEntity, SelectEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         hours_range = (
             range(1, 15)
             if not self._on and status is not None and status.model_code == 3
@@ -541,7 +541,7 @@ class MatOnReservationTemperature(_MatEntity, NumberEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         low, high = DEFAULT_HEAT_RANGE if status is None else status.heat_range
         self._attr_native_min_value = low
         self._attr_native_max_value = high
@@ -560,7 +560,7 @@ class MatVolumeSelect(_MatEntity, SelectEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         self._attr_current_option = (
             None if status is None else VOLUME_OPTIONS[status.volume]
         )
@@ -579,7 +579,7 @@ class MatIonCarePeriodSelect(_MatEntity, SelectEntity):
 
     def _refresh(self) -> None:
         super()._refresh()
-        status = self._conn.status
+        status = self._conn.display_status
         period = 0 if status is None else status.ion_care_period
         self._attr_current_option = (
             ION_CARE_PERIOD_OPTIONS[period - 1]

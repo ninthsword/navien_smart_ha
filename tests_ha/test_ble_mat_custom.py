@@ -716,9 +716,11 @@ async def test_custom_first_frame_stops_if_a_program_side_becomes_unselected(
 
 @pytest.mark.parametrize("ending", ["custom", "off", "other", "lost"])
 async def test_partial_start_follows_live_state_and_recovers_by_off_then_on(
-    hass: HomeAssistant, mat: FakeMat, ending: str
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:
-    await setup_custom(hass, mat, {"left": LEFT, "right": RIGHT})
+    now = [100.0]
+    monkeypatch.setattr(connection, "monotonic", lambda: now[0])
+    entry = await setup_custom(hass, mat, {"left": LEFT, "right": RIGHT})
 
     def answer(frame: bytes) -> bytes | None:
         if frame[6] == 1:
@@ -733,9 +735,23 @@ async def test_partial_start_follows_live_state_and_recovers_by_off_then_on(
     with pytest.raises(HomeAssistantError):
         await custom_switch(hass, True)
     await hass.async_block_till_done()
-    expected = {"custom": "on", "off": "off", "other": "off", "lost": "unavailable"}[ending]
+    expected = {"custom": "on", "off": "off", "other": "off", "lost": "on"}[ending]
     assert state_of(hass, unique(hass, "switch", "custom_sleep")).state == expected
     assert mat.controls() == [BOTH_LEFT_FRAME] + [BOTH_RIGHT_FRAME] * (2 if ending == "custom" else 1)
+    if ending == "lost":
+        conn = entry.runtime_data
+        assert conn.status is None
+        assert conn._display_deadline == 103.0
+        await until(lambda: mat.connect_calls == 2 and conn.authenticated)
+        sent = list(mat.controls())
+        with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+            await custom_switch(hass, False)
+        with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+            await custom_switch(hass, True)
+        assert mat.controls() == sent
+        now[0] = 103.0
+        conn._publish()
+        assert state_of(hass, unique(hass, "switch", "custom_sleep")).state == "unavailable"
     if ending == "custom":
         sent = len(mat.controls())
         await custom_switch(hass, True)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Iterator
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -581,14 +582,16 @@ async def test_reconnect_needs_a_fresh_status(
     sent_before = len(mat.controls())
     mat.lose_link()
     await hass.async_block_till_done()
-    assert_status_entities_unavailable(hass)
-    await set_temp(hass, "left", 31)  # raises nothing and sends nothing
+    assert state_of(hass, climate_id(hass, "left")).state == "heat"
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+        await set_temp(hass, "left", 31)
     assert len(mat.controls()) == sent_before
 
     await until(lambda: entry.runtime_data.authenticated)
     await hass.async_block_till_done()
-    assert_status_entities_unavailable(hass)
-    await set_temp(hass, "left", 31)
+    assert state_of(hass, climate_id(hass, "left")).state == "heat"
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+        await set_temp(hass, "left", 31)
     assert len(mat.controls()) == sent_before
 
     await feed_and_settle(hass, mat, status(left=33))
@@ -964,8 +967,12 @@ async def test_power_switch_on_with_one_side_on_sends_nothing(
     assert mat.controls() == []
 
 
-async def test_power_switch_state(hass: HomeAssistant, mat: FakeMat) -> None:
-    await setup_mat(hass, mat)
+async def test_power_switch_state(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection, "monotonic", lambda: now[0])
+    entry = await setup_mat(hass, mat)
     power = power_id(hass)
     assert state_of(hass, power).state == "on"
     await feed_and_settle(hass, mat, status(heat=3))
@@ -977,6 +984,9 @@ async def test_power_switch_state(hass: HomeAssistant, mat: FakeMat) -> None:
     mat.first_status = None
     mat.lose_link()
     await hass.async_block_till_done()
+    assert state_of(hass, power).state == "off"
+    now[0] = 103.0
+    entry.runtime_data._publish()
     assert state_of(hass, power).state == "unavailable"
 
 
@@ -1383,7 +1393,7 @@ async def test_power_on_mixes_latest_and_stored(
     await feed_and_settle(
         hass, mat, status(mode=6, flags=0x04, volume=0x13, heat=0, left=0, right=0)
     )
-    mat.respond = confirm_with(status(left=30, right=28, flags=0x06, byte9=0x21))
+    mat.respond = confirm_with(status(left=30, right=28, flags=0x06, byte9=0x21, volume=0x13))
     await set_mode(hass, "left", "heat")
     # Byte 3's lock bit and byte 4 are the latest status's; byte 9 and the targets the stored one's.
     assert mat.controls()[-1].hex() == "b28001061002241e1c211e1cfefefefefefefe44"
@@ -1391,7 +1401,7 @@ async def test_power_on_mixes_latest_and_stored(
     await feed_and_settle(
         hass, mat, status(mode=6, flags=0x04, volume=0x13, heat=0, left=0, right=0)
     )
-    mat.respond = confirm_with(status(left=33, right=28, flags=0x06, byte9=0x21))
+    mat.respond = confirm_with(status(left=33, right=28, flags=0x06, byte9=0x21, volume=0x13))
     await set_temp(hass, "left", 33, "heat")
     assert mat.controls()[-1].hex() == "b28001061002241e1c21211cfefefefefefefe47"
 
@@ -2837,9 +2847,10 @@ async def test_on_reservation_cancel_echoes_its_value_and_may_power_on(
         async def send_and_confirm_with_late_off(
             send: connection._Send,
             cancel_received: list[connection.MatStatus] | None = None,
+            *, generation: int,
         ) -> bool:
             nonlocal held_off_reply
-            confirmed = await send_and_confirm(send, cancel_received)
+            confirmed = await send_and_confirm(send, cancel_received, generation=generation)
             if (
                 send.frame == off_frame
                 and cancel_received is None
@@ -3392,3 +3403,376 @@ async def test_on_reservation_resend_stops_if_the_live_range_excludes_its_temper
     assert mat.controls() == [
         bytes.fromhex("b280060000fe241e1cfe010500fefe19fefefef5")
     ]
+
+
+# Bounded recovery through the real HA state and service consumers.
+
+
+def test_recovery_imports_the_selected_source_tree() -> None:
+    root = Path(__file__).resolve().parents[1]
+    imported = Path(connection.__file__).resolve()
+    assert imported == root / "custom_components/navien_smarthome/ble_mat/connection.py"
+    print(f"recovery source: {imported.relative_to(root)}")
+
+
+async def test_recovery_grace_keeps_confirmed_ha_state_until_deadline(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection, "monotonic", lambda: now[0])
+    entry = await setup_mat(hass, mat)
+    before = state_of(hass, climate_id(hass, "left"))
+    mat.auth_replies = [None]
+    mat.lose_link()
+    await settle()
+    retained = state_of(hass, climate_id(hass, "left"))
+    assert retained.state == before.state == "heat"
+    assert retained.attributes == before.attributes
+    assert state_of(hass, unique(hass, "sensor", "link")).state == LINK_CONNECTING
+    assert entry.runtime_data.status is None
+    now[0] = 102.999
+    entry.runtime_data._publish()
+    assert state_of(hass, climate_id(hass, "left")).state == "heat"
+    now[0] = 103.0
+    entry.runtime_data._publish()
+    assert_status_entities_unavailable(hass)
+
+
+async def test_recovery_immediate_retry_skips_retry_floor(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waits: list[float] = []
+
+    async def wait(delay: float) -> None:
+        waits.append(delay)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(connection, "sleep", wait)
+    await setup_mat(hass, mat)
+    mat.lose_link()
+    await settle()
+    assert mat.connect_calls == 2
+    assert waits == []
+    await until(lambda: state_of(hass, unique(hass, "sensor", "link")).state == LINK_CONNECTED)
+    assert state_of(hass, climate_id(hass, "left")).state == "heat"
+
+
+@pytest.mark.parametrize("scenario", [
+    "duplicate_cleanup", "failed_attempt", "auth_only_reconnect", "late_timer_dispatch",
+])
+async def test_recovery_grace_original_deadline(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch, scenario: str,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection, "monotonic", lambda: now[0])
+    mat.first_status = status(mode=2, byte12=5, model=3, range=0x14)
+    entry = await setup_mat(hass, mat)
+    conn = entry.runtime_data
+    ids = [climate_id(hass, "left"), unique(hass, "number", "on_reservation_temperature"),
+           unique(hass, "select", "off_reservation"), unique(hass, "sensor", "off_reservation_time"),
+           unique(hass, "switch", "fast_heat")]
+    before = [(state_of(hass, i).state, state_of(hass, i).attributes) for i in ids]
+    mat.first_status = None
+    if scenario in ("failed_attempt", "late_timer_dispatch", "duplicate_cleanup"):
+        mat.connect_error = OSError("synthetic unavailable")
+    mat.lose_link()
+    deadline = conn._display_deadline
+    assert deadline == 103.0
+    if scenario != "late_timer_dispatch":
+        await settle()
+    now[0] = 102.999
+    if scenario == "duplicate_cleanup":
+        conn._link_lost()
+        conn._link_lost()
+    conn._publish()
+    assert [(state_of(hass, i).state, state_of(hass, i).attributes) for i in ids] == before
+    assert conn._display_deadline == deadline
+    now[0] = 103.0
+    # Accessor correctness must not depend on dispatch of a scheduled callback.
+    assert conn.display_status is None
+    conn._publish()
+    assert_status_entities_unavailable(hass)
+    assert state_of(hass, ids[3]).state == "unavailable"
+
+
+@pytest.mark.parametrize("scenario", [
+    "changed", "byte_identical", "authentication_only", "invalid", "readback",
+    "old_generation_callback", "obsolete_expiry",
+])
+async def test_recovery_fresh_status_replaces_snapshot(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch, scenario: str,
+) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection, "monotonic", lambda: now[0])
+    entry = await setup_mat(hass, mat)
+    conn = entry.runtime_data
+    old_callback = mat.on_frame
+    mat.first_status = None
+    mat.lose_link()
+    expiry = conn._display_expiry
+    assert expiry is not None
+    obsolete = expiry._callback
+    await until(lambda: mat.connect_calls == 2 and conn.authenticated)
+    if scenario in ("changed", "byte_identical", "obsolete_expiry"):
+        mat.feed(status(left=33) if scenario == "changed" else HEATING)
+        assert conn.status is not None
+        assert conn._display_snapshot is None
+        assert conn._display_expiry is None
+        assert expiry.cancelled()
+        live = conn.status
+        now[0] = 104.0
+        assert obsolete is not None
+        obsolete()
+        assert conn.status is live
+        assert conn.display_status is live
+        assert state_of(hass, climate_id(hass, "left")).attributes["temperature"] == (33 if scenario == "changed" else 30)
+    else:
+        if scenario == "invalid":
+            mat.feed(b"invalid")
+        elif scenario == "readback":
+            mat.feed(status(mode=9, range=0xFF))
+        elif scenario == "old_generation_callback":
+            assert old_callback is not None
+            old_callback(status(left=33))
+        else:
+            mat.feed(reply(2))
+        assert conn.status is None
+        assert conn._display_snapshot is not None
+        assert conn._display_deadline == 103.0
+        assert state_of(hass, climate_id(hass, "left")).attributes["temperature"] == 30
+        now[0] = 103.0
+        assert obsolete is not None
+        obsolete()
+        assert_status_entities_unavailable(hass)
+
+
+@pytest.mark.parametrize("scenario", [
+    "initial_no_status", "auth_only_loss", "registration_refusal", "auth_refusal_during_grace",
+    "disable", "unload", "silence_timeout",
+])
+async def test_recovery_exclusions_are_immediate(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch, scenario: str,
+) -> None:
+    monkeypatch.setattr(connection, "RETRY_DELAY", 30.0)
+    if scenario in ("initial_no_status", "auth_only_loss"):
+        mat.first_status = None
+    elif scenario == "registration_refusal":
+        mat.auth_replies = [reply(0)]
+    if scenario == "silence_timeout":
+        monkeypatch.setattr(connection, "SILENCE_TIMEOUT", 0.02)
+    entry = await setup_mat(hass, mat, wait_status=scenario not in (
+        "initial_no_status", "auth_only_loss", "registration_refusal"))
+    conn = entry.runtime_data
+    if scenario in ("initial_no_status", "auth_only_loss"):
+        await until(lambda: conn.authenticated)
+        if scenario == "auth_only_loss":
+            mat.lose_link()
+    elif scenario == "registration_refusal":
+        await until(lambda: mat.disconnected == mat.clients)
+    elif scenario == "auth_refusal_during_grace":
+        mat.auth_replies = [None]
+        mat.lose_link()
+        assert conn.display_status is not None
+        await until(lambda: mat.connect_calls == 2)
+        mat.feed(reply(0))
+        # The refusal removes grace before asynchronous client teardown can finish.
+        assert conn.display_status is None
+        assert_status_entities_unavailable(hass)
+    elif scenario == "disable":
+        mat.first_status = None
+        mat.lose_link()
+        await turn(hass, "turn_off", unique(hass, "switch", "enabled"))
+    elif scenario == "unload":
+        mat.lose_link()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    else:
+        await until(lambda: mat.disconnected == mat.clients)
+    await settle()
+    assert conn.status is None
+    assert conn.display_status is None
+    assert conn._display_expiry is None
+    if scenario != "unload":
+        assert_status_entities_unavailable(hass)
+    if scenario in ("initial_no_status", "auth_only_loss", "registration_refusal", "silence_timeout"):
+        assert conn._immediate_retry_available
+        assert mat.connect_calls == 1
+
+
+@pytest.mark.parametrize("scenario", [
+    "temperature", "hvac_power", "live_dependent_range", "reservation_cancel",
+    "custom_sleep_off", "auth_only_reconnect",
+])
+async def test_recovery_cached_display_rejects_controls(
+    hass: HomeAssistant, mat: FakeMat, scenario: str,
+) -> None:
+    entry = await setup_mat(hass, mat)
+    mat.first_status = None
+    if scenario != "auth_only_reconnect":
+        mat.auth_replies = [None]
+    mat.lose_link()
+    await settle()
+    if scenario == "auth_only_reconnect":
+        await until(lambda: entry.runtime_data.authenticated)
+    assert state_of(hass, climate_id(hass, "left")).state == "heat"
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+        if scenario in ("temperature", "auth_only_reconnect"):
+            await set_temp(hass, "left", 31)
+        elif scenario == "hvac_power":
+            await set_mode(hass, "left", "off")
+        elif scenario == "live_dependent_range":
+            await hass.services.async_call("number", "set_value", {
+                "entity_id": unique(hass, "number", "on_reservation_temperature"), "value": 31,
+            }, blocking=True)
+        elif scenario == "reservation_cancel":
+            await choose(hass, unique(hass, "select", "on_reservation"), "해제")
+        else:
+            await turn(hass, "turn_off", unique(hass, "switch", "custom_sleep"))
+    assert mat.controls() == []
+    # Local preferences continue to work through HA while their display is retained.
+    await choose(hass, unique(hass, "select", "left_sleep_hours"), "9시간")
+    await choose(hass, unique(hass, "select", "custom_program"), "프로그램 2")
+    assert entry.runtime_data.left_sleep_hours == 9
+    assert entry.runtime_data.custom_program == 2
+    assert mat.controls() == []
+    await entry.runtime_data.async_set_enabled(False)
+    await entry.runtime_data.async_set_custom_sleep(False)
+    assert mat.controls() == []
+
+
+@pytest.mark.parametrize("scenario", [
+    "during_write", "during_confirmation", "queued_command", "resend",
+    "reservation_cancel", "cancel_then_off",
+])
+async def test_recovery_commands_do_not_cross_sessions(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch, scenario: str,
+) -> None:
+    if scenario in ("reservation_cancel", "cancel_then_off"):
+        mat.first_status = OFF_RESERVED
+    entry = await setup_mat(hass, mat)
+    conn = entry.runtime_data
+    write = mat.write
+    crossed = False
+
+    async def replace_session() -> None:
+        nonlocal crossed
+        crossed = True
+        connects = mat.connect_calls
+        mat.first_status = status(right=29)
+        mat.lose_link()
+        await until(lambda: mat.connect_calls == connects + 1 and conn.status is not None)
+
+    async def during_write(client: Any, frame: bytes) -> None:
+        await write(client, frame)
+        if frame[1] == 0x80 and not crossed:
+            await replace_session()
+
+    original = conn._async_confirmed
+
+    async def during_confirmation(send: Any, received: list[Any]) -> bool:
+        if not crossed:
+            confirmed = False
+            if scenario == "cancel_then_off":
+                mat.feed(HEATING)
+                confirmed = bool(await original(send, received))
+                assert confirmed
+            elif scenario == "resend":
+                monkeypatch.setattr(connection, "CONFIRM_TIMEOUT", 0)
+                assert not await original(send, received)
+            await replace_session()
+            return confirmed
+        return bool(await original(send, received))
+
+    if scenario in ("during_write", "reservation_cancel"):
+        monkeypatch.setattr(transport, "async_write", during_write)
+    elif scenario != "queued_command":
+        monkeypatch.setattr(conn, "_async_confirmed", during_confirmation)
+    if scenario == "queued_command":
+        await conn._command_lock.acquire()
+        command = hass.async_create_task(set_temp(hass, "right", 29))
+        await settle()
+        await replace_session()
+        conn._command_lock.release()
+        with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+            await command
+        assert mat.controls() == []
+        return
+    with pytest.raises(HomeAssistantError, match=connection.ERROR_NO_LINK):
+        if scenario in ("reservation_cancel", "cancel_then_off"):
+            await schedule_command(hass, "on_cancel")
+        else:
+            await set_temp(hass, "right", 29)
+    assert crossed
+    assert len(mat.controls()) == 1
+    assert conn.status is not None
+
+
+@pytest.mark.parametrize("scenario", [
+    "disable_during_grace", "unload_during_grace", "disable_during_immediate_retry",
+    "unload_during_immediate_retry", "reload_no_status",
+])
+async def test_recovery_teardown_clears_transient_state(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch,
+    hass_storage: dict[str, Any], scenario: str,
+) -> None:
+    entry = await setup_mat(hass, mat)
+    conn = entry.runtime_data
+    payload = conn._payload()
+    old_callback = mat.on_frame
+    old_disconnect = mat.on_disconnect
+    if "immediate_retry" in scenario:
+        start_notify = mat.start_notify
+
+        async def blocked_notify(client: Any, on_frame: Callable[[bytes], None]) -> None:
+            await start_notify(client, on_frame)
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(transport, "async_start_notify", blocked_notify)
+    mat.first_status = None
+    mat.lose_link()
+    timer = conn._display_expiry
+    assert timer is not None
+    await until(lambda: mat.connect_calls == 2)
+    if scenario.startswith("disable"):
+        await turn(hass, "turn_off", unique(hass, "switch", "enabled"))
+    elif scenario == "reload_no_status":
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await until(lambda: entry.runtime_data.authenticated)
+    else:
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    assert timer.cancelled()
+    assert conn._display_snapshot is None
+    assert conn._display_expiry is None
+    assert conn._client is None
+    assert conn._task is None
+    assert conn.status is None
+    assert mat.disconnected == mat.clients[:len(mat.disconnected)]
+    if scenario != "reload_no_status":
+        assert mat.disconnected == mat.clients
+    assert old_callback is not None and old_disconnect is not None
+    old_callback(HEATING)
+    old_disconnect()
+    assert conn.status is None
+    assert conn.display_status is None
+    expected = {**payload, "enabled": not scenario.startswith("disable")}
+    assert hass_storage[f"{DOMAIN}.ble_mat.{entry.entry_id}"]["data"] == expected
+    if scenario.startswith("disable"):
+        monkeypatch.setattr(transport, "async_start_notify", mat.start_notify)
+        await turn(hass, "turn_on", unique(hass, "switch", "enabled"))
+        await until(lambda: conn.authenticated)
+        assert_status_entities_unavailable(hass)
+        assert not conn._immediate_retry_available
+    elif scenario == "reload_no_status":
+        assert entry.runtime_data is not conn
+        assert_status_entities_unavailable(hass)
+
+
+async def test_recovery_scheduled_expiry_publishes_unavailable(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(connection, "DISPLAY_GRACE", 0.02)
+    await setup_mat(hass, mat)
+    mat.auth_replies = [None]
+    mat.lose_link()
+    assert state_of(hass, climate_id(hass, "left")).state == "heat"
+    await until(lambda: state_of(hass, climate_id(hass, "left")).state == "unavailable")
+    assert_status_entities_unavailable(hass)
