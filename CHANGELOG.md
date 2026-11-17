@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.26.5 — 2026-11-17
+
+- Boiler: replace the always-zero "오늘 가스 사용량" sensor with "어제 가스 사용량". The
+  server closes a day's gas figures only after the day ends, so the current day's figure
+  never carried usage. The new sensor shows the previous local day's total, heating and
+  hot-water figures with its date once a gas response received on the new day arrives,
+  normally within the first hour after midnight, and is unknown before it. It records no
+  long-term statistics of its own; past use stays in the imported gas statistics.
+- Boiler: remove the entry's retired "오늘 가스 사용량" entity at setup. Dashboards and
+  automations using it must switch to "어제 가스 사용량".
+
 ## v0.26.4 — 2026-11-13
 
 - Bluetooth mat: make one immediate reconnect attempt when an authenticated link with live
