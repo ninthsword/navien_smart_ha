@@ -171,7 +171,8 @@ gas_meter = {
             "gasMeter": 3,
             "heatGasMeter": 1,
             "hotWaterGasMeter": 2,
-        }
+        },
+        {"year": 2026, "month": 8, "day": 21, "gasMeter": 0},
     ],
 }
 gas_envelope = {
@@ -189,9 +190,9 @@ device.apply_status(gas_update[1], now=700.0)
 r.ok(device.gas_total_month == 14.2, "the monthly raw gas value is divided by 10 as the app does")
 r.ok(device.gas_heating_month == 9.9, "monthly heating gas usage is decoded")
 r.ok(device.gas_hot_water_month == 4.3, "monthly hot-water gas usage is decoded")
-r.ok(device.gas_day(date(2026, 8, 20)) == (0.3, 0.1, 0.2), "all three of today's daily gas figures are decoded")
-r.ok(device.gas_day(date(2026, 8, 19)) == (0.0, 0.0, 0.0), "a missing date within the same month reads 0")
-r.ok(device.gas_day(date(2026, 7, 31)) is None, "a stale array from another month is not used as today")
+r.ok(device.gas_yesterday(date(2026, 8, 21)) == (0.3, 0.1, 0.2), "all three of yesterday's daily gas figures are decoded")
+r.ok(device.gas_yesterday(date(2026, 8, 20)) == (0.0, 0.0, 0.0), "a missing date within the same month reads 0")
+r.ok(device.gas_yesterday(date(2026, 7, 31)) is None, "a stale array from another month is not used as yesterday")
 r.ok(device.operation_mode == 6, "a gas response does not erase the existing running state")
 
 
@@ -335,7 +336,7 @@ for kind, mode, command in (
 r.ok("async_boiler_power" in source("coordinator.py"), "the power control path lives in the coordinator")
 r.ok("async_boiler_switch" in source("coordinator.py"), "the hot-water feature control path lives in the coordinator")
 r.ok("BoilerMonthlyGasSensor" in source("sensor.py"), "the monthly gas sensor is created")
-r.ok("BoilerDailyGasSensor" in source("sensor.py"), "the daily gas sensor is created")
+r.ok("BoilerYesterdayGasSensor" in source("sensor.py"), "the yesterday gas sensor is created")
 r.ok("async_track_time_change" in source("sensor.py"), "the date basis rolls at midnight")
 r.ok("BOILER_GAS_REFRESH_SECONDS" in source("coordinator.py"), "gas usage refreshes infrequently")
 

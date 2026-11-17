@@ -11,10 +11,15 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from freezegun import freeze_time
+from homeassistant.const import STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import async_fire_time_changed
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.navien_smarthome.airone import AironeDevice
 from custom_components.navien_smarthome.boiler import (
@@ -27,7 +32,7 @@ from custom_components.navien_smarthome.const import DOMAIN
 from custom_components.navien_smarthome.coordinator import NavienSmartCoordinator
 from custom_components.navien_smarthome.models import NavienDevice
 
-from .conftest import make_airone, make_mat
+from .conftest import entity_id_for_unique_id, make_airone, make_mat
 
 # Kept before loaded_entry patches the class, so a test can run the real stop path.
 REAL_STOP_MQTT = NavienSmartCoordinator.async_stop_mqtt
@@ -56,7 +61,7 @@ GATED = (
     ("water_heater", f"{DEVICE_ID}_boiler_water_heater"),
     ("climate", f"{DEVICE_ID}_boiler_heating"),
     ("sensor", f"{DEVICE_ID}_monthly_gas_usage"),
-    ("sensor", f"{DEVICE_ID}_daily_gas_usage"),
+    ("sensor", f"{DEVICE_ID}_yesterday_gas_usage"),
 )
 
 
@@ -125,6 +130,110 @@ async def test_late_feature_adds_gated_entities_once(
     await hass.async_block_till_done()
     again = len(er.async_entries_for_config_entry(er.async_get(hass), loaded_entry.entry_id))
     assert again == after
+
+
+@pytest.mark.parametrize("retired_on_this_entry", [False, True])
+async def test_setup_removes_only_its_own_retired_daily_gas_sensor(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, retired_on_this_entry: bool
+) -> None:
+    other = MockConfigEntry(
+        domain=DOMAIN, unique_id="synthetic-other", title="다른 테스트 통합", data={}
+    )
+    other.add_to_hass(hass)
+    registry = er.async_get(hass)
+    retired_unique_id = f"{DEVICE_ID}_daily_gas_usage"
+    retired = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        retired_unique_id,
+        config_entry=loaded_entry if retired_on_this_entry else other,
+    )
+    preserved = [
+        registry.async_get_or_create(
+            "sensor", DOMAIN, f"{DEVICE_ID}_monthly_gas_usage", config_entry=loaded_entry
+        ),
+        registry.async_get_or_create(
+            "sensor", DOMAIN, "synthetic_other_daily_gas_usage", config_entry=loaded_entry
+        ),
+        registry.async_get_or_create(
+            "binary_sensor", DOMAIN, retired_unique_id, config_entry=loaded_entry
+        ),
+        registry.async_get_or_create(
+            "sensor", "synthetic_platform", retired_unique_id, config_entry=loaded_entry
+        ),
+    ]
+
+    for _ in range(2):
+        assert await hass.config_entries.async_reload(loaded_entry.entry_id)
+        await hass.async_block_till_done()
+        assert (registry.async_get(retired.entity_id) is None) == retired_on_this_entry
+        assert all(registry.async_get(entity.entity_id) is not None for entity in preserved)
+
+
+async def test_yesterday_gas_becomes_unknown_at_local_midnight_without_a_query(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry
+) -> None:
+    await hass.config.async_set_time_zone("Asia/Seoul")
+    coordinator: NavienSmartCoordinator = loaded_entry.runtime_data
+    gas_request = AsyncMock()
+    coordinator.api.async_boiler_request = gas_request
+
+    try:
+        with freeze_time("2026-08-21 14:59:50+00:00", real_asyncio=True) as frozen:
+            deliver(coordinator, {"macAddress": PHYSICAL_ID, "feature": FEATURE})
+            await hass.async_block_till_done()
+            entity_id = entity_id_for_unique_id(
+                hass, "sensor", f"{DEVICE_ID}_yesterday_gas_usage"
+            )
+            deliver(
+                coordinator,
+                {
+                    "macAddress": PHYSICAL_ID,
+                    "gasMeter": {
+                        "gasMeterThisMonth": [
+                            {
+                                "year": 2026,
+                                "month": 8,
+                                "day": 20,
+                                "gasMeter": 35,
+                                "heatGasMeter": 21,
+                                "hotWaterGasMeter": 14,
+                            },
+                            {"year": 2026, "month": 8, "day": 21, "gasMeter": 0},
+                            {
+                                "year": 2026,
+                                "month": 8,
+                                "day": 22,
+                                "gasMeter": None,
+                                "heatGasMeter": None,
+                                "hotWaterGasMeter": None,
+                            },
+                        ]
+                    },
+                },
+            )
+            await hass.async_block_till_done()
+            before = hass.states.get(entity_id)
+            assert before is not None and float(before.state) == 3.5
+            assert before.attributes["기준일"] == "2026-08-20"
+            assert before.attributes["난방"] == 2.1
+            assert before.attributes["온수"] == 1.4
+            assert before.attributes["device_class"] == "gas"
+            assert before.attributes["unit_of_measurement"] == "m³"
+            assert "state_class" not in before.attributes
+            assert "last_reset" not in before.attributes
+            requests_before_midnight = gas_request.await_count
+
+            frozen.move_to("2026-08-21 15:00:01+00:00")
+            async_fire_time_changed(hass, dt_util.utcnow())
+            await hass.async_block_till_done()
+
+            after = hass.states.get(entity_id)
+            assert after is not None and after.state == STATE_UNKNOWN
+            assert not {"기준일", "난방", "온수"}.intersection(after.attributes)
+            assert gas_request.await_count == requests_before_midnight
+    finally:
+        await REAL_STOP_MQTT(coordinator)
 
 
 def wire_transports(coordinator: NavienSmartCoordinator) -> None:

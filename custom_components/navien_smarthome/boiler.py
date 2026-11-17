@@ -18,7 +18,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 BOILER_TOPIC_PREFIX = "smarttok"
@@ -694,11 +694,23 @@ class BoilerDevice:
     def gas_hot_water_month(self) -> float | None:
         return _tenth(self.gas_meter.get("thisYearMonthTotalHotWaterGasUsage"))
 
-    def gas_day(
-        self, wanted: date
+    def gas_yesterday(
+        self, today: date
     ) -> tuple[float | None, float | None, float | None] | None:
-        """Total, heating and hot-water usage for a given local date, from the app's daily array."""
-        rows = self.gas_meter.get("gasMeterThisMonth")
+        """The previous local day's figures, once the response includes today's value."""
+        # Future dates are present as all-null rows. A non-null total for today is assumed
+        # to mean yesterday has closed; a row's date alone cannot establish freshness.
+        if not any(
+            _integer(row.get("year")) == today.year
+            and _integer(row.get("month")) == today.month
+            and _integer(row.get("day")) == today.day
+            and row.get("gasMeter") is not None
+            for row in self._gas_rows("gasMeterThisMonth")
+        ):
+            return None
+        wanted = today - timedelta(days=1)
+        key = "gasMeterLastMonth" if today.day == 1 else "gasMeterThisMonth"
+        rows = self.gas_meter.get(key)
         if not isinstance(rows, list):
             return None
         same_month = False
