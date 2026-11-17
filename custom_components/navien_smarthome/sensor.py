@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -17,6 +17,7 @@ from homeassistant.const import (
     UnitOfVolume,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
@@ -36,6 +37,7 @@ from .boiler import (
 from .const import (
     AIRONE_INFERRED_UNITS,
     AIRONE_SENSOR_KINDS,
+    DOMAIN,
     LEGACY_EXTRA_FIELDS,
     LEGACY_VALUE_TABLES,
 )
@@ -60,6 +62,17 @@ async def async_setup_entry(
         await async_setup_mat_sensors(hass, entry, async_add_entities)
         return
     coordinator = entry.runtime_data
+    registry = er.async_get(hass)
+    retired_unique_ids = {
+        f"{boiler.device_id}_daily_gas_usage" for boiler in coordinator.boilers.values()
+    }
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if (
+            entity.domain == "sensor"
+            and entity.platform == DOMAIN
+            and entity.unique_id in retired_unique_ids
+        ):
+            registry.async_remove(entity.entity_id)
     entities: list[SensorEntity] = []
     for device in (coordinator.data or {}).values():
         entities.append(NavienSmartModeSensor(coordinator, device))
@@ -127,7 +140,7 @@ async def async_setup_entry(
         declared: list[SensorEntity] = []
         if boiler.supports_feature("gasUsageUse"):
             declared.append(BoilerMonthlyGasSensor(coordinator, boiler))
-            declared.append(BoilerDailyGasSensor(coordinator, boiler))
+            declared.append(BoilerYesterdayGasSensor(coordinator, boiler))
         if boiler.supports_feature("heatingIntensityUse"):
             declared.append(BoilerHeatingIntensitySensor(coordinator, boiler))
         if any(boiler.supports_feature(key) for key in BOILER_RESERVATION_FEATURES):
@@ -535,45 +548,39 @@ class BoilerMonthlyGasSensor(BoilerEntity, SensorEntity):  # pyright: ignore[rep
 
 
 # Preserve the HA MRO mixing cached descriptors and dynamic properties.
-class BoilerDailyGasSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
-    """Today's boiler gas usage, for the local date Home Assistant is on."""
+class BoilerYesterdayGasSensor(BoilerEntity, SensorEntity):  # pyright: ignore[reportIncompatibleVariableOverride]
+    """The previous local day's boiler gas usage, once a fresh response arrives."""
 
-    _attr_name = "오늘 가스 사용량"
+    _attr_name = "어제 가스 사용량"
     _attr_icon = "mdi:meter-gas-outline"
     _attr_device_class = SensorDeviceClass.GAS
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_suggested_display_precision = 1
 
     def __init__(self, coordinator: NavienSmartCoordinator, device: BoilerDevice) -> None:
         super().__init__(coordinator, device)
-        self._attr_unique_id = f"{device.device_id}_daily_gas_usage"
+        self._attr_unique_id = f"{device.device_id}_yesterday_gas_usage"
 
-    def _today_values(
+    def _yesterday_values(
         self,
     ) -> tuple[float | None, float | None, float | None] | None:
         device = self.device
-        return None if device is None else device.gas_day(dt_util.now().date())
+        return None if device is None else device.gas_yesterday(dt_util.now().date())
 
     @property
     # HA declares a cached descriptor; retain dynamic property semantics.
     def native_value(self) -> float | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        values = self._today_values()
+        values = self._yesterday_values()
         return None if values is None else values[0]
 
     @property
     # HA declares a cached descriptor; retain dynamic property semantics.
-    def last_reset(self) -> datetime | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        """Midnight today. This has to be exported for the same reason as the monthly sensor."""
-        return dt_util.start_of_local_day()
-
-    @property
-    # HA declares a cached descriptor; retain dynamic property semantics.
     def extra_state_attributes(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleVariableOverride]
-        values = self._today_values()
-        if values is None:
+        values = self._yesterday_values()
+        if values is None or values[0] is None:
             return None
-        attrs: dict[str, Any] = {"기준일": dt_util.now().date().isoformat()}
+        yesterday = dt_util.now().date() - timedelta(days=1)
+        attrs: dict[str, Any] = {"기준일": yesterday.isoformat()}
         if values[1] is not None:
             attrs["난방"] = values[1]
         if values[2] is not None:
@@ -582,9 +589,8 @@ class BoilerDailyGasSensor(BoilerEntity, SensorEntity):  # pyright: ignore[repor
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # The date selection rolls at midnight independently of any network query, so a stale
-        # value from another month is never shown as today until the next hourly gas response
-        # arrives.
+        # Re-evaluate freshness at midnight without a network query. The held response has
+        # no non-null row for the new day, so the reading stays unknown until a fresh one.
         self.async_on_remove(
             async_track_time_change(
                 self.hass, self._async_midnight_update, hour=0, minute=0, second=0

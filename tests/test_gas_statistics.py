@@ -169,9 +169,10 @@ r.ok(
     "def last_reset" in source("sensor.py") and "gas_month_start" in source("sensor.py"),
     "the monthly sensor exports last_reset",
 )
+yesterday_sensor_source = source("sensor.py").split("class BoilerYesterdayGasSensor")[1].split("class NavienSmartModeSensor")[0]
 r.ok(
-    "start_of_local_day()" in source("sensor.py"),
-    "the daily sensor uses midnight today as its cycle start",
+    "last_reset" not in yesterday_sensor_source and "_attr_state_class" not in yesterday_sensor_source,
+    "the yesterday sensor has no statistics cycle or state class",
 )
 
 
