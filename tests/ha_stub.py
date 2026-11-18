@@ -45,6 +45,11 @@ stub("homeassistant.components", pkg=True)
 stub("homeassistant.util", pkg=True)
 stub("homeassistant.util.dt", now=lambda: None)
 stub(
+    "homeassistant.util.percentage",
+    ordered_list_item_to_percentage=lambda *a: None,
+    percentage_to_ordered_list_item=lambda *a: None,
+)
+stub(
     "homeassistant.core",
     HomeAssistant=type("H", (), {}),
     callback=lambda f: f,
@@ -68,6 +73,7 @@ stub(
     CONF_USERNAME="username",
     Platform=enum(
         CLIMATE="climate",
+        FAN="fan",
         SWITCH="switch",
         SELECT="select",
         SENSOR="sensor",
@@ -168,6 +174,12 @@ stub(
 )
 stub("homeassistant.components.select", pkg=True, SelectEntity=Base)
 stub("homeassistant.components.button", pkg=True, ButtonEntity=Base)
+stub(
+    "homeassistant.components.fan",
+    pkg=True,
+    FanEntity=Base,
+    FanEntityFeature=enum(SET_SPEED=1, PRESET_MODE=8, TURN_OFF=16, TURN_ON=32),
+)
 stub(
     "homeassistant.components.sensor",
     pkg=True,

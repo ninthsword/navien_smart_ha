@@ -92,6 +92,10 @@ def _import_integration_module(name: str) -> object:
         import navien_smarthome.entity as entity
 
         return entity
+    if name == "fan":
+        import navien_smarthome.fan as fan
+
+        return fan
     if name == "gas_statistics":
         import navien_smarthome.gas_statistics as gas_statistics
 

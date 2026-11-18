@@ -214,7 +214,7 @@ async def _run(config: Path) -> list[str]:
     """Start Home Assistant, add the entry, check it and stop; return the failures."""
     from homeassistant import bootstrap
     from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
-    from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+    from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, STATE_ON
     from homeassistant.data_entry_flow import FlowResultType
     from homeassistant.helpers import entity_registry as er
     from homeassistant.runner import RuntimeConfig
@@ -321,14 +321,23 @@ async def _run(config: Path) -> list[str]:
                     failures.append(
                         f"{entity_id} {name} is {state.attributes.get(name)!r}, expected {value!r}"
                     )
+        airone = make_airone()
         entries = er.async_entries_for_config_entry(registry, entry.entry_id)
-        for label, device in (("boiler", make_boiler()), ("Airone", make_airone())):
+        for label, device in (("boiler", make_boiler()), ("Airone", airone)):
             if not any(
                 item.unique_id.startswith(device.device_id)
                 and hass.states.get(item.entity_id) is not None
                 for item in entries
             ):
                 failures.append(f"no entity of the synthetic {label}")
+        fan_unique_id = f"{airone.device_id}_fan_control"
+        fan_id = registry.async_get_entity_id("fan", DOMAIN, fan_unique_id)
+        if fan_id is None:
+            failures.append(f"no fan registry entry for {fan_unique_id}")
+        else:
+            fan_state = hass.states.get(fan_id)
+            if fan_state is None or fan_state.state != STATE_ON:
+                failures.append(f"expected {fan_id} to be on")
     finally:
         await hass.async_stop()
     return failures
