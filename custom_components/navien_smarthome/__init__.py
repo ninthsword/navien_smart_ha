@@ -32,6 +32,7 @@ PLATFORMS: list[Platform] = [
     # Temperature mats (`0.5C`, `1.0C`) become climate, stepped mats (`1.0L`) become select.
     # Both platforms are registered and each picks up only the devices on its own axis.
     Platform.CLIMATE,
+    Platform.FAN,
     # Only the Airone target humidity uses this. Mat steps are `select` — a step is not
     # a continuous quantity.
     Platform.NUMBER,

@@ -138,6 +138,11 @@
     }
   },
   "entity": {
+    "fan": {
+      "airone_fan_control": {
+        "name": "Fan control"
+      }
+    },
     "switch": {
       "power": {
         "name": "Power"

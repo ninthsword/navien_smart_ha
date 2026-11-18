@@ -10,6 +10,8 @@ from custom_components.navien_smarthome.airone import AironeDevice
 from custom_components.navien_smarthome.boiler import BoilerDevice
 from custom_components.navien_smarthome.models import NavienDevice
 
+FAN_AIRONE_ID = "AIRONE_TEST_FAN"
+
 
 def make_mat() -> NavienDevice:
     """Build a representative double temperature mat without contacting Navien."""
@@ -118,6 +120,54 @@ def make_airone() -> AironeDevice:
         }
     )
     device.set_air_sensors([{"type": "co2", "value": "605", "grade": 1}])
+    return device
+
+
+def make_fan_airone() -> AironeDevice:
+    """Build a v2 Airone with several fan choice lists and no reported state."""
+    device = AironeDevice.parse(
+        {
+            "deviceId": FAN_AIRONE_ID,
+            "deviceSeq": 4,
+            "serviceCode": 300,
+            "modelCode": "1901",
+            "modelName": "NRT-20D",
+            "connected": True,
+            "Properties": {
+                "nickName": "계약 테스트 환기 팬",
+                "data": {
+                    "did": {
+                        "reported": {
+                            "roomController": {
+                                "deviceId": "RC_TEST_FAN",
+                                "zoneId": 2,
+                                "mode": [
+                                    {
+                                        "name": 4,
+                                        "option": 1,
+                                        "airVolume": 2,
+                                        "supportedAirVolumes": [3, 1, 2, 4],
+                                    },
+                                    {"name": 4, "option": 2, "airVolume": 3},
+                                    {"name": 4, "option": 3, "airVolume": 4},
+                                    {"name": 4, "option": 4, "airVolume": 4},
+                                    {"name": 6, "option": 1, "airVolume": 3},
+                                    {
+                                        "name": 8,
+                                        "option": 1,
+                                        "airVolume": 2,
+                                        "supportedAirVolumes": [3, 2],
+                                    },
+                                    {"name": 12, "option": 1, "airVolume": 4},
+                                ],
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    )
+    assert device is not None
     return device
 
 
