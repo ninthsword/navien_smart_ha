@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.26.6 — 2026-11-18
+
+- Ventilation purifier (Airone): add a "팬" fan entity that combines power, the ordered fan
+  speeds 미풍/약풍/강풍 as a percentage and the unordered choices 자동/터보/절전/기저 as
+  presets. Choices follow the current operating mode, the same list the 풍량 select offers;
+  the operating mode stays in the 운전모드 select. Commands are the ones the power switch and
+  풍량 select already send. The existing power switch and selects are unchanged.
+
 ## v0.26.5 — 2026-11-17
 
 - Boiler: replace the always-zero "오늘 가스 사용량" sensor with "어제 가스 사용량". The
