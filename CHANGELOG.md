@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.26.7 — 2026-11-19
+
+- Bluetooth mat: register the mat device's Bluetooth connection, so Home Assistant's
+  Bluetooth network view shows it as 숙면매트 instead of an unknown device. Behaviour and the
+  connection itself are unchanged.
+
 ## v0.26.6 — 2026-11-18
 
 - Ventilation purifier (Airone): add a "팬" fan entity that combines power, the ordered fan
