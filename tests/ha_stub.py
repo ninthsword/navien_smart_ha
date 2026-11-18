@@ -116,7 +116,12 @@ stub(
     EntityDescription=Base,
     EntityCategory=enum(CONFIG="config", DIAGNOSTIC="diagnostic"),
 )
-stub("homeassistant.helpers.device_registry", DeviceInfo=dict, format_mac=lambda x: x)
+stub(
+    "homeassistant.helpers.device_registry",
+    CONNECTION_BLUETOOTH="bluetooth",
+    DeviceInfo=dict,
+    format_mac=lambda x: x,
+)
 stub(
     "homeassistant.helpers.entity_registry",
     async_get=lambda hass: None,
