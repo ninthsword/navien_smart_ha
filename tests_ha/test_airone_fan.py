@@ -4,14 +4,20 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.fan import FanEntityFeature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.navien_smarthome.airone import AironeDevice
 from custom_components.navien_smarthome.coordinator import NavienSmartCoordinator
@@ -197,7 +203,7 @@ async def test_turn_on_powers_once_then_matches_the_select_without_a_power_repor
     _assert_power(power.kwargs, 1)
     assert choice.kwargs == expected
     state = hass.states.get(fan_id)
-    assert state is not None and state.state == "off"
+    assert state is not None and state.state == "on"
 
 
 @pytest.mark.parametrize(
@@ -361,3 +367,178 @@ async def test_published_percentages_round_trip_to_the_same_speed(
         (choice,) = transport.await_args_list
         _assert_mode(choice.kwargs, mode=mode, option=1, air_volume=air_volume)
         transport.reset_mock()
+
+
+@pytest.fixture
+def power_id(hass: HomeAssistant, loaded_entry: MockConfigEntry) -> str:
+    return entity_id_for_unique_id(hass, "switch", f"{FAN_AIRONE_ID}_power")
+
+
+def _assert_power_states(
+    hass: HomeAssistant, fan_id: str, power_id: str, expected: str
+) -> None:
+    for entity_id in (fan_id, power_id):
+        state = hass.states.get(entity_id)
+        assert state is not None and state.state == expected
+
+
+async def test_fan_and_switch_show_pending_power_until_a_matching_report(
+    hass: HomeAssistant,
+    fan_id: str,
+    power_id: str,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, _ = fan_transport
+    _report(coordinator, running=2)
+    await _call_fan(hass, fan_id, "turn_on")
+    _assert_power_states(hass, fan_id, power_id, "on")
+
+    _report(coordinator, running=2)
+    _assert_power_states(hass, fan_id, power_id, "on")
+
+    _report(coordinator, running=1)
+    _report(coordinator, running=2)
+    _assert_power_states(hass, fan_id, power_id, "off")
+
+
+async def test_pending_power_expires_on_the_current_device_after_a_poll(
+    hass: HomeAssistant,
+    fan_id: str,
+    power_id: str,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    _report(coordinator, running=2)
+    original = coordinator.airone[FAN_AIRONE_ID]
+
+    async def rebuild_during_request(*_args: Any, **_kwargs: Any) -> None:
+        await coordinator._async_collect()
+        _assert_power_states(hass, fan_id, power_id, "off")
+
+    with (
+        patch.object(
+            coordinator.api,
+            "async_get_devices",
+            new=AsyncMock(return_value=coordinator.raw_devices),
+        ),
+        patch.object(coordinator, "_async_update_air_sensors", new=AsyncMock()),
+    ):
+        transport.side_effect = rebuild_during_request
+        await _call_fan(hass, fan_id, "turn_on")
+        deadline = dt_util.utcnow() + timedelta(seconds=10)
+        transport.side_effect = None
+        current = coordinator.airone[FAN_AIRONE_ID]
+        assert current is not original
+        _assert_power_states(hass, fan_id, power_id, "on")
+
+        await coordinator._async_collect()
+        assert coordinator.airone[FAN_AIRONE_ID] is not current
+
+    coordinator.async_update_listeners()
+    _assert_power_states(hass, fan_id, power_id, "on")
+
+    async_fire_time_changed(hass, deadline - timedelta(seconds=1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    _assert_power_states(hass, fan_id, power_id, "on")
+    assert [call.kwargs["command"] for call in transport.await_args_list] == [
+        "power",
+        "status",
+    ]
+
+    async_fire_time_changed(hass, deadline)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    _assert_power_states(hass, fan_id, power_id, "off")
+
+
+async def test_switch_off_replaces_pending_power_and_clears_the_fan_percentage(
+    hass: HomeAssistant,
+    fan_id: str,
+    power_id: str,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, _ = fan_transport
+    _report(coordinator)
+    await _call_fan(hass, fan_id, "turn_on")
+    device = coordinator.airone[FAN_AIRONE_ID]
+    first = device.pending_power
+    assert first is not None and first.unsub in coordinator._oneshot_unsubs
+
+    coordinator._handle_airone_reported(FAN_AIRONE_ID, {"roomController": {"mode": 4}})
+    assert device.pending_power is first
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": power_id}, blocking=True
+    )
+    _assert_power_states(hass, fan_id, power_id, "off")
+    state = hass.states.get(fan_id)
+    assert state is not None and state.attributes["percentage"] == 0
+
+    second = device.pending_power
+    assert second is not None and second.unsub in coordinator._oneshot_unsubs
+    assert first.unsub not in coordinator._oneshot_unsubs
+    _report(coordinator)
+    _assert_power_states(hass, fan_id, power_id, "off")
+
+    _report(coordinator, running=3)
+    _report(coordinator)
+    _assert_power_states(hass, fan_id, power_id, "on")
+
+
+async def test_failed_power_command_keeps_the_reported_display(
+    hass: HomeAssistant,
+    fan_id: str,
+    power_id: str,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    _report(coordinator, running=2)
+    transport.side_effect = HomeAssistantError("synthetic power failure")
+
+    with pytest.raises(HomeAssistantError, match="synthetic power failure"):
+        await _call_fan(hass, fan_id, "turn_on")
+
+    _assert_power_states(hass, fan_id, power_id, "off")
+    assert coordinator.airone[FAN_AIRONE_ID].pending_power is None
+    assert not coordinator._oneshot_unsubs
+
+
+async def test_pending_on_does_not_skip_power_for_a_fan_speed_change(
+    hass: HomeAssistant,
+    fan_id: str,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    _report(coordinator, running=2)
+    await _call_fan(hass, fan_id, "turn_on")
+    state = hass.states.get(fan_id)
+    assert state is not None and state.state == "on"
+    transport.reset_mock()
+
+    await _call_fan(hass, fan_id, "set_percentage", percentage=66)
+    power, choice = transport.await_args_list
+    _assert_power(power.kwargs, 1)
+    _assert_mode(choice.kwargs, mode=4, option=1, air_volume=2)
+
+
+async def test_stopping_mqtt_cancels_pending_power_even_during_another_command(
+    hass: HomeAssistant,
+    fan_id: str,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    _report(coordinator, running=2)
+    await _call_fan(hass, fan_id, "turn_on")
+    device = coordinator.airone[FAN_AIRONE_ID]
+    pending = device.pending_power
+    assert pending is not None and pending.unsub in coordinator._oneshot_unsubs
+
+    async def stop_during_request(*_args: Any, **_kwargs: Any) -> None:
+        await REAL_STOP_MQTT(coordinator)
+
+    transport.side_effect = stop_during_request
+    await _call_fan(hass, fan_id, "turn_off")
+
+    assert device.pending_power is None
+    assert not coordinator._oneshot_unsubs
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert transport.await_count == 2

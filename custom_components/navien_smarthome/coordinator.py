@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -22,7 +22,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .airone import AironeDevice
+from .airone import AironeDevice, AironePendingPower
 from .api import (
     AwsCredentials,
     NavienSmartApi,
@@ -67,6 +67,7 @@ from .models import NavienDevice
 from .mqtt import NavienSmartMqtt
 
 _LOGGER = logging.getLogger(__name__)
+AIRONE_POWER_CONFIRMATION_SECONDS = 10
 
 
 def _as_int(value: Any) -> int | None:
@@ -426,6 +427,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # reach 3, and the 15-minute warning **could never fire at all.**
         if (old := previous.get(device.device_id)) is not None:
             device.reported = old.reported
+            device.pending_power = old.pending_power
             device.air_sensors = old.air_sensors
             device.sensor_kinds = old.sensor_kinds
             # **Restored kinds survive only through this line.** What is read from storage
@@ -848,6 +850,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         for unsub in self._boiler_gas_unsubs.values():
             unsub()
         self._boiler_gas_unsubs.clear()
+        for device in self.airone.values():
+            device.pending_power = None
         for unsub in tuple(self._oneshot_unsubs):
             unsub()
         self._oneshot_unsubs.clear()
@@ -923,6 +927,8 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         # **Never overwritten.** Command responses arrive as partial payloads (see the
         # comment on `apply_reported`).
         device.apply_reported(reported)
+        if device.confirms_pending_power(reported):
+            self._clear_airone_pending_power(device)
         # A value the device actually pushed has arrived, so this is no longer a restore.
         self.restored_devices.discard(device.device_id)
         self._async_remember_state()
@@ -1298,6 +1304,35 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         except NavienSmartAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         self._schedule_airone_readback(device)
+        self._schedule_airone_power_timeout(device.device_id, turn_on)
+
+    @callback
+    def _clear_airone_pending_power(self, device: AironeDevice) -> None:
+        if (pending := device.pending_power) is not None:
+            device.pending_power = None
+            self._oneshot_unsubs.discard(pending.unsub)
+            pending.unsub()
+
+    @callback
+    def _schedule_airone_power_timeout(self, device_id: str, turn_on: bool) -> None:
+        if self._mqtt_stopped or (device := self.airone.get(device_id)) is None:
+            return
+        self._clear_airone_pending_power(device)
+
+        @callback
+        def _expire(_now: datetime) -> None:
+            self._oneshot_unsubs.discard(unsub)
+            target = self.airone.get(device_id)
+            if target is not None and target.pending_power is pending:
+                target.pending_power = None
+                self.async_update_listeners()
+
+        unsub = self._track_oneshot(
+            async_call_later(self.hass, AIRONE_POWER_CONFIRMATION_SECONDS, _expire)
+        )
+        pending = AironePendingPower(turn_on, unsub)
+        device.pending_power = pending
+        self.async_update_listeners()
 
     async def async_airone_mode(
         self,
@@ -1383,12 +1418,9 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
     def _schedule_airone_readback(self, device: AironeDevice) -> None:
         """Ask for the state once more after sending a command.
 
-        **Nothing is updated optimistically.** Changing the UI as soon as a command is
-        accepted means the user watches it "work and then revert" whenever the device refuses
-        — dressing a failure up as a success. Mats avoid it for the same reason.
-
-        Instead the real state is re-read. The device normally pushes it by itself, and this
-        single request catches up when it does not.
+        The fan and power switch display accepted Airone power requests until a matching
+        report arrives or 10 seconds elapse. Reported state still comes from the device,
+        which normally pushes it by itself. This single request catches up when it does not.
         """
         if self._mqtt_stopped:
             return

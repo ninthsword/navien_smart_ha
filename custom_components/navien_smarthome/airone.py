@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -149,6 +150,13 @@ def _as_running(value: Any) -> int | None:
     if isinstance(value, str):
         return _RUNNING_TEXT.get(value.strip().lower())
     return None
+
+
+def _reported_running(reported: dict[str, Any]) -> int | None:
+    value = _as_running(_dig(reported, "roomController", "running"))
+    if value is None:
+        value = _as_running(_dig(reported, "odu", "running"))
+    return value
 
 
 def as_number(value: Any) -> float | None:
@@ -316,6 +324,14 @@ class AironeFanChoice:
     label: str
 
 
+@dataclass(frozen=True, slots=True)
+class AironePendingPower:
+    """Requested power and the cancellation callback for its deadline."""
+
+    is_on: bool
+    unsub: Callable[[], None]
+
+
 @dataclass(slots=True)
 class AironeDevice:
     """One Airone unit. `reported` changes with every MQTT message that arrives."""
@@ -389,6 +405,7 @@ class AironeDevice:
     # entity in place, the history simply resumes when values return.
     known_sensor_kinds: tuple[str, ...] = field(repr=False, default=())
     humidity_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
+    pending_power: AironePendingPower | None = field(repr=False, default=None)
 
     # -- construction ------------------------------------------------------
 
@@ -673,10 +690,7 @@ class AironeDevice:
 
         The room controller is read first, because that is what the user touches.
         """
-        value = _as_running(self._controller.get("running"))
-        if value is None:
-            value = _as_running(self._odu.get("running"))
-        return value
+        return _reported_running(self.reported)
 
     @property
     def running_name(self) -> str | None:
@@ -688,6 +702,24 @@ class AironeDevice:
     @property
     def is_on(self) -> bool:
         return self.running == AIRONE_RUN_ON
+
+    @property
+    def displayed_is_on(self) -> bool | None:
+        if (pending := self.pending_power) is not None:
+            return pending.is_on
+        running = self.running
+        return None if running is None else running == AIRONE_RUN_ON
+
+    def confirms_pending_power(self, reported: dict[str, Any]) -> bool:
+        """Check that this report supplies a matching running value."""
+        if (pending := self.pending_power) is None:
+            return False
+        running = _reported_running(reported)
+        return (
+            running is not None
+            and (running == AIRONE_RUN_ON) == pending.is_on
+            and self.is_on == pending.is_on
+        )
 
     @property
     def mode(self) -> int | None:

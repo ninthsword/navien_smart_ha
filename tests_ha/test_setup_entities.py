@@ -113,6 +113,7 @@ async def test_entity_commands_build_verified_payloads(
     coordinator.api.async_airone_request = AsyncMock()
     coordinator.api.async_boiler_request = AsyncMock()
     coordinator._schedule_airone_readback = Mock()
+    coordinator._schedule_airone_power_timeout = Mock()
     coordinator._schedule_boiler_readback = Mock()
     coordinator._schedule_boiler_silence_check = Mock()
     coordinator._boiler_client_id = lambda: "contract-client"
