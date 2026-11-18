@@ -412,6 +412,7 @@ async def test_mat_device_registry_information(
     assert device.model == model
     assert device.serial_number is None
     assert device.identifiers == {(DOMAIN, ADDRESS)}
+    assert device.connections == {(dr.CONNECTION_BLUETOOTH, ADDRESS)}
     assert entry.title == "매트"
     assert entry.unique_id == ADDRESS
     entities = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
@@ -503,6 +504,7 @@ async def test_mat_model_save_reloads_and_updates_device(
         assert updated.model == model
     assert updated.serial_number is None
     assert updated.identifiers == {(DOMAIN, ADDRESS)}
+    assert updated.connections == {(dr.CONNECTION_BLUETOOTH, ADDRESS)}
     assert entry.title == "매트"
     assert entry.unique_id == ADDRESS
     assert entry.data == {CONF_ADDRESS: ADDRESS, CONF_MAT_ID: MAT_ID}

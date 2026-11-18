@@ -28,7 +28,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -114,6 +114,8 @@ class _MatEntity(Entity):
         self._attr_unique_id = f"{conn.address.replace(':', '').lower()}_{suffix}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, conn.address)},
+            # Home Assistant's Bluetooth views match a device by this connection.
+            connections={(CONNECTION_BLUETOOTH, conn.address)},
             name="숙면매트",
             manufacturer="경동나비엔",
             model=conn.entry.options.get(CONF_MAT_MODEL),
