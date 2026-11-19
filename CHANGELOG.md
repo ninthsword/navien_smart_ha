@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.26.9 — 2026-11-20
+
+- Bluetooth mat: a reconnect is no longer torn down right after it succeeds. Bluetooth reports
+  each internal retry of one connection attempt as a disconnect; those reports were taken as
+  the loss of the new link, so a link that had just connected was dropped again and an outage
+  of under a second could last tens of seconds. Only a link that is already connected can now
+  be lost; a real disconnect still reconnects at once as before.
+
 ## v0.26.8 — 2026-11-19
 
 - Ventilation purifier (Airone): after a power command accepted by the cloud, the 팬 and 전원

@@ -465,10 +465,14 @@ class MatConnection:
             raise _DeviceNotFound("not seen")
         self._generation += 1
         generation = self._generation
+        connected = False
 
         @callback
         def on_disconnect() -> None:
-            if generation == self._generation:
+            # bleak reports each internal retry of one connect (BlueZ's
+            # le-connection-abort-by-local) as a disconnect; only a link that
+            # async_connect returned can be lost.
+            if connected and generation == self._generation:
                 self._generation += 1
                 self._link_lost(unexpected=True)
 
@@ -481,6 +485,7 @@ class MatConnection:
         self._activity.clear()
         self._reply = self.hass.loop.create_future()
         client = await transport.async_connect(device, on_disconnect)
+        connected = True
         self._client = client
         try:
             await self._async_subscribe(client, on_frame)
