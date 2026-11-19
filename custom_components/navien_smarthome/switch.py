@@ -273,9 +273,7 @@ class AironePowerSwitch(AironeEntity, SwitchEntity):  # pyright: ignore[reportIn
     # HA declares a cached descriptor; retain dynamic property semantics.
     def is_on(self) -> bool | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         device = self.device
-        if device is None or device.running is None:
-            return None
-        return device.is_on
+        return None if device is None else device.displayed_is_on
 
     @property
     # HA declares a cached descriptor; retain dynamic property semantics.

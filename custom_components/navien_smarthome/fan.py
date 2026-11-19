@@ -72,7 +72,7 @@ class AironeFan(AironeEntity, FanEntity):  # pyright: ignore[reportIncompatibleV
     @property
     def is_on(self) -> bool | None:
         device = self.device
-        return None if device is None or device.running is None else device.is_on
+        return None if device is None else device.displayed_is_on
 
     # The choices can change with each report, so keep these HA descriptors dynamic.
     @property
@@ -152,7 +152,7 @@ class AironeFan(AironeEntity, FanEntity):  # pyright: ignore[reportIncompatibleV
         if device is None or (choice is None and not always_turn_on):
             return
 
-        if always_turn_on or self.is_on is not True:
+        if always_turn_on or not device.is_on:
             await self.coordinator.async_airone_power(device, True)
             if choice is None or not self.available:
                 return

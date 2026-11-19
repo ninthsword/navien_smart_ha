@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.26.8 — 2026-11-19
+
+- Ventilation purifier (Airone): after a power command accepted by the cloud, the 팬 and 전원
+  entities show the requested on or off at once instead of snapping back, and return to the
+  device's reported state if it does not report the requested state within 10 seconds. A failed
+  command changes nothing; fan control decisions still use the reported state.
+
 ## v0.26.7 — 2026-11-19
 
 - Bluetooth mat: register the mat device's Bluetooth connection, so Home Assistant's
