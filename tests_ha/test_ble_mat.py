@@ -99,6 +99,7 @@ class FakeMat:
         self.last_advertisement: float | Exception | None = 1.0
         self.advertisement_reads = 0
         self.connect_error: Exception | None = None
+        self.disconnects_while_connecting = 0
         self.write_error: list[Exception] = []
         self.missing_characteristics = False
         self.auth_replies: list[bytes | None] = [reply(2)]
@@ -153,6 +154,9 @@ class FakeMat:
         self.connect_calls += 1
         if self.connect_error is not None:
             raise self.connect_error
+        # bleak reports each internal retry of one connect as a disconnect.
+        for _ in range(self.disconnects_while_connecting):
+            on_disconnect()
         client = object()
         self.clients.append(client)
         self.on_disconnect = on_disconnect
@@ -1617,6 +1621,21 @@ async def test_lost_link_reconnects(hass: HomeAssistant, mat: FakeMat) -> None:
     assert entry.runtime_data.status is None
     await until(lambda: entry.runtime_data.status is not None)
     assert len(mat.clients) == 2
+
+
+async def test_disconnects_reported_while_connecting_are_ignored(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.disconnects_while_connecting = 2
+    entry = await setup_mat(hass, mat)
+    assert entry.runtime_data.authenticated
+    assert len(mat.clients) == 1
+    assert mat.disconnected == []
+    mat.lose_link()
+    assert entry.runtime_data.status is None
+    await until(lambda: entry.runtime_data.status is not None)
+    assert len(mat.clients) == 2
+    assert mat.disconnected == [mat.clients[0]]
 
 
 async def test_silence_reconnects(
