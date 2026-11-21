@@ -240,6 +240,23 @@ class MatStatus:
         return self.raw[11]
 
     @property
+    def byte_6(self) -> int | None:
+        """Byte 6 as sent, which the app does not show on a double mat; None when unset."""
+        return None if self.raw[6] == FILL else self.raw[6]
+
+    @property
+    def byte_9(self) -> int | None:
+        """Byte 9 as sent; None when unset or in mode 5, where it is part of the error code."""
+        if self.raw[9] == FILL or self.mode == MODE_ERROR:
+            return None
+        return self.raw[9]
+
+    @property
+    def ion_care_value(self) -> int:
+        """Byte 16's low nibble as sent; ion care counts as running when it is not 0."""
+        return self.raw[16] & 0x0F
+
+    @property
     def state(self) -> MatState:
         if not self.power or self.mode == MODE_OFF:
             return MatState.OFF
