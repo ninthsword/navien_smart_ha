@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.26.10 — 2026-11-21
+
+- Bluetooth mat: add the diagnostic sensor 히터 온도(미확인), which shows a status value
+  the app does not display on a double mat (byte 6, counted from 0) as-is in °C, with byte 9
+  as the attribute 9번째 칸. It moves like the heater's water temperature, but that meaning
+  is unconfirmed. The 이온케어 실행 중 sensor also shows the raw value it reads as the
+  attribute 원래 값. Existing states, the thermostats and commands are unchanged.
+
 ## v0.26.9 — 2026-11-20
 
 - Bluetooth mat: a reconnect is no longer torn down right after it succeeds. Bluetooth reports

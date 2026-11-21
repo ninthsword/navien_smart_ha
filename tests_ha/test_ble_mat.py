@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 import voluptuous as vol
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
-from homeassistant.const import CONF_ADDRESS
+from homeassistant.const import CONF_ADDRESS, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -63,6 +63,7 @@ def status(**fields: int) -> bytes:
         "heat": 5,
         "left": 10,
         "right": 11,
+        "byte6": 6,
         "byte9": 9,
         "byte12": 12,
         "byte13": 13,
@@ -433,6 +434,7 @@ async def test_mat_device_registry_information(
             "water_level",
             "error_detail",
             "fast_heat_minutes",
+            "heater_temperature",
             "error",
             "ion_care_running",
             "enabled",
@@ -1930,6 +1932,42 @@ async def test_status_decoding_of_the_new_values(
     assert state_of(hass, unique(hass, "binary_sensor", "ion_care_running")).state == "off"
 
 
+async def test_heater_temperature_shows_byte_6_with_byte_9(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    entity_id = unique(hass, "sensor", "heater_temperature")
+    state = state_of(hass, entity_id)
+    assert state.state == "36"
+    assert state.attributes["unit_of_measurement"] == "°C"
+    assert state.attributes["state_class"] == "measurement"
+    assert state.attributes["9번째 칸"] == 35
+    entry = er.async_get(hass).async_get(entity_id)
+    assert entry is not None and entry.entity_category is EntityCategory.DIAGNOSTIC
+
+    await feed_and_settle(hass, mat, status(byte6=40))
+    assert state_of(hass, entity_id).state == "40"
+    await feed_and_settle(hass, mat, status(byte6=0xFE, mode=5, byte9=0))
+    state = state_of(hass, entity_id)
+    assert state.state == "unknown"
+    assert state.attributes["9번째 칸"] is None
+    # A model without fast heat and ion care still reports it.
+    await feed_and_settle(hass, mat, status(model=0x10, byte6=31))
+    assert state_of(hass, entity_id).state == "31"
+
+
+async def test_ion_care_running_shows_the_raw_value(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    entity_id = unique(hass, "binary_sensor", "ion_care_running")
+    assert state_of(hass, entity_id).attributes["원래 값"] == 0
+    await feed_and_settle(hass, mat, status(ion=0x62))
+    state = state_of(hass, entity_id)
+    assert state.state == "on"
+    assert state.attributes["원래 값"] == 2
+
+
 @pytest.mark.parametrize(
     ("frame", "expected"),
     [
@@ -1983,6 +2021,7 @@ async def test_new_entities_wait_for_a_status(
         ("sensor", "water_level"),
         ("sensor", "error_detail"),
         ("sensor", "fast_heat_minutes"),
+        ("sensor", "heater_temperature"),
         ("binary_sensor", "ion_care_running"),
         ("button", "ion_care_run"),
         ("button", "left_match_temperature"),

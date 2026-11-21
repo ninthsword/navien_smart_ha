@@ -18,12 +18,17 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.components.select import SelectEntity
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     PRECISION_WHOLE,
+    EntityCategory,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -320,6 +325,32 @@ class MatFastHeatMinutesSensor(_MatEntity, SensorEntity):
         self._attr_native_value = None if status is None else status.fast_heat_minutes
 
 
+class MatHeaterTemperatureSensor(_MatEntity, SensorEntity):
+    """Status byte 6, unlabelled on a double mat.
+
+    It rises quickly, falls slowly and stays above both sides' temperatures, like the
+    single heater's water; that meaning is unconfirmed, so the name says so. Byte 9 rides
+    along as an attribute for the same check.
+    """
+
+    _attr_name = "히터 온도(미확인)"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "heater_temperature")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.display_status
+        self._attr_native_value = None if status is None else status.byte_6
+        self._attr_extra_state_attributes = {
+            "9번째 칸": None if status is None else status.byte_9
+        }
+
+
 class MatIonCareRunningSensor(_MatEntity, BinarySensorEntity):
     _attr_name = "이온케어 실행 중"
     _needs_extras = True
@@ -331,6 +362,10 @@ class MatIonCareRunningSensor(_MatEntity, BinarySensorEntity):
         super()._refresh()
         status = self._conn.display_status
         self._attr_is_on = None if status is None else status.ion_care_running
+        # The raw value, to check whether it really is ion care (it repeats every 30 minutes).
+        self._attr_extra_state_attributes = {
+            "원래 값": None if status is None else status.ion_care_value
+        }
 
 
 class MatEnableSwitch(_MatEntity, SwitchEntity):
@@ -646,6 +681,7 @@ async def async_setup_mat_sensors(
             MatWaterLevelSensor(conn),
             MatErrorDetailSensor(conn),
             MatFastHeatMinutesSensor(conn),
+            MatHeaterTemperatureSensor(conn),
         ]
     )
 
