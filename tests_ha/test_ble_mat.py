@@ -61,6 +61,8 @@ def status(**fields: int) -> bytes:
         "flags": 3,
         "volume": 4,
         "heat": 5,
+        "left_current": 7,
+        "right_current": 8,
         "left": 10,
         "right": 11,
         "byte6": 6,
@@ -436,6 +438,7 @@ async def test_mat_device_registry_information(
             "fast_heat_minutes",
             "heater_temperature",
             "error",
+            "heater_running",
             "ion_care_running",
             "enabled",
             "power",
@@ -552,7 +555,8 @@ async def test_heating_off_and_other_states(hass: HomeAssistant, mat: FakeMat) -
     await setup_mat(hass, mat)
     left = state_of(hass, climate_id(hass, "left"))
     assert left.state == "heat"
-    assert left.attributes["hvac_action"] == "heating"
+    # At its target the side calls for no heat.
+    assert left.attributes["hvac_action"] == "idle"
     assert left.attributes["current_temperature"] == 30
     assert left.attributes["temperature"] == 30
     assert left.attributes["min_temp"] == 28
@@ -580,6 +584,122 @@ async def test_heating_off_and_other_states(hass: HomeAssistant, mat: FakeMat) -
     assert state_of(hass, error).state == "on"
     await feed_and_settle(hass, mat, status(mode=0x20))
     assert state_of(hass, mode).state == "unknown"
+
+
+def actions(hass: HomeAssistant) -> tuple[str, str, str]:
+    """The left and right hvac_action and the heater running state."""
+    return (
+        state_of(hass, climate_id(hass, "left")).attributes["hvac_action"],
+        state_of(hass, climate_id(hass, "right")).attributes["hvac_action"],
+        state_of(hass, entity_id_for_unique_id(
+            hass, "binary_sensor", f"{PREFIX}_heater_running"
+        )).state,
+    )
+
+
+async def test_heat_calls_start_two_below_the_target_and_end_at_it(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    # The example frame: left 30 of 30, right 28 of 28.
+    await setup_mat(hass, mat)
+    heater = entity_id_for_unique_id(hass, "binary_sensor", f"{PREFIX}_heater_running")
+    assert state_of(hass, heater).attributes["device_class"] == "running"
+    assert actions(hass) == ("idle", "idle", "off")
+    steps = [
+        # One below the target starts nothing.
+        (status(left_current=29), ("idle", "idle", "off")),
+        (status(left_current=28), ("heating", "idle", "on")),
+        # Rising towards the target keeps the call.
+        (status(left_current=29), ("heating", "idle", "on")),
+        (status(left_current=30), ("idle", "idle", "off")),
+        # Falling from the target does not start it again before target - 2.
+        (status(left_current=29), ("idle", "idle", "off")),
+        (status(left_current=29, right_current=26), ("idle", "heating", "on")),
+        (status(left_current=27, right_current=26), ("heating", "heating", "on")),
+        (status(left_current=27, right_current=28), ("heating", "idle", "on")),
+        (status(left_current=30), ("idle", "idle", "off")),
+        # A raised target starts a call once the side is two below it.
+        (status(left_current=30, left=32), ("heating", "idle", "on")),
+        (status(left_current=32, left=32), ("idle", "idle", "off")),
+    ]
+    for frame, expected in steps:
+        await feed_and_settle(hass, mat, frame)
+        assert actions(hass) == expected
+
+
+async def test_heat_calls_end_when_a_side_or_the_mat_is_off(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(left_current=27, right_current=25))
+    assert actions(hass) == ("heating", "heating", "on")
+    # Left only: the right side is off and its call ends.
+    await feed_and_settle(hass, mat, status(heat=3, left_current=27, right_current=25))
+    assert actions(hass) == ("heating", "off", "on")
+    # Coming back on one below its target does not restore the old call.
+    await feed_and_settle(hass, mat, status(left_current=27, right_current=27))
+    assert actions(hass) == ("heating", "idle", "on")
+    await feed_and_settle(hass, mat, OFF_STATUS)
+    assert actions(hass) == ("off", "off", "off")
+    await feed_and_settle(hass, mat, status(left_current=29))
+    assert actions(hass) == ("idle", "idle", "off")
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        # Er 28 puts 28 in byte 10, where a heating frame has the left target.
+        status(mode=5, byte9=0, left=28, left_current=26),
+        status(mode=7, left_current=26),
+        status(mode=4, left_current=26),
+        status(mode=8, left_current=26),
+    ],
+)
+async def test_modes_without_targets_end_every_call(
+    hass: HomeAssistant, mat: FakeMat, frame: bytes
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(left_current=26))
+    assert actions(hass) == ("heating", "idle", "on")
+    await feed_and_settle(hass, mat, frame)
+    assert actions(hass)[0] != "heating"
+    assert actions(hass)[2] == "off"
+
+
+@pytest.mark.parametrize("mode", [2, 3, 9])
+async def test_off_reservation_and_sleep_modes_keep_a_call(
+    hass: HomeAssistant, mat: FakeMat, mode: int
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(left_current=26))
+    # One below the target only a kept call shows heating.
+    await feed_and_settle(hass, mat, status(mode=mode, left_current=29))
+    assert actions(hass) == ("heating", "idle", "on")
+    await feed_and_settle(hass, mat, status(mode=mode, left_current=30))
+    assert actions(hass) == ("idle", "idle", "off")
+
+
+async def test_a_call_survives_the_display_grace_but_not_its_end(
+    hass: HomeAssistant, mat: FakeMat, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await setup_mat(hass, mat)
+    await feed_and_settle(hass, mat, status(left_current=28))
+    # A quick reconnect inside the grace keeps the call at one below the target.
+    mat.first_status = status(left_current=29)
+    mat.lose_link()
+    await until(lambda: len(mat.clients) == 2)
+    await hass.async_block_till_done()
+    assert actions(hass) == ("heating", "idle", "on")
+
+    monkeypatch.setattr(connection, "DISPLAY_GRACE", 0.02)
+    mat.auth_replies = [None]
+    mat.lose_link()
+    await until(lambda: state_of(hass, climate_id(hass, "left")).state == "unavailable")
+    # After the grace nothing was shown, so the next status starts without the old call.
+    mat.auth_replies = [reply(2)]
+    await until(lambda: state_of(hass, climate_id(hass, "left")).state == "heat")
+    await hass.async_block_till_done()
+    assert actions(hass) == ("idle", "idle", "off")
 
 
 async def test_reconnect_needs_a_fresh_status(
@@ -2022,6 +2142,7 @@ async def test_new_entities_wait_for_a_status(
         ("sensor", "error_detail"),
         ("sensor", "fast_heat_minutes"),
         ("sensor", "heater_temperature"),
+        ("binary_sensor", "heater_running"),
         ("binary_sensor", "ion_care_running"),
         ("button", "ion_care_run"),
         ("button", "left_match_temperature"),

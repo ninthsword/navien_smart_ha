@@ -251,6 +251,8 @@ class MatConnection:
         self._stable_since: float | None = None
         self.stored_status: MatStatus | None = None
         self.reservation: Reservation | None = None
+        # Each side's estimated call for heat; see _track_heat_calls.
+        self.heat_calls = {SIDE_LEFT: False, SIDE_RIGHT: False}
         self.on_reservation_temperature = INITIAL_TARGET
         self.left_sleep_hours = INITIAL_SLEEP_HOURS
         self.right_sleep_hours = INITIAL_SLEEP_HOURS
@@ -368,6 +370,9 @@ class MatConnection:
 
     @callback
     def _publish(self) -> None:
+        if self.display_status is None:
+            # Nothing is shown, so a remembered call would be stale by the next status.
+            self.heat_calls.update({SIDE_LEFT: False, SIDE_RIGHT: False})
         self._changed.set()
         for listener in list(self._listeners):
             listener()
@@ -587,8 +592,35 @@ class MatConnection:
                 self._publish()
             return
         self.status = frame
+        self._track_heat_calls(frame)
         self._remember(frame)
         self._publish()
+
+    @callback
+    def _track_heat_calls(self, status: MatStatus) -> None:
+        """Estimate each side's call for heat from its own temperatures.
+
+        The mat reports no heater state. On an EQM560 status byte 6 (likely the heater's
+        water) rose about 20 s after a side fell 2 degrees below its target and fell once the
+        side reached it again, so a call starts at target - 2 or below and ends at the target;
+        in between it keeps its last state. Bytes 10 and 11 are targets in the heating modes;
+        an error frame holds its code there. Error, drain (mode 7; the app reads fast heat
+        only from byte 15 of the heating modes), sterilizing and ion care frames are not
+        treated as heating and end every call.
+        """
+        heating_mode = status.mode in (
+            MODE_HEAT, MODE_RESERVATION, MODE_SLEEP, MODE_CUSTOM_SLEEP
+        )
+        sides = (
+            (SIDE_LEFT, HEAT_RIGHT_ONLY, status.left_current, status.left_target),
+            (SIDE_RIGHT, HEAT_LEFT_ONLY, status.right_current, status.right_target),
+        )
+        for side, other_only, current, target in sides:
+            off = status.state is MatState.OFF or status.heat_type == other_only
+            if off or not heating_mode or not status.is_valid_target(target) or current >= target:
+                self.heat_calls[side] = False
+            elif current <= target - 2:
+                self.heat_calls[side] = True
 
     @callback
     def _remember_reservation(self, status: MatStatus, *, reset: bool = False) -> bool:

@@ -173,7 +173,13 @@ class MatThermostat(_MatEntity, ClimateEntity):
         other_only = HEAT_RIGHT_ONLY if self._side == SIDE_LEFT else HEAT_LEFT_ONLY
         off = status.state is MatState.OFF or status.heat_type == other_only
         self._attr_hvac_mode = HVACMode.OFF if off else HVACMode.HEAT
-        self._attr_hvac_action = HVACAction.OFF if off else HVACAction.HEATING
+        # An estimate from this side's temperatures; the mat reports no heater state.
+        if off:
+            self._attr_hvac_action = HVACAction.OFF
+        elif self._conn.heat_calls[self._side]:
+            self._attr_hvac_action = HVACAction.HEATING
+        else:
+            self._attr_hvac_action = HVACAction.IDLE
 
     def _current_temperature(self) -> float | None:
         status = self._conn.display_status
@@ -349,6 +355,21 @@ class MatHeaterTemperatureSensor(_MatEntity, SensorEntity):
         self._attr_extra_state_attributes = {
             "9번째 칸": None if status is None else status.byte_9
         }
+
+
+class MatHeaterRunningSensor(_MatEntity, BinarySensorEntity):
+    """On while either side calls for heat: an estimate, as the thermostats' 난방 중."""
+
+    _attr_name = "히터 가동(추정)"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+
+    def __init__(self, conn: MatConnection) -> None:
+        super().__init__(conn, "heater_running")
+
+    def _refresh(self) -> None:
+        super()._refresh()
+        status = self._conn.display_status
+        self._attr_is_on = None if status is None else any(self._conn.heat_calls.values())
 
 
 class MatIonCareRunningSensor(_MatEntity, BinarySensorEntity):
@@ -692,7 +713,9 @@ async def async_setup_mat_binary_sensors(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     conn: MatConnection = entry.runtime_data
-    async_add_entities([MatErrorSensor(conn), MatIonCareRunningSensor(conn)])
+    async_add_entities(
+        [MatErrorSensor(conn), MatHeaterRunningSensor(conn), MatIonCareRunningSensor(conn)]
+    )
 
 
 async def async_setup_mat_switches(
