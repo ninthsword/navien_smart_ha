@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.26.11 — 2026-11-22
+
+- Bluetooth mat: the left and right thermostats now show 난방 중, 대기 중 or 꺼짐. The mat
+  reports no heater state, so this is an estimate from each side's temperature: heating
+  starts when the side is 2 degrees or more below its target and stops when it reaches the
+  target. The new 히터 가동(추정) sensor is on while either side is heating. Error, drain,
+  sterilizing and ion care never count as heating. Seen in normal heating on an EQM560; sleep,
+  custom sleep and fast heat are not verified. Commands and the thermostat modes are unchanged.
+
 ## v0.26.10 — 2026-11-21
 
 - Bluetooth mat: add the diagnostic sensor 히터 온도(미확인), which shows a status value
