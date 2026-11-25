@@ -406,6 +406,9 @@ class AironeDevice:
     known_sensor_kinds: tuple[str, ...] = field(repr=False, default=())
     humidity_log: list[dict[str, Any]] = field(repr=False, default_factory=list)
     pending_power: AironePendingPower | None = field(repr=False, default=None)
+    # The fan speed last reported in each (mode, option), restored when that mode is chosen
+    # again. Memory only: a restart keeps just what the restored state shows.
+    wind_memory: dict[tuple[int, int], int] = field(repr=False, default_factory=dict)
 
     # -- construction ------------------------------------------------------
 
@@ -616,6 +619,16 @@ class AironeDevice:
                 merged[key] = value
         self.reported = merged
         self._note_humidity()
+        self._note_wind()
+
+    def _note_wind(self) -> None:
+        mode, option, wind = self.mode, self.option, self.air_volume
+        if (
+            mode is not None
+            and option in AIRONE_OPTIONS_WITH_WIND
+            and wind in AIRONE_WIND_NAMES
+        ):
+            self.wind_memory[(mode, option)] = wind
 
     def _note_humidity(self) -> None:
         """Record one line when the observed target humidity changes; identical values are not stacked."""
@@ -1173,10 +1186,30 @@ class AironeDevice:
                 for choice in self.fan_choices(mode, option)
                 if choice.option == option and choice.air_volume is not None
             ]
-            if self.air_volume in allowed:
-                wind = self.air_volume
-            elif allowed:
-                wind = allowed[0]
+            # Sleep shares its parent's mode number but is its own entry in the mode list
+            # (as in the app), so crossing it counts as entering another mode too.
+            sleeping = option == AIRONE_OPTION_SLEEP
+            if mode != self.mode or sleeping != (self.option == AIRONE_OPTION_SLEEP):
+                # Entering another mode: the speed last used there, else the speed the mode
+                # declares, which is what the app sends. Keeping the current speed made the
+                # fixed high of cooking stick when returning to ventilation.
+                declared = next(
+                    (
+                        item.air_volume
+                        for item in self.modes
+                        if item.key == (mode, option) and item.air_volume is not None
+                    ),
+                    None,
+                )
+                for candidate in (self.wind_memory.get((mode, option)), declared):
+                    if candidate in allowed:
+                        wind = candidate
+                        break
+            if wind is None:
+                if self.air_volume in allowed:
+                    wind = self.air_volume
+                elif allowed:
+                    wind = allowed[0]
         if wind is not None:
             controller["airVolume"] = wind
 

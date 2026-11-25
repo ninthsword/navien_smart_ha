@@ -542,3 +542,69 @@ async def test_stopping_mqtt_cancels_pending_power_even_during_another_command(
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
     await hass.async_block_till_done(wait_background_tasks=True)
     assert transport.await_count == 2
+
+
+async def _mode_request(
+    hass: HomeAssistant, transport: AsyncMock, label: str
+) -> Mapping[str, Any]:
+    select_id = entity_id_for_unique_id(hass, "select", f"{FAN_AIRONE_ID}_mode")
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": select_id, "option": label},
+        blocking=True,
+    )
+    (request,) = transport.await_args_list
+    transport.reset_mock()
+    assert request.kwargs["command"] == "change-mode"
+    return request.kwargs["desired"]["roomController"]
+
+
+async def test_returning_to_a_mode_restores_its_last_fan_speed(
+    hass: HomeAssistant,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    # Ventilation at gentle (1); its declared speed is 2 and cooking is fixed at high (3).
+    _report(coordinator, mode=4, air_volume=1)
+    assert (await _mode_request(hass, transport, "요리"))["airVolume"] == 3
+    _report(coordinator, mode=6, air_volume=3)
+    # The memory survives the poll that rebuilds the device.
+    with (
+        patch.object(
+            coordinator.api,
+            "async_get_devices",
+            new=AsyncMock(return_value=coordinator.raw_devices),
+        ),
+        patch.object(coordinator, "_async_update_air_sensors", new=AsyncMock()),
+    ):
+        original = coordinator.airone[FAN_AIRONE_ID]
+        await coordinator._async_collect()
+        assert coordinator.airone[FAN_AIRONE_ID] is not original
+    assert (await _mode_request(hass, transport, "환기")) == {
+        "mode": 4,
+        "option": 1,
+        "airVolume": 1,
+    }
+
+
+async def test_leaving_sleep_restores_the_parent_mode_speed(
+    hass: HomeAssistant,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    # Sleep is (4, 4) under ventilation (4, 1) and reports auto (4), which 4:1 also allows.
+    _report(coordinator, mode=4, option=1, air_volume=1)
+    assert (await _mode_request(hass, transport, "숙면"))["option"] == 4
+    _report(coordinator, mode=4, option=4, air_volume=4)
+    assert (await _mode_request(hass, transport, "환기"))["airVolume"] == 1
+
+
+async def test_entering_a_mode_without_memory_uses_its_declared_speed(
+    hass: HomeAssistant,
+    fan_transport: tuple[NavienSmartCoordinator, AsyncMock],
+) -> None:
+    coordinator, transport = fan_transport
+    _report(coordinator, mode=6, air_volume=3)
+    # As the app does: the speed ventilation declares, not cooking's high.
+    assert (await _mode_request(hass, transport, "환기"))["airVolume"] == 2

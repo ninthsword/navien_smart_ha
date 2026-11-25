@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.26.12 — 2026-11-26
+
+- Ventilation purifier (Airone): changing the operating mode with 운전모드 now returns to the
+  fan speed last used in that mode, so going back to 환기 after 요리 (fixed at 강풍) or after
+  숙면 restores the earlier ventilation speed instead of keeping the other mode's. When the
+  speed used in that mode is not known yet, the speed the device declares for the mode is used,
+  as in the Navien app. The memory lasts while Home Assistant runs; changing the speed within a
+  mode is unchanged.
+
 ## v0.26.11 — 2026-11-22
 
 - Bluetooth mat: the left and right thermostats now show 난방 중, 대기 중 or 꺼짐. The mat
