@@ -91,6 +91,7 @@ def reply(code: int, issued: bytes = bytes.fromhex(MAT_ID)) -> bytes:
 
 OFF_STATUS = status(mode=6, flags=0, heat=0, left=0, right=0, byte9=0xFE)
 SLEEP = status(mode=3)
+ER_02_STATUS = status(mode=5, byte9=0, left=2)
 
 
 class FakeMat:
@@ -3077,6 +3078,31 @@ async def test_on_reservation_cancel_echoes_its_value_and_may_power_on(
     assert state_of(hass, unique(hass, "switch", "power")).state == "off"
 
 
+async def test_on_reservation_cancel_stops_resending_off_in_error(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = status(
+        mode=6, flags=0x0C, volume=0x23, left=1, right=5, byte13=5
+    )
+    await setup_mat(hass, mat)
+    cancel_frame = bytes.fromhex("b280060620fe241e1cfe0105fefefe00fefefe00")
+    off_frame = bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8")
+
+    def respond(frame: bytes) -> bytes | None:
+        if frame == cancel_frame:
+            return HEATING
+        if frame == off_frame:
+            asyncio.get_running_loop().call_soon(mat.feed, ER_02_STATUS)
+        return None
+
+    mat.respond = respond
+    with pytest.raises(HomeAssistantError) as raised:
+        await schedule_command(hass, "on_cancel")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert mat.controls() == [cancel_frame, off_frame]
+
+
 @pytest.mark.parametrize("mode", [1, 2, 9])
 async def test_sleep_two_sides_frame_and_mode_confirmation(
     hass: HomeAssistant, mat: FakeMat, mode: int
@@ -3364,15 +3390,72 @@ async def test_other_controls_stay_refused_in_reservation_and_sleep(
 
 @pytest.mark.parametrize(
     "frame",
-    [status(mode=4), status(mode=5), status(mode=7), status(mode=8), status(heat=0)],
+    [
+        status(mode=4),
+        ER_02_STATUS,
+        status(mode=7),
+        status(mode=8),
+        status(heat=0),
+        status(mode=0x20),
+    ],
 )
-async def test_power_off_stays_refused_in_unaccepted_modes(
+async def test_power_switch_off_in_other_modes(
     hass: HomeAssistant, mat: FakeMat, frame: bytes
 ) -> None:
     mat.first_status = frame
     await setup_mat(hass, mat)
-    with pytest.raises(ServiceValidationError):
+    mat.respond = confirm_with(OFF_STATUS)
+    await set_power(hass, "turn_off")
+    assert mat.controls() == [
+        bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8")
+    ]
+
+
+async def test_power_switch_off_in_error_resends_when_unconfirmed(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    mat.first_status = ER_02_STATUS
+    await setup_mat(hass, mat)
+    with pytest.raises(HomeAssistantError) as raised:
         await set_power(hass, "turn_off")
+    assert not isinstance(raised.value, ServiceValidationError)
+    assert str(raised.value) == connection.ERROR_UNCONFIRMED
+    assert mat.controls() == [
+        bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8")
+    ] * connection.SEND_ATTEMPTS
+
+
+async def test_power_switch_off_resend_uses_the_new_error_status(
+    hass: HomeAssistant, mat: FakeMat
+) -> None:
+    await setup_mat(hass, mat)
+    error = status(
+        mode=5, byte6=0x2A, left_current=0x21, right_current=0x1D, byte9=0, left=2
+    )
+
+    def respond(_frame: bytes) -> bytes | None:
+        if len(mat.controls()) == 1:
+            asyncio.get_running_loop().call_soon(mat.feed, error)
+            return None
+        return OFF_STATUS
+
+    mat.respond = respond
+    await set_power(hass, "turn_off")
+    assert mat.controls() == [
+        bytes.fromhex("b280060000fe241e1cfe0000000000fefefefed8"),
+        bytes.fromhex("b280060000fe2a211dfe0000000000fefefefee2"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "frame", [status(mode=2, flags=0, byte13=5), status(mode=6, flags=0x02)]
+)
+async def test_power_switch_off_when_already_off_sends_nothing(
+    hass: HomeAssistant, mat: FakeMat, frame: bytes
+) -> None:
+    mat.first_status = frame
+    await setup_mat(hass, mat)
+    await set_power(hass, "turn_off")
     assert mat.controls() == []
 
 

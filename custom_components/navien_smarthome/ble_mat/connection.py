@@ -720,7 +720,7 @@ class MatConnection:
 
         def decide(status: MatStatus, stored: MatStatus | None) -> _Intent | None:
             if not on:
-                return _off_intent(status)
+                return _power_off_intent(status)
             if status.state is MatState.HEATING:
                 return None
             return _power_on_intent(stored, None, None)
@@ -1114,6 +1114,15 @@ def _side_temperature_intent(status: MatStatus, side: str, target: int) -> _Inte
         other_target = _target_of(status, other)
     left, right = _targets(side, target, other_target)
     return _side_intent(heat_type, left, right, _confirms_heat_type(heat_type, side, target))
+
+
+def _power_off_intent(status: MatStatus) -> _Intent | None:
+    """Turn the whole mat off whenever the power switch is on."""
+    if status.state is MatState.OFF:
+        return None
+    return _Intent(
+        lambda latest: _Send(build_off_frame(latest), lambda s: s.state is MatState.OFF)
+    )
 
 
 def _off_intent(

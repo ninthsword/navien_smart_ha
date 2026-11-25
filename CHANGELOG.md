@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.26.13 — 2026-11-26
+
+- Bluetooth mat: the 전원 switch now turns the mat off in every state it reports as not off,
+  including an error such as Er 02 (water low), drain, sterilizing and ion care, as the app's
+  power button does; it used to refuse these states. Whether the mat accepts the off during
+  an error has not been confirmed on a real mat. Every other command, and the off after
+  cancelling an on reservation, are unchanged.
+
 ## v0.26.12 — 2026-11-26
 
 - Ventilation purifier (Airone): changing the operating mode with 운전모드 now returns to the
