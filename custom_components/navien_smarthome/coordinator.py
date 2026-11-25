@@ -428,6 +428,7 @@ class NavienSmartCoordinator(DataUpdateCoordinator[dict[str, NavienDevice]]):
         if (old := previous.get(device.device_id)) is not None:
             device.reported = old.reported
             device.pending_power = old.pending_power
+            device.wind_memory = old.wind_memory
             device.air_sensors = old.air_sensors
             device.sensor_kinds = old.sensor_kinds
             # **Restored kinds survive only through this line.** What is read from storage
